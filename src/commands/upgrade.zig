@@ -49,79 +49,90 @@ fn detectMatchingPreset(cfg: *const config.Config) presets.Preset {
     const names = [_][]const u8{ "lib", "db", "services", "middleware", "components", "commands", "tasks", "handlers", "pages", "utils" };
     var scores = [_]u32{0} ** 5; // default, webapp, cli, backend, bot
 
-    for (cfg.surfaces) |surface| {
-        _ = surface;
-        for (names, 0..) |name, name_idx| {
-            if (cfg.getSurface(name) != null) {
-                switch (name_idx) {
-                    0 => { // lib
-                        scores[0] += 0; // default has no lib
-                        scores[1] += 1; // webapp
-                        scores[2] += 1; // cli
-                        scores[3] += 1; // backend
-                        scores[4] += 1; // bot
-                    },
-                    1 => { // db
-                        scores[0] += 0;
-                        scores[1] += 0;
-                        scores[2] += 0;
-                        scores[3] += 1; // backend
-                        scores[4] += 1; // bot
-                    },
-                    4 => { // middleware
-                        scores[0] += 0;
-                        scores[1] += 0;
-                        scores[2] += 0;
-                        scores[3] += 0;
-                        scores[4] += 1; // bot
-                    },
-                    5 => { // commands
-                        scores[0] += 0;
-                        scores[1] += 0;
-                        scores[2] += 1; // cli
-                        scores[3] += 0;
-                        scores[4] += 1; // bot
-                    },
-                    6 => { // tasks
-                        scores[0] += 0;
-                        scores[1] += 0;
-                        scores[2] += 0;
-                        scores[3] += 1; // backend
-                        scores[4] += 1; // bot
-                    },
-                    7 => { // handlers
-                        scores[0] += 0;
-                        scores[1] += 0;
-                        scores[2] += 0;
-                        scores[3] += 0;
-                        scores[4] += 1; // bot
-                    },
-                    8 => { // pages
-                        scores[0] += 0;
-                        scores[1] += 1; // webapp
-                        scores[2] += 0;
-                        scores[3] += 0;
-                        scores[4] += 0;
-                    },
-                    9 => { // utils
-                        scores[0] += 1;
-                        scores[1] += 1;
-                        scores[2] += 1;
-                        scores[3] += 0;
-                        scores[4] += 0;
-                    },
-                    else => {},
-                }
+    for (names, 0..) |name, name_idx| {
+        if (cfg.getSurface(name) != null) {
+            switch (name_idx) {
+                0 => { // lib
+                    scores[0] += 0; // default has no lib
+                    scores[1] += 1; // webapp
+                    scores[2] += 1; // cli
+                    scores[3] += 1; // backend
+                    scores[4] += 1; // bot
+                },
+                1 => { // db
+                    scores[0] += 0;
+                    scores[1] += 0;
+                    scores[2] += 0;
+                    scores[3] += 1; // backend
+                    scores[4] += 1; // bot
+                },
+                2 => { // services
+                    scores[0] += 1;
+                    scores[1] += 1;
+                    scores[2] += 0;
+                    scores[3] += 1;
+                    scores[4] += 1;
+                },
+                3 => { // components
+                    scores[0] += 1;
+                    scores[1] += 1;
+                    scores[2] += 0;
+                    scores[3] += 0;
+                    scores[4] += 1;
+                },
+                4 => { // middleware
+                    scores[0] += 0;
+                    scores[1] += 0;
+                    scores[2] += 0;
+                    scores[3] += 0;
+                    scores[4] += 1; // bot
+                },
+                5 => { // commands
+                    scores[0] += 0;
+                    scores[1] += 0;
+                    scores[2] += 1; // cli
+                    scores[3] += 0;
+                    scores[4] += 1; // bot
+                },
+                6 => { // tasks
+                    scores[0] += 0;
+                    scores[1] += 0;
+                    scores[2] += 0;
+                    scores[3] += 1; // backend
+                    scores[4] += 1; // bot
+                },
+                7 => { // handlers
+                    scores[0] += 0;
+                    scores[1] += 0;
+                    scores[2] += 0;
+                    scores[3] += 0;
+                    scores[4] += 1; // bot
+                },
+                8 => { // pages
+                    scores[0] += 0;
+                    scores[1] += 1; // webapp
+                    scores[2] += 0;
+                    scores[3] += 0;
+                    scores[4] += 0;
+                },
+                9 => { // utils
+                    scores[0] += 1;
+                    scores[1] += 1;
+                    scores[2] += 1;
+                    scores[3] += 0;
+                    scores[4] += 0;
+                },
+                else => {},
             }
         }
     }
 
-    // find preset with highest match score
+    // find preset with highest match score — prefer specific presets over generic ones on tie
     var best: presets.Preset = .default;
     var best_score: u32 = 0;
     const candidates = [_]presets.Preset{ .default, .webapp, .cli, .backend, .bot };
     for (candidates, scores) |candidate, score| {
-        if (score >= best_score) {
+        if (score > best_score) {
             best = candidate;
             best_score = score;
         }

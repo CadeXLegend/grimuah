@@ -7,12 +7,6 @@ pub const Finding = struct {
     line: u32,
     message: []const u8,
     layer: []const u8, // "cosmetic" | "structural"
-
-    pub fn format(self: Finding, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{s}:{d}: [{s}] {s}", .{ self.file, self.line, self.layer, self.message });
-    }
 };
 
 /// run all enabled pre-pass checks against the project
@@ -63,7 +57,9 @@ fn checkFolderSuffixes(io: std.Io,
 
             if (!matched) {
                 const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ project_root, surface.path, entry.path });
-                const msg = try std.fmt.allocPrint(allocator, "file '{s}' in surface '{s}' does not match any legal suffix — allowed: {any}", .{ entry.basename, surface.name, surface.suffixes });
+                const suffixes_formatted = try formatStringSlice(allocator, surface.suffixes);
+                defer allocator.free(suffixes_formatted);
+                const msg = try std.fmt.allocPrint(allocator, "file '{s}' in surface '{s}' does not match any legal suffix — allowed: {s}", .{ entry.basename, surface.name, suffixes_formatted });
                 try findings.append(allocator, .{
                     .file = file_path,
                     .line = 1,
@@ -141,7 +137,6 @@ fn checkImportFirewall(io: std.Io,
                 allocator.free(imports);
             }
 
-            var line_num: u32 = 1;
             for (imports) |import_path| {
                 // find which surface this import targets
                 const target_surface = resolveImportSurface(cfg, import_path);
@@ -150,46 +145,71 @@ fn checkImportFirewall(io: std.Io,
                         const msg = try std.fmt.allocPrint(allocator, "surface '{s}' (depth {d}) importing from '{s}' (depth {d}) — '{s}' is not in '{s}'s allowedImports", .{ surface.name, surface.depth, target.name, target.depth, target.name, surface.name });
                         try findings.append(allocator, .{
                             .file = file_path,
-                            .line = line_num,
+                            .line = 0,
                             .message = msg,
                             .layer = "structural",
                         });
                     }
                 }
-                line_num += 1;
             }
         }
     }
 }
 
 /// extract relative import paths from a TypeScript source file
+/// handles single/multi-line static imports, dynamic import(), and side-effect imports
 fn extractImports(allocator: std.mem.Allocator, content: []const u8) ![][]const u8 {
     var imports: std.ArrayList([]const u8) = .empty;
-    var lines = std.mem.splitScalar(u8, content, '\n');
 
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t");
-        if (!std.mem.startsWith(u8, trimmed, "import")) continue;
-        if (!std.mem.startsWith(u8, trimmed, "import {") and
-            !std.mem.startsWith(u8, trimmed, "import type") and
-            !std.mem.startsWith(u8, trimmed, "import \"")) continue;
+    // scan for all patterns that introduce a quoted path:
+    //   from "..." / from '...' (static imports)
+    //   import("...") / import('...') (dynamic imports)
+    //   import "..." / import '...' (side-effect imports, no from clause)
+    const prefixes = [_][]const u8{ "from \"", "from '", "import(\"", "import('", "import \"", "import '" };
 
-        // find the from "..." part
-        const from_pos = std.mem.indexOf(u8, trimmed, "from \"") orelse
-            std.mem.indexOf(u8, trimmed, "from '") orelse
-            continue;
-        const quote_char = trimmed[from_pos + 5];
-        const path_start = from_pos + 6;
-        const path_end = std.mem.indexOfScalarPos(u8, trimmed, path_start, quote_char) orelse continue;
-        const import_path = trimmed[path_start..path_end];
+    // manual linear scan — simple enough that a regex engine isn't worth it
+    var pos: usize = 0;
+    while (pos < content.len) : (pos += 1) {
+        for (prefixes) |prefix| {
+            if (pos + prefix.len > content.len) continue;
+            if (!std.mem.eql(u8, content[pos .. pos + prefix.len], prefix)) continue;
 
-        // only track relative imports
-        if (std.mem.startsWith(u8, import_path, "./") or std.mem.startsWith(u8, import_path, "../")) {
-            try imports.append(allocator, try allocator.dupe(u8, import_path));
+            // determine the quote character (last byte of prefix)
+            const quote_char = prefix[prefix.len - 1];
+
+            // skip leading prefix to get to the path start
+            const path_start = pos + prefix.len;
+            if (path_start >= content.len) break;
+
+            // scan for closing quote, allowing backslash escapes
+            const path_end = findClosingQuote(content, path_start, quote_char) orelse break;
+            const import_path = content[path_start..path_end];
+
+            // only track relative imports
+            if (std.mem.startsWith(u8, import_path, "./") or std.mem.startsWith(u8, import_path, "../")) {
+                try imports.append(allocator, try allocator.dupe(u8, import_path));
+            }
+
+            // advance past the found prefix so we don't re-match it
+            pos = path_start;
+            break;
         }
     }
 
     return imports.toOwnedSlice(allocator);
+}
+
+/// find the end of a quoted string, handling backslash escapes
+fn findClosingQuote(content: []const u8, start: usize, quote: u8) ?usize {
+    var i = start;
+    while (i < content.len) : (i += 1) {
+        if (content[i] == '\\') {
+            i += 1; // skip escaped char
+            continue;
+        }
+        if (content[i] == quote) return i;
+    }
+    return null;
 }
 
 /// resolve a relative import path to a surface name, or null if not in any surface
@@ -293,4 +313,144 @@ fn checkSingletonFolders(io: std.Io,
             });
         }
     }
+}
+
+/// join `[]const []const u8` into a comma-separated string, e.g. `.util.ts, .config.ts`
+/// caller owns the returned slice (allocator.free)
+fn formatStringSlice(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    for (items, 0..) |item, i| {
+        if (i > 0) try result.appendSlice(allocator, ", ");
+        try result.appendSlice(allocator, item);
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+const testing = std.testing;
+
+test "extractImports extracts single-line static import" {
+    const allocator = testing.allocator;
+    const content = "import { foo } from './bar';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 1), imports.len);
+    try testing.expectEqualStrings("./bar", imports[0]);
+}
+
+test "extractImports extracts multi-line static import" {
+    const allocator = testing.allocator;
+    const content =
+        "import {\n" ++
+        "  foo,\n" ++
+        "  bar,\n" ++
+        "} from '../baz';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 1), imports.len);
+    try testing.expectEqualStrings("../baz", imports[0]);
+}
+
+test "extractImports extracts dynamic import()" {
+    const allocator = testing.allocator;
+    const content = "const mod = await import('./mod');";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 1), imports.len);
+    try testing.expectEqualStrings("./mod", imports[0]);
+}
+
+test "extractImports extracts side-effect import" {
+    const allocator = testing.allocator;
+    const content = "import './polyfill';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 1), imports.len);
+    try testing.expectEqualStrings("./polyfill", imports[0]);
+}
+
+test "extractImports skips non-relative imports" {
+    const allocator = testing.allocator;
+    const content = "import { foo } from 'lodash';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 0), imports.len);
+}
+
+test "extractImports extracts multiple imports from file" {
+    const allocator = testing.allocator;
+    const content =
+        "import { a } from './a';\n" ++
+        "import { b } from '../b';\n" ++
+        "import { c } from 'c';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 2), imports.len);
+    try testing.expectEqualStrings("./a", imports[0]);
+    try testing.expectEqualStrings("../b", imports[1]);
+}
+
+test "extractImports handles single quotes" {
+    const allocator = testing.allocator;
+    const content = "import { foo } from './bar';";
+    const imports = try extractImports(allocator, content);
+    defer {
+        for (imports) |imp| allocator.free(imp);
+        allocator.free(imports);
+    }
+    try testing.expectEqual(@as(usize, 1), imports.len);
+    try testing.expectEqualStrings("./bar", imports[0]);
+}
+
+test "formatStringSlice joins strings with comma" {
+    const allocator = testing.allocator;
+    const result = try formatStringSlice(allocator, &.{ ".a.ts", ".b.ts" });
+    defer allocator.free(result);
+    try testing.expectEqualStrings(".a.ts, .b.ts", result);
+}
+
+test "formatStringSlice single item has no comma" {
+    const allocator = testing.allocator;
+    const result = try formatStringSlice(allocator, &.{".only.ts"});
+    defer allocator.free(result);
+    try testing.expectEqualStrings(".only.ts", result);
+}
+
+test "formatStringSlice empty slice returns empty" {
+    const allocator = testing.allocator;
+    const result = try formatStringSlice(allocator, &.{});
+    defer allocator.free(result);
+    try testing.expectEqualStrings("", result);
+}
+
+test "findClosingQuote finds closing quote" {
+    const content = "hello 'world'";
+    const pos = findClosingQuote(content, 6, '\'').?;
+    try testing.expectEqual(@as(usize, 12), pos);
+}
+
+test "findClosingQuote handles backslash escapes" {
+    const content = "'hello\\'world'";
+    const pos = findClosingQuote(content, 0, '\'').?;
+    try testing.expectEqual(@as(usize, 14), pos);
 }

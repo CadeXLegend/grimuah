@@ -51,7 +51,7 @@
     {
       "name": "tasks",
       "path": "src/tasks",
-      "depth": 5,
+      "depth": 6,
       "suffixes": [".task.ts", ".config.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["lib", "db", "services"]
@@ -59,7 +59,7 @@
     {
       "name": "handlers",
       "path": "src/handlers",
-      "depth": 5,
+      "depth": 7,
       "suffixes": [".handler.ts", ".config.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["db", "services"]

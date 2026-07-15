@@ -104,3 +104,50 @@ fn isTextFile(name: []const u8) bool {
     }
     return false;
 }
+
+const testing = std.testing;
+
+test "render substitutes {{projectName}}" {
+    const allocator = testing.allocator;
+    const rendered = try render("hello {{projectName}}!", .{ .project_name = "world" }, allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings("hello world!", rendered);
+}
+
+test "render passes through without placeholders" {
+    const allocator = testing.allocator;
+    const rendered = try render("hello world", .{ .project_name = "x" }, allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings("hello world", rendered);
+}
+
+test "render substitutes unknown var with empty string" {
+    const allocator = testing.allocator;
+    const rendered = try render("{{unknown}}", .{ .project_name = "x" }, allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings("", rendered);
+}
+
+test "render handles multiple substitutions" {
+    const allocator = testing.allocator;
+    const rendered = try render("{{projectName}}/src/{{projectName}}.ts", .{ .project_name = "pkg" }, allocator);
+    defer allocator.free(rendered);
+    try testing.expectEqualStrings("pkg/src/pkg.ts", rendered);
+}
+
+test "isTextFile true for known extensions" {
+    try testing.expect(isTextFile("foo.ts"));
+    try testing.expect(isTextFile("bar.config.ts"));
+    try testing.expect(isTextFile("biome.json"));
+    try testing.expect(isTextFile("index.html"));
+    try testing.expect(isTextFile(".env"));
+    try testing.expect(isTextFile("cosmetic.grit"));
+    try testing.expect(isTextFile("_gitignore"));
+}
+
+test "isTextFile false for binary extensions" {
+    try testing.expect(!isTextFile("photo.png"));
+    try testing.expect(!isTextFile("icon.jpg"));
+    try testing.expect(!isTextFile("binary.exe"));
+    try testing.expect(!isTextFile("doc.pdf"));
+}

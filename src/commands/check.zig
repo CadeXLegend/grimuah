@@ -15,7 +15,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
     // validate config
     config.validate(&cfg) catch |err| {
         std.debug.print("error: invalid architecture.config.json: {s}\n", .{@errorName(err)});
-        return;
+        std.process.exit(1);
     };
 
     var exit_code: u8 = 0;
@@ -25,7 +25,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
     if (cfg.layers.cosmetic or cfg.layers.structural) {
         const findings = prepass.runAll(io, allocator, &cfg, ".") catch |err| {
             std.debug.print("error: pre-pass checks failed: {s}\n", .{@errorName(err)});
-            return;
+            std.process.exit(1);
         };
         defer {
             for (findings) |f| {
@@ -36,7 +36,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
         }
 
         for (findings) |finding| {
-            std.debug.print("{}\n", .{finding});
+            const finding_formatted = try std.fmt.allocPrint(allocator, "{s}:{d}: [{s}] {s}", .{ finding.file, finding.line, finding.layer, finding.message });
+            defer allocator.free(finding_formatted);
+            std.debug.print("{s}\n", .{finding_formatted});
             finding_count += 1;
         }
     }

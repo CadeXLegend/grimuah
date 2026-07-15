@@ -10,15 +10,15 @@ const embedded_schema: []const u8 = @embedFile("../architecture.schema.json");
 /// embedded biome config template
 const biome_config_template: []const u8 =
     \\{
-    \\  "$schema": "https://biomejs.dev/schemas/2.3.8/schema.json",
+    \\  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
     \\  "formatter": {
     \\    "enabled": true,
     \\    "indentStyle": "space",
     \\    "indentWidth": 2
     \\  },
+    \\  "plugins": ["arch-rules/cosmetic.grit", "arch-rules/structural.grit", "arch-rules/resilience.grit", "arch-rules/behavioural.grit"],
     \\  "linter": {
-    \\    "enabled": true,
-    \\    "plugins": ["arch-rules/cosmetic.grit", "arch-rules/structural.grit", "arch-rules/resilience.grit", "arch-rules/behavioural.grit"]
+    \\    "enabled": true
     \\  }
     \\}
 ;
@@ -155,14 +155,17 @@ fn askYesNo(label: []const u8) !bool {
 
     std.debug.print("add {s}/? {s} [y/N]: ", .{ label, desc });
 
-    var buf: [8]u8 = undefined;
-    const bytes_read = std.posix.read(0, &buf) catch return false;
-    if (bytes_read == 0) return false;
-    const line = buf[0..@min(bytes_read, buf.len)];
-
-    const trimmed = std.mem.trim(u8, line, " \t\r");
-    return std.mem.eql(u8, trimmed, "y") or std.mem.eql(u8, trimmed, "Y") or
-        std.mem.eql(u8, trimmed, "yes") or std.mem.eql(u8, trimmed, "Yes");
+    // read one byte at a time until newline — handles both terminal (line-buffered)
+    // and piped input (heredoc delivers one byte per read on a pipe)
+    var buf: [32]u8 = undefined;
+    var pos: usize = 0;
+    while (pos < buf.len) {
+        const n = std.posix.read(0, buf[pos..][0..1]) catch return false;
+        if (n == 0) return false;
+        if (buf[pos] == '\n') break;
+        pos += 1;
+    }
+    return pos > 0 and (buf[0] == 'y' or buf[0] == 'Y');
 }
 
 /// apply interactive answers to the config by adding selected surfaces
@@ -190,31 +193,38 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 
     // add lib at depth 0 if requested (shift existing surfaces down, not lib itself)
     if (answers.lib and !presence.has_lib) {
-        // shift original surfaces first, then insert lib at 0
+        // shift all existing surfaces +1 to make room for lib at depth 0
         for (new_surfaces[0..cfg.surfaces.len]) |*existing| {
             existing.depth += 1;
         }
-        // insert lib at the end, it'll be at position cfg.surfaces.len with depth 0
         new_surfaces[insert_idx] = createSurface(allocator, "lib", "lib", 0, &.{".ts"}, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{});
         insert_idx += 1;
     }
 
-    // add db at depth 1 (between lib and services)
+    // add db between lib and services — shift services/components +1 to make room
     if (answers.db and !presence.has_db) {
-        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, &.{ ".repo.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
+        const db_depth: u32 = if (answers.lib and !presence.has_lib) @as(u32, 1) else 1;
+        // shift services and components +1 to make room for db
+        for (new_surfaces[0..cfg.surfaces.len]) |*existing| {
+            if (existing.depth >= db_depth) existing.depth += 1;
+        }
+        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", db_depth, &.{ ".repo.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
         insert_idx += 1;
     }
 
-    // add middleware at appropriate depth
+    // add middleware between services and components
     if (answers.middleware and !presence.has_middleware) {
-        const md_depth: u32 = if (answers.db and !presence.has_db) 3 else 2;
+        const md_depth: u32 = 4;
+        for (new_surfaces[0..insert_idx]) |*existing| {
+            if (existing.depth >= md_depth) existing.depth += 1;
+        }
         new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", md_depth, &.{ ".middleware.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, &.{ "lib", "db", "services" });
         insert_idx += 1;
     }
 
-    // add pages at deepest depth
+    // add pages at deep depth
     if (answers.pages and !presence.has_pages) {
-        const pages_depth: u32 = @intCast(total - 1);
+        const pages_depth: u32 = @intCast(total - 2);
         new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", pages_depth, &.{ ".page.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
         insert_idx += 1;
     }
