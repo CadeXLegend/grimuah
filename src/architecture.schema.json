@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arch.dev/schemas/architecture-config.json",
+  "title": "ArchitectureConfig",
+  "description": "declarative architecture configuration for @scope/arch — defines surfaces, edge rules, depth ordering, and rule layer toggles",
+  "type": "object",
+  "required": ["surfaces", "layers"],
+  "additionalProperties": false,
+  "properties": {
+    "surfaces": {
+      "type": "array",
+      "description": "ordered list of surfaces from shallowest (depth 0) to deepest — defines the import graph topology",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "depth", "suffixes"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "logical name of the surface, used in edge rules and error messages"
+          },
+          "path": {
+            "type": "string",
+            "description": "filesystem path relative to project root (e.g. 'src/services')"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "depth in the import DAG — shallower surfaces have lower depth, deeper surfaces can import from shallower ones"
+          },
+          "suffixes": {
+            "type": "array",
+            "description": "legal file suffixes for this surface — files not matching any suffix are flagged as Cosmetic violations",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "innateMembers": {
+            "type": "array",
+            "description": "suffixes that can exist in any surface but inherit that surface's depth (e.g. '.types.ts', '.config.ts', '.spec.ts', '.regex-patterns.ts')",
+            "default": [],
+            "items": { "type": "string" }
+          },
+          "allowedImports": {
+            "type": "array",
+            "description": "names of surfaces this surface may import from — any import from a surface not in this list is a Structural violation",
+            "default": [],
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "description": "independently toggleable rule layers — each controls a category of lint enforcement",
+      "required": ["cosmetic", "structural", "resilience", "behavioural"],
+      "additionalProperties": false,
+      "properties": {
+        "cosmetic": {
+          "type": "boolean",
+          "description": "surface-level readability: folder-as-suffix naming, no em-dashes, no centralized config/types/models directories"
+        },
+        "structural": {
+          "type": "boolean",
+          "description": "graph integrity: import firewall, depth ordering, singleton folder warnings, innate member scoping"
+        },
+        "resilience": {
+          "type": "boolean",
+          "description": "change-proofing: enum over magic string, const over let, readonly, dispatch tables, declarative patterns, explicit types, self-documenting names, no proxy re-exports"
+        },
+        "behavioural": {
+          "type": "boolean",
+          "description": "runtime safety: no throw (OperationOutcome pattern), input validation at boundaries, no bare catch"
+        }
+      }
+    },
+    "rootLib": {
+      "type": "object",
+      "description": "optional root-level lib/ surface at depth 0 — shallower than everything in src/",
+      "required": ["enabled", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "whether a root-level lib/ directory exists alongside src/"
+        },
+        "path": {
+          "type": "string",
+          "description": "path to the root lib directory (default: 'lib')"
+        }
+      },
+      "default": { "enabled": false, "path": "lib" }
+    }
+  }
+}

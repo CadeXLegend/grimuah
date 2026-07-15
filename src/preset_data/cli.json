@@ -1,0 +1,46 @@
+{
+  "surfaces": [
+    {
+      "name": "lib",
+      "path": "lib",
+      "depth": 0,
+      "suffixes": [".ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": []
+    },
+    {
+      "name": "utils",
+      "path": "src/utils",
+      "depth": 1,
+      "suffixes": [".util.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
+      "allowedImports": ["lib"]
+    },
+    {
+      "name": "services",
+      "path": "src/services",
+      "depth": 2,
+      "suffixes": [".service.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "utils"]
+    },
+    {
+      "name": "commands",
+      "path": "src/commands",
+      "depth": 3,
+      "suffixes": [".command.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
+      "allowedImports": ["lib", "utils", "services"]
+    }
+  ],
+  "layers": {
+    "cosmetic": true,
+    "structural": true,
+    "resilience": true,
+    "behavioural": true
+  },
+  "rootLib": {
+    "enabled": true,
+    "path": "lib"
+  }
+}

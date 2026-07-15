@@ -1,0 +1,46 @@
+{
+  "surfaces": [
+    {
+      "name": "lib",
+      "path": "lib",
+      "depth": 0,
+      "suffixes": [".ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": []
+    },
+    {
+      "name": "db",
+      "path": "src/db",
+      "depth": 1,
+      "suffixes": [".repo.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", "schema.ts"],
+      "allowedImports": ["lib"]
+    },
+    {
+      "name": "services",
+      "path": "src/services",
+      "depth": 2,
+      "suffixes": [".service.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "db"]
+    },
+    {
+      "name": "tasks",
+      "path": "src/tasks",
+      "depth": 3,
+      "suffixes": [".task.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "db", "services"]
+    }
+  ],
+  "layers": {
+    "cosmetic": true,
+    "structural": true,
+    "resilience": true,
+    "behavioural": true
+  },
+  "rootLib": {
+    "enabled": true,
+    "path": "lib"
+  }
+}

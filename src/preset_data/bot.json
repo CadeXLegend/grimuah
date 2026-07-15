@@ -1,0 +1,78 @@
+{
+  "surfaces": [
+    {
+      "name": "lib",
+      "path": "lib",
+      "depth": 0,
+      "suffixes": [".ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": []
+    },
+    {
+      "name": "db",
+      "path": "src/db",
+      "depth": 1,
+      "suffixes": [".repo.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", "schema.ts"],
+      "allowedImports": ["lib"]
+    },
+    {
+      "name": "services",
+      "path": "src/services",
+      "depth": 2,
+      "suffixes": [".service.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "db"]
+    },
+    {
+      "name": "middleware",
+      "path": "src/middleware",
+      "depth": 3,
+      "suffixes": [".middleware.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
+      "allowedImports": ["lib", "db", "services"]
+    },
+    {
+      "name": "components",
+      "path": "src/components",
+      "depth": 4,
+      "suffixes": [".component.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "services"]
+    },
+    {
+      "name": "commands",
+      "path": "src/commands",
+      "depth": 5,
+      "suffixes": [".command.ts", ".commands.ts", ".callbacks.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
+      "allowedImports": ["lib", "db", "services", "middleware", "components"]
+    },
+    {
+      "name": "tasks",
+      "path": "src/tasks",
+      "depth": 5,
+      "suffixes": [".task.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["lib", "db", "services"]
+    },
+    {
+      "name": "handlers",
+      "path": "src/handlers",
+      "depth": 5,
+      "suffixes": [".handler.ts", ".config.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": ["db", "services"]
+    }
+  ],
+  "layers": {
+    "cosmetic": true,
+    "structural": true,
+    "resilience": true,
+    "behavioural": true
+  },
+  "rootLib": {
+    "enabled": true,
+    "path": "lib"
+  }
+}
