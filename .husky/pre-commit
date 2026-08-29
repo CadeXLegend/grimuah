@@ -1,4 +1,9 @@
-pnpm typecheck
-pnpm lint
+# zig-aware pre-commit for the archi-cade generator repo itself
+# this repo is zig, not typescript, so the pnpm gates from the scaffold template
+# do not apply here; the real gates are the zig build, the unit tests, and the
+# e2e suite that validates the generated projects end to end
+zig build
+zig build test
+bash test-e2e.sh
 bash .husky/check-em-dash.sh
 bash .husky/format-on-commit.sh
