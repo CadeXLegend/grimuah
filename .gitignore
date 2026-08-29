@@ -1,2 +1,14 @@
+# zig
 .zig-cache/
 zig-out/
+
+# pi
+.pi/
+.pi-subagents/
+.rpiv/
+
+# package managers
+node_modules/
+
+# codebase specific
+examples/

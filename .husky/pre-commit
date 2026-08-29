@@ -1,0 +1,4 @@
+pnpm typecheck
+pnpm lint
+bash .husky/check-em-dash.sh
+bash .husky/format-on-commit.sh

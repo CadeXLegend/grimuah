@@ -1,0 +1,42 @@
+engine biome(1.0)
+
+// resilience: change-proofing -- patterns that prevent codebase fractures
+
+or {
+  // ban switch -- use dispatch tables (Record/Map)
+  `switch ($expr) { $cases }` as $switch_stmt where {
+    register_diagnostic(span=$switch_stmt, message="do not use switch; use a dispatch table (Record/Map) instead", severity="error")
+  },
+  // ban C-style for loops -- use map, filter, reduce, or for..of
+  `for ($init; $cond; $update) { $body }` as $for_stmt where {
+    register_diagnostic(span=$for_stmt, message="do not use imperative for loops; use map, filter, reduce, or for..of instead", severity="error")
+  },
+  // ban let -- use const
+  // ban == -- use ===
+  `$left == $right` as $double_eq where {
+    register_diagnostic(span=$double_eq, message="use === instead of == to avoid type coercion bugs", severity="error")
+  },
+  `let $name = $value` as $let_decl where {
+    register_diagnostic(span=$let_decl, message="do not use let; use const. only let at module-level mutable caches", severity="error")
+  },
+  // ban null -- use undefined
+  `null` as $null_lit where {
+    register_diagnostic(span=$null_lit, message="do not use null; use undefined. null only at third-party boundaries (DB, RegExp)", severity="error")
+  },
+  // ban as any -- use proper types
+  `$expr as any` as $any_cast where {
+    register_diagnostic(span=$any_cast, message="'as any' bypasses type safety entirely; use a proper type instead", severity="error")
+  },
+  // ban chained as casts -- use a single cast
+  `$expr as $t1 as $t2` as $chained_cast where {
+    register_diagnostic(span=$chained_cast, message="chained 'as' casts bypass type safety; use a single cast only", severity="error")
+  },
+  // ban proxy re-exports -- every export must add value
+  `export { $names } from $module` as $reexport where {
+    register_diagnostic(span=$reexport, message="do not proxy re-export; every export must originate from the file that defines it", severity="error")
+  },
+  // ban const-as-enum -- use enum
+  `const $name = { $members } as const` as $asconst where {
+    register_diagnostic(span=$asconst, message="use enum instead of const + as const; enum gives you both value and type in one declaration", severity="error")
+  }
+}

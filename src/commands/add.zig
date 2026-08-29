@@ -19,14 +19,17 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
 
     std.debug.print("adding surface '{s}'...\n", .{surface_name});
 
-    // determine depth (deepest + 1 unless it should slot in at a specific position)
-    const new_depth: u32 = findDeepestDepth(&cfg) + 1;
+    // determine dagOrder (deepest + 1)
+    const new_dag_order: u32 = findDeepestDagOrder(&cfg) + 1;
 
-    // collect allowedImports: all shallower surfaces
+    // depth is always 1 for src/ surfaces
+    const new_depth: u32 = 1;
+
+    // collect allowedImports: surfaces with lower dagOrder
     var allowed: std.ArrayList([]const u8) = .empty;
     defer allowed.deinit(allocator);
     for (cfg.surfaces) |surface| {
-        if (surface.depth < new_depth) {
+        if (surface.dagOrder < new_dag_order) {
             try allowed.append(allocator, surface.name);
         }
     }
@@ -50,24 +53,24 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
     try templates.writeFile(io, example_path, "// TODO: implement\n");
 
     // regenerate architecture.config.json with new surface
-    try rewriteConfig(io, allocator, &cfg, surface_name, surface_path, new_depth, suffixes, &innateMembers, allowed.items);
+    try rewriteConfig(io, allocator, &cfg, surface_name, surface_path, new_depth, new_dag_order, suffixes, &innateMembers, allowed.items);
 
     // regenerate GritQL rules
     try gritql.generateRules(io, allocator, ".", &cfg);
 
-    std.debug.print("added surface '{s}' at depth {d}\n", .{ surface_name, new_depth });
+    std.debug.print("added surface '{s}' at dagOrder {d}\n", .{ surface_name, new_dag_order });
 }
 
-fn findDeepestDepth(cfg: *const config.Config) u32 {
+fn findDeepestDagOrder(cfg: *const config.Config) u32 {
     var max: u32 = 0;
     for (cfg.surfaces) |surface| {
-        if (surface.depth > max) max = surface.depth;
+        if (surface.dagOrder > max) max = surface.dagOrder;
     }
     return max;
 }
 
 fn suffixesForSurface(allocator: std.mem.Allocator, name: []const u8) ![]const []const u8 {
-    // heuristic: surface name → standard suffix pattern
+    // heuristic: surface name to standard suffix pattern
     if (std.mem.eql(u8, name, "validators")) return allocator.dupe([]const u8, &.{ ".validator.ts", ".config.ts" });
     if (std.mem.eql(u8, name, "guards")) return allocator.dupe([]const u8, &.{ ".guard.ts", ".config.ts" });
     if (std.mem.eql(u8, name, "states")) return allocator.dupe([]const u8, &.{ ".state.ts", ".config.ts" });
@@ -92,6 +95,7 @@ fn rewriteConfig(
     name: []const u8,
     path: []const u8,
     depth: u32,
+    dagOrder: u32,
     suffixes: []const []const u8,
     innateMembers: []const []const u8,
     allowedImports: [][]const u8,
@@ -110,7 +114,7 @@ fn rewriteConfig(
 
     // write new surface
     try json_buf.appendSlice(allocator, ",\n");
-    try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"suffixes\": [", .{ name, path, depth }));
+    try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"dagOrder\": {d},\n      \"suffixes\": [", .{ name, path, depth, dagOrder }));
     for (suffixes, 0..) |suffix, j| {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{suffix}));
         if (j < suffixes.len - 1) try json_buf.appendSlice(allocator, ", ");
@@ -157,7 +161,7 @@ fn rewriteConfig(
 }
 
 fn writeSurfaceJson(buf: *std.ArrayList(u8), surface: config.Surface, allocator: std.mem.Allocator) !void {
-    try buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"suffixes\": [", .{ surface.name, surface.path, surface.depth }));
+    try buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"dagOrder\": {d},\n      \"suffixes\": [", .{ surface.name, surface.path, surface.depth, surface.dagOrder }));
     for (surface.suffixes, 0..) |suffix, j| {
         try buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{suffix}));
         if (j < surface.suffixes.len - 1) try buf.appendSlice(allocator, ", ");

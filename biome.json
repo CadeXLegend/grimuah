@@ -1,0 +1,20 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "plugins": [
+    ".arch-rules/cosmetic.grit",
+    ".arch-rules/structural.grit",
+    ".arch-rules/resilience.grit",
+    ".arch-rules/behavioural.grit"
+  ],
+  "linter": {
+    "enabled": true
+  },
+  "files": {
+    "includes": ["**", "!**/.pi", "!**/examples"]
+  }
+}

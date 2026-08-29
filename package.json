@@ -1,0 +1,18 @@
+{
+  "name": "archi-cade",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "check": "biome check",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "typecheck": "tsc --noEmit",
+    "regen:examples": "bash ./regenerate-examples.sh",
+    "test": "bash ./test-e2e.sh",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "typescript": "^6.0.3"
+  }
+}

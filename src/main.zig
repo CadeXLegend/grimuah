@@ -61,14 +61,14 @@ fn parseFlag(args: []const [:0]const u8, flag: []const u8) ?[]const u8 {
 
 fn printUsage() void {
     std.debug.print(
-        \\@scope/arch — scaffold enforceably-structured TypeScript projects
+        \\archicade :  scaffold enforceably-structured TypeScript projects
         \\
         \\usage:
-        \\  arch init [name] [--preset <name>]
-        \\  arch check
-        \\  arch add <surface>
-        \\  arch remove <surface>
-        \\  arch upgrade
+        \\  archicade init [name] [--preset <name>]
+        \\  archicade check
+        \\  archicade add <surface>
+        \\  archicade remove <surface>
+        \\  archicade upgrade
         \\
         \\presets: default, webapp, cli, backend, bot
         \\

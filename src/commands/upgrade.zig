@@ -84,7 +84,7 @@ fn detectMatchingPreset(cfg: *const config.Config) presets.Preset {
                     scores[0] += 0;
                     scores[1] += 0;
                     scores[2] += 0;
-                    scores[3] += 0;
+                    scores[3] += 1; // backend
                     scores[4] += 1; // bot
                 },
                 5 => { // commands
@@ -127,7 +127,7 @@ fn detectMatchingPreset(cfg: *const config.Config) presets.Preset {
         }
     }
 
-    // find preset with highest match score — prefer specific presets over generic ones on tie
+    // find preset with highest match score, prefer specific presets over generic ones on tie
     var best: presets.Preset = .default;
     var best_score: u32 = 0;
     const candidates = [_]presets.Preset{ .default, .webapp, .cli, .backend, .bot };
@@ -150,8 +150,8 @@ fn rewriteConfig(io: std.Io, allocator: std.mem.Allocator, cfg: *const config.Co
         if (i > 0) try json_buf.appendSlice(allocator, ",\n");
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(
             allocator,
-            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"suffixes\": [",
-            .{ surface.name, surface.path, surface.depth },
+            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"dagOrder\": {d},\n      \"suffixes\": [",
+            .{ surface.name, surface.path, surface.depth, surface.dagOrder },
         ));
         for (surface.suffixes, 0..) |suffix, j| {
             try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{suffix}));
@@ -176,8 +176,8 @@ fn rewriteConfig(io: std.Io, allocator: std.mem.Allocator, cfg: *const config.Co
         try json_buf.appendSlice(allocator, ",\n");
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(
             allocator,
-            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"suffixes\": [",
-            .{ preset_surface.name, preset_surface.path, preset_surface.depth },
+            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"dagOrder\": {d},\n      \"suffixes\": [",
+            .{ preset_surface.name, preset_surface.path, preset_surface.depth, preset_surface.dagOrder },
         ));
         for (preset_surface.suffixes, 0..) |suffix, j| {
             try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{suffix}));

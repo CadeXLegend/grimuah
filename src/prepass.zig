@@ -59,7 +59,7 @@ fn checkFolderSuffixes(io: std.Io,
                 const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ project_root, surface.path, entry.path });
                 const suffixes_formatted = try formatStringSlice(allocator, surface.suffixes);
                 defer allocator.free(suffixes_formatted);
-                const msg = try std.fmt.allocPrint(allocator, "file '{s}' in surface '{s}' does not match any legal suffix — allowed: {s}", .{ entry.basename, surface.name, suffixes_formatted });
+                const msg = try std.fmt.allocPrint(allocator, "file '{s}' in surface '{s}' does not match any legal suffix (allowed: {s})", .{ entry.basename, surface.name, suffixes_formatted });
                 try findings.append(allocator, .{
                     .file = file_path,
                     .line = 1,
@@ -93,7 +93,7 @@ fn checkCentralizedDirs(io: std.Io,
         for (forbidden) |forbidden_name| {
             if (std.mem.eql(u8, dir_name, forbidden_name)) {
                 const dir_path = try std.fmt.allocPrint(allocator, "{s}/src/{s}", .{ project_root, entry.path });
-                const msg = try std.fmt.allocPrint(allocator, "centralized '{s}/' directory detected — config, types, and models must be co-located with consumers, not centralized", .{dir_name});
+                const msg = try std.fmt.allocPrint(allocator, "centralized '{s}/' directory detected, config, types, and models must be co-located with consumers, not centralized", .{dir_name});
                 try findings.append(allocator, .{
                     .file = dir_path,
                     .line = 1,
@@ -107,7 +107,7 @@ fn checkCentralizedDirs(io: std.Io,
     }
 }
 
-/// verify import graph firewall — no file imports from a surface not in its allowed_imports
+/// verify import graph firewall: no file imports from a surface not in its allowed_imports
 fn checkImportFirewall(io: std.Io, 
     allocator: std.mem.Allocator,
     cfg: *const config.Config,
@@ -142,7 +142,7 @@ fn checkImportFirewall(io: std.Io,
                 const target_surface = resolveImportSurface(cfg, import_path);
                 if (target_surface) |target| {
                     if (!cfg.canImport(surface.name, target.name) and !std.mem.eql(u8, surface.name, target.name)) {
-                        const msg = try std.fmt.allocPrint(allocator, "surface '{s}' (depth {d}) importing from '{s}' (depth {d}) — '{s}' is not in '{s}'s allowedImports", .{ surface.name, surface.depth, target.name, target.depth, target.name, surface.name });
+                        const msg = try std.fmt.allocPrint(allocator, "surface '{s}' (dagOrder {d}) importing from '{s}' (dagOrder {d}) -- '{s}' is not in '{s}'s allowedImports", .{ surface.name, surface.dagOrder, target.name, target.dagOrder, target.name, surface.name });
                         try findings.append(allocator, .{
                             .file = file_path,
                             .line = 0,
@@ -167,7 +167,7 @@ fn extractImports(allocator: std.mem.Allocator, content: []const u8) ![][]const 
     //   import "..." / import '...' (side-effect imports, no from clause)
     const prefixes = [_][]const u8{ "from \"", "from '", "import(\"", "import('", "import \"", "import '" };
 
-    // manual linear scan — simple enough that a regex engine isn't worth it
+    // manual linear scan, simple enough that a regex engine isn't worth it
     var pos: usize = 0;
     while (pos < content.len) : (pos += 1) {
         for (prefixes) |prefix| {
@@ -215,20 +215,20 @@ fn findClosingQuote(content: []const u8, start: usize, quote: u8) ?usize {
 /// resolve a relative import path to a surface name, or null if not in any surface
 fn resolveImportSurface(cfg: *const config.Config, import_path: []const u8) ?*const config.Surface {
     // handles ../db/index.ts → db surface
-    // handles ./sibling.ts → same surface as caller (skip — self-imports allowed)
+    // handles ./sibling.ts: same surface as caller (skip, self-imports allowed)
 
     // simple heuristic: the first non-dot directory segment gives us the surface name
     var iter = std.mem.splitScalar(u8, import_path, '/');
     while (iter.next()) |segment| {
         if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) continue;
-        // found the first real directory — check if it's a surface
+        // found the first real directory, check if it's a surface
         return cfg.getSurface(segment);
     }
 
     return null;
 }
 
-/// verify innate member depth scoping — types/config defined in deeper surfaces
+/// verify innate member dagOrder scoping: types/config defined in deeper surfaces
 /// must not be imported by shallower surfaces; they must be lifted to the shallowest common ancestor
 fn checkInnateMemberDepth(io: std.Io, 
     allocator: std.mem.Allocator,
@@ -268,8 +268,8 @@ fn checkInnateMemberDepth(io: std.Io,
                 const target_surface = resolveImportSurface(cfg, import_path);
                 if (target_surface) |target| {
                     // flag: innate member in THIS surface imports from an even DEEPER surface
-                    if (target.depth > surface.depth) {
-                        const msg = try std.fmt.allocPrint(allocator, "innate member '{s}' in surface '{s}' (depth {d}) imports from deeper surface '{s}' (depth {d}) — lift this type to the shallowest common ancestor", .{ entry.basename, surface.name, surface.depth, target.name, target.depth });
+                    if (target.dagOrder > surface.dagOrder) {
+                        const msg = try std.fmt.allocPrint(allocator, "innate member '{s}' in surface '{s}' (dagOrder {d}) imports from deeper surface '{s}' (dagOrder {d}) -- lift this type to the shallowest common ancestor", .{ entry.basename, surface.name, surface.dagOrder, target.name, target.dagOrder });
                         try findings.append(allocator, .{
                             .file = file_path,
                             .line = 1,
@@ -304,7 +304,7 @@ fn checkSingletonFolders(io: std.Io,
 
         if (file_count <= 1) {
             const dir_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_root, surface.path });
-            const msg = try std.fmt.allocPrint(allocator, "surface '{s}' contains only {d} file(s) — a set of 1 is a leaf node that shouldn't carry folder overhead; consider lifting or expanding", .{ surface.name, file_count });
+            const msg = try std.fmt.allocPrint(allocator, "surface '{s}' contains only {d} file(s), a set of 1 is a leaf node that shouldn't carry folder overhead; consider lifting or expanding", .{ surface.name, file_count });
             try findings.append(allocator, .{
                 .file = dir_path,
                 .line = 0,

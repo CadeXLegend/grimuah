@@ -1,10 +1,11 @@
 const std = @import("std");
 
-/// surface definition — one entry in the surfaces array of architecture.config.json
+/// surface definition, one entry in the surfaces array of architecture.config.json
 pub const Surface = struct {
     name: []const u8,
     path: []const u8,
     depth: u32,
+    dagOrder: u32,
     suffixes: []const []const u8,
     innateMembers: []const []const u8 = &.{},
     allowedImports: []const []const u8 = &.{},
@@ -35,8 +36,6 @@ pub const RootLib = struct {
     path: []const u8,
 
     pub fn deinit(self: *const RootLib, allocator: std.mem.Allocator) void {
-        // only free path when rootLib was present in JSON (indicated by enabled=true)
-        // when enabled=false with the default, path is a comptime literal
         if (self.enabled) allocator.free(self.path);
     }
 };
@@ -67,14 +66,14 @@ pub const Config = struct {
         const to = self.getSurface(to_name) orelse return false;
         // a surface can always import from itself
         if (std.mem.eql(u8, from_name, to_name)) return true;
-        // deeper surface can import from shallower if listed in allowed_imports
-        if (from.depth <= to.depth) {
+        // from has same or lower dagOrder (shallower in DAG): allowed only if explicitly listed
+        if (from.dagOrder <= to.dagOrder) {
             for (from.allowedImports) |allowed| {
                 if (std.mem.eql(u8, allowed, to_name)) return true;
             }
         }
-        // shallower → deeper: always allowed (top-down DAG)
-        return from.depth > to.depth;
+        // from has higher dagOrder (deeper in DAG): always allowed (top-down DAG)
+        return from.dagOrder > to.dagOrder;
     }
 
     /// find which surface owns a given file path, or null if none
@@ -86,12 +85,12 @@ pub const Config = struct {
     }
 };
 
-/// validation error — returned when config fails structural checks
+/// validation error, returned when config fails structural checks
 pub const ValidationError = error{
     DuplicateSurfaceNames,
-    DuplicateDepths,
+    DuplicateDagOrders,
     EmptySurfaces,
-    InvalidDepthOrder,
+    InvalidDagOrder,
     InvalidRootLibPath,
     MissingSurfaceInEdge,
 };
@@ -108,24 +107,24 @@ pub fn validate(config: *const Config) ValidationError!void {
         }
     }
 
-    // no duplicate depths — each surface must have a unique depth
+    // no duplicate dagOrders: each surface must have a unique DAG order
     for (config.surfaces, 0..) |surface_a, i| {
         for (config.surfaces[i + 1 ..]) |surface_b| {
-            if (surface_a.depth == surface_b.depth)
-                return ValidationError.DuplicateDepths;
+            if (surface_a.dagOrder == surface_b.dagOrder)
+                return ValidationError.DuplicateDagOrders;
         }
     }
 
-    // depths must be sequential starting from 0
-    for (0..config.surfaces.len) |expected_depth| {
+    // dagOrders must be sequential starting from 0
+    for (0..config.surfaces.len) |expected| {
         var found = false;
         for (config.surfaces) |surface| {
-            if (surface.depth == expected_depth) {
+            if (surface.dagOrder == expected) {
                 found = true;
                 break;
             }
         }
-        if (!found) return ValidationError.InvalidDepthOrder;
+        if (!found) return ValidationError.InvalidDagOrder;
     }
 
     // all edge references must point to real surfaces
@@ -158,32 +157,32 @@ pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !std.jso
 const testing = std.testing;
 
 /// create a single Surface with heap-allocated fields for testing
-fn testSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, suffixes: []const []const u8) !Surface {
+fn testSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, dagOrder: u32, suffixes: []const []const u8) !Surface {
     const owned_name = try allocator.dupe(u8, name);
     const owned_path = try allocator.dupe(u8, path);
     const owned_suffixes = try allocator.alloc([]const u8, suffixes.len);
     for (suffixes, 0..) |suf, idx| {
         owned_suffixes[idx] = try allocator.dupe(u8, suf);
     }
-    return .{ .name = owned_name, .path = owned_path, .depth = depth, .suffixes = owned_suffixes };
+    return .{ .name = owned_name, .path = owned_path, .depth = depth, .dagOrder = dagOrder, .suffixes = owned_suffixes };
 }
 
 test "canImport top-down DAG rules" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 3);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, &.{".service.ts"});
-    surfaces[2] = try testSurface(allocator, "components", "src/components", 2, &.{".component.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
+    surfaces[2] = try testSurface(allocator, "components", "src/components", 1, 2, &.{".component.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
 
-    // deeper → shallower: always allowed
+    // deeper (higher dagOrder) → shallower (lower dagOrder): always allowed
     try testing.expect(cfg.canImport("components", "utils"));
     try testing.expect(cfg.canImport("services", "utils"));
 
-    // shallower → deeper: denied without explicit allowed_imports
+    // shallower (lower dagOrder) → deeper (higher dagOrder): denied without explicit allowed_imports
     try testing.expect(!cfg.canImport("utils", "components"));
     try testing.expect(!cfg.canImport("utils", "services"));
 
@@ -194,19 +193,19 @@ test "canImport top-down DAG rules" {
     try testing.expect(!cfg.canImport("ghost", "utils"));
     try testing.expect(!cfg.canImport("utils", "ghost"));
 
-    // same depth: denied without explicit allowed_imports
+    // same dagOrder (shouldn't happen with valid config, but defensive check)
     try testing.expect(!cfg.canImport("services", "components"));
 }
 
-test "canImport with explicit allowed_imports allows shallower→deeper" {
+test "canImport with explicit allowed_imports allows shallow-to-deep" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
     var utils_allowed = try allocator.alloc([]const u8, 1);
     utils_allowed[0] = try allocator.dupe(u8, "services");
     surfaces[0].allowedImports = utils_allowed;
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, &.{".service.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
@@ -214,15 +213,15 @@ test "canImport with explicit allowed_imports allows shallower→deeper" {
     try testing.expect(cfg.canImport("utils", "services"));
 }
 
-test "canImport same depth with explicit allowed_imports" {
+test "canImport same dagOrder with explicit allowed_imports" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "commands", "src/commands", 5, &.{".command.ts"});
+    surfaces[0] = try testSurface(allocator, "commands", "src/commands", 1, 5, &.{".command.ts"});
     var commands_allowed = try allocator.alloc([]const u8, 1);
     commands_allowed[0] = try allocator.dupe(u8, "tasks");
     surfaces[0].allowedImports = commands_allowed;
-    surfaces[1] = try testSurface(allocator, "tasks", "src/tasks", 5, &.{".task.ts"});
+    surfaces[1] = try testSurface(allocator, "tasks", "src/tasks", 1, 5, &.{".task.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
@@ -243,8 +242,8 @@ test "validate catches DuplicateSurfaceNames" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
-    surfaces[1] = try testSurface(allocator, "utils", "src/other", 1, &.{".other.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
+    surfaces[1] = try testSurface(allocator, "utils", "src/other", 1, 1, &.{".other.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
@@ -252,41 +251,41 @@ test "validate catches DuplicateSurfaceNames" {
     try testing.expectError(ValidationError.DuplicateSurfaceNames, validate(&cfg));
 }
 
-test "validate catches DuplicateDepths" {
+test "validate catches DuplicateDagOrders" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 0, &.{".service.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 0, &.{".service.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
 
-    try testing.expectError(ValidationError.DuplicateDepths, validate(&cfg));
+    try testing.expectError(ValidationError.DuplicateDagOrders, validate(&cfg));
 }
 
-test "validate catches InvalidDepthOrder" {
+test "validate catches InvalidDagOrder" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 2, &.{".service.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 2, &.{".service.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
 
-    try testing.expectError(ValidationError.InvalidDepthOrder, validate(&cfg));
+    try testing.expectError(ValidationError.InvalidDagOrder, validate(&cfg));
 }
 
 test "validate catches MissingSurfaceInEdge" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
     var utils_edge = try allocator.alloc([]const u8, 1);
     utils_edge[0] = try allocator.dupe(u8, "ghost");
     surfaces[0].allowedImports = utils_edge;
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, &.{".service.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
@@ -298,12 +297,12 @@ test "validate passes for valid config" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 3);
-    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 0, &.{".util.ts"});
+    surfaces[0] = try testSurface(allocator, "utils", "src/utils", 1, 0, &.{".util.ts"});
     var utils_allowed_imports = try allocator.alloc([]const u8, 1);
     utils_allowed_imports[0] = try allocator.dupe(u8, "services");
     surfaces[0].allowedImports = utils_allowed_imports;
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, &.{".service.ts"});
-    surfaces[2] = try testSurface(allocator, "components", "src/components", 2, &.{".component.ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
+    surfaces[2] = try testSurface(allocator, "components", "src/components", 1, 2, &.{".component.ts"});
     var components_allowed = try allocator.alloc([]const u8, 2);
     components_allowed[0] = try allocator.dupe(u8, "utils");
     components_allowed[1] = try allocator.dupe(u8, "services");

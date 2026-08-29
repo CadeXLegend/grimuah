@@ -1,7 +1,7 @@
 .{
-    .name = .arch,
+    .name = .archicade,
     .version = "0.1.0",
-    .fingerprint = 0xf812224a0952a481,
+    .fingerprint = 0xd5701b59aa3fd6f4,
     .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",

@@ -93,6 +93,14 @@ pub fn writeFile(io: std.Io, path: []const u8, content: []const u8) !void {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = content });
 }
 
+/// write a string to a file, creating parent directories, with executable permission
+pub fn writeExecutableFile(io: std.Io, path: []const u8, content: []const u8) !void {
+    if (std.fs.path.dirname(path)) |parent| {
+        try std.Io.Dir.cwd().createDirPath(io, parent);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = content, .flags = .{ .permissions = .executable_file } });
+}
+
 fn isTextFile(name: []const u8) bool {
     const text_extensions = [_][]const u8{
         ".ts",   ".tsx",  ".js",   ".jsx",  ".json",

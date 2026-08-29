@@ -1,0 +1,22 @@
+engine biome(1.0)
+
+// behavioural: runtime safety -- errors flow through discriminated unions, never throw
+
+or {
+  // ban throw -- all errors must flow through OperationOutcome
+  `throw $expr` as $throw_stmt where {
+    register_diagnostic(span=$throw_stmt, message="do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts", severity="error")
+  },
+  // ban bare catch -- must log or handle the error
+  `try { $body } catch {}` as $bare_catch where {
+    register_diagnostic(span=$bare_catch, message="do not use bare catch with silent failure; log the error or return an OperationOutcome", severity="error")
+  },
+  // ban catch without logging (no binding)
+  `try { $body } catch { $_ }` as $silent_catch where {
+    register_diagnostic(span=$silent_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
+  },
+  // ban catch with bound error but no logging
+  `try { $body } catch ($err) { $_ }` as $bound_catch where {
+    register_diagnostic(span=$bound_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
+  }
+}

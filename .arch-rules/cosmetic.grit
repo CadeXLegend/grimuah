@@ -1,0 +1,8 @@
+engine biome(1.0)
+
+// cosmetic: surface-level readability
+
+// ban em-dashes everywhere (strings, templates, comments)
+`—` as $emdash where {
+  register_diagnostic(span=$emdash, message="do not use em-dashes; use commas, colons, or sentence breaks instead", severity="error")
+}

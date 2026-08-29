@@ -39,18 +39,24 @@ fn rewriteConfigWithout(io: std.Io, allocator: std.mem.Allocator, cfg: *config.C
     var json_buf: std.ArrayList(u8) = .empty;
     defer json_buf.deinit(allocator);
 
+    const removed_surface = cfg.getSurface(remove_name).?;
+    const removed_dag_order = removed_surface.dagOrder;
+
     try json_buf.appendSlice(allocator, "{\n  \"surfaces\": [\n");
 
     var written: usize = 0;
     for (cfg.surfaces) |surface| {
         if (std.mem.eql(u8, surface.name, remove_name)) continue;
 
+        // shift dagOrder down if the removed surface is ordered before this one
+        const new_dag_order = if (surface.dagOrder > removed_dag_order) surface.dagOrder - 1 else surface.dagOrder;
+
         if (written > 0) try json_buf.appendSlice(allocator, ",\n");
 
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(
             allocator,
-            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"suffixes\": [",
-            .{ surface.name, surface.path, if (surface.depth > cfg.getSurface(remove_name).?.depth) surface.depth - 1 else surface.depth },
+            "    {{\n      \"name\": \"{s}\",\n      \"path\": \"{s}\",\n      \"depth\": {d},\n      \"dagOrder\": {d},\n      \"suffixes\": [",
+            .{ surface.name, surface.path, surface.depth, new_dag_order },
         ));
 
         for (surface.suffixes, 0..) |suffix, j| {

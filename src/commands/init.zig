@@ -4,8 +4,11 @@ const presets = @import("../presets.zig");
 const templates = @import("../templates.zig");
 const gritql = @import("../gritql.zig");
 
-/// embedded schema — shipped in binary, written to every scaffolded project
+/// embedded schema, shipped in binary, written to every scaffolded project
 const embedded_schema: []const u8 = @embedFile("../architecture.schema.json");
+
+/// embedded outcome pattern file, written to lib/ when surface is selected
+const embedded_outcome: []const u8 = @embedFile("../templates/outcome.ts");
 
 /// embedded biome config template
 const biome_config_template: []const u8 =
@@ -16,7 +19,12 @@ const biome_config_template: []const u8 =
     \\    "indentStyle": "space",
     \\    "indentWidth": 2
     \\  },
-    \\  "plugins": ["arch-rules/cosmetic.grit", "arch-rules/structural.grit", "arch-rules/resilience.grit", "arch-rules/behavioural.grit"],
+    \\  "plugins": [
+    \\    ".arch-rules/cosmetic.grit",
+    \\    ".arch-rules/structural.grit",
+    \\    ".arch-rules/resilience.grit",
+    \\    ".arch-rules/behavioural.grit"
+    \\  ],
     \\  "linter": {
     \\    "enabled": true
     \\  }
@@ -26,25 +34,37 @@ const biome_config_template: []const u8 =
 const tsconfig_template: []const u8 =
     \\{
     \\  "compilerOptions": {
-    \\    "target": "ES2022",
+    \\    "target": "esnext",
     \\    "module": "ES2022",
     \\    "moduleResolution": "bundler",
-    \\    "strict": true,
+    \\    "lib": ["ES2022"],
     \\    "noEmit": true,
-    \\    "allowImportingTsExtensions": true,
+    \\    "esModuleInterop": true,
+    \\    "skipLibCheck": true,
+    \\    "forceConsistentCasingInFileNames": true,
+    \\    "resolveJsonModule": true,
     \\    "isolatedModules": true,
-    \\    "skipLibCheck": true
-    \\  }
+    \\    "allowImportingTsExtensions": true,
+    \\    "noImplicitOverride": true,
+    \\    "noPropertyAccessFromIndexSignature": true,
+    \\    "noImplicitReturns": true,
+    \\    "noFallthroughCasesInSwitch": true,
+    \\    "outDir": "./dist",
+    \\    "rootDir": "./src"
+    \\  },
+    \\  "include": ["src/**/*.ts"],
+    \\  "exclude": ["node_modules", "dist"]
     \\}
 ;
 
-/// interactive refinement answers — user choices beyond the preset
+/// interactive refinement answers: user choices beyond the preset
 const InteractiveAnswers = struct {
     lib: bool = false,
     db: bool = false,
     pages: bool = false,
     commands: bool = false,
     middleware: bool = false,
+    tasks: bool = false,
 };
 
 /// which optional surfaces are already in the preset
@@ -54,6 +74,7 @@ const SurfacePresence = struct {
     has_pages: bool,
     has_commands: bool,
     has_middleware: bool,
+    has_tasks: bool,
 };
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, project_name: ?[]const u8, preset_name: ?[]const u8) !void {
@@ -76,7 +97,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, project_name: ?[]const u8, 
     // detect which optional surfaces the preset already has
     const presence = detectPresence(cfg);
 
-    // interactive refinement — only ask about surfaces not already in preset
+    // interactive refinement: only ask about surfaces not already in preset
     const answers = try askInteractive(presence);
 
     // apply interactive patches to config
@@ -99,6 +120,7 @@ fn detectPresence(cfg: *const config.Config) SurfacePresence {
         .has_pages = false,
         .has_commands = false,
         .has_middleware = false,
+        .has_tasks = false,
     };
     for (cfg.surfaces) |surface| {
         if (std.mem.eql(u8, surface.name, "lib")) presence.has_lib = true;
@@ -106,16 +128,16 @@ fn detectPresence(cfg: *const config.Config) SurfacePresence {
         if (std.mem.eql(u8, surface.name, "pages")) presence.has_pages = true;
         if (std.mem.eql(u8, surface.name, "commands")) presence.has_commands = true;
         if (std.mem.eql(u8, surface.name, "middleware")) presence.has_middleware = true;
+        if (std.mem.eql(u8, surface.name, "tasks")) presence.has_tasks = true;
     }
     return presence;
 }
 
 /// ask interactive questions for surfaces not already in the preset
-/// default preset (no surfaces present) asks all 5; named presets skip what they include
 fn askInteractive(presence: SurfacePresence) !InteractiveAnswers {
     var answers = InteractiveAnswers{};
     var question_count: u32 = 0;
-    const max_questions: u32 = 5;
+    const max_questions: u32 = 6;
 
     const questions = [_]struct { key: []const u8, present: bool, target: *bool }{
         .{ .key = "lib", .present = presence.has_lib, .target = &answers.lib },
@@ -123,10 +145,11 @@ fn askInteractive(presence: SurfacePresence) !InteractiveAnswers {
         .{ .key = "pages", .present = presence.has_pages, .target = &answers.pages },
         .{ .key = "commands", .present = presence.has_commands, .target = &answers.commands },
         .{ .key = "middleware", .present = presence.has_middleware, .target = &answers.middleware },
+        .{ .key = "tasks", .present = presence.has_tasks, .target = &answers.tasks },
     };
 
     for (questions) |q| {
-        if (q.present) continue; // already in preset, skip
+        if (q.present) continue;
         if (question_count >= max_questions) break;
 
         const answer = try askYesNo(q.key);
@@ -142,11 +165,12 @@ fn askInteractive(presence: SurfacePresence) !InteractiveAnswers {
 /// ask a single yes/no question on stdin
 fn askYesNo(label: []const u8) !bool {
     const prompts = [_]struct { label: []const u8, description: []const u8 }{
-        .{ .label = "lib", .description = "root-level framework utilities (OperationOutcome, registry) — depth 0, importable by all" },
-        .{ .label = "db", .description = "database layer with db/repositories/ and db/migrations/ — depth 1" },
-        .{ .label = "pages", .description = "web UI surface — deepest depth, imports from components/services" },
-        .{ .label = "commands", .description = "CLI/bot interaction surface — deepest depth, imports from all shallower" },
-        .{ .label = "middleware", .description = "request pipeline surface — sits between services and components" },
+        .{ .label = "lib", .description = "root-level framework utilities (OperationOutcome, registry), importable by all" },
+        .{ .label = "db", .description = "database layer with db/repositories/ and db/migrations/" },
+        .{ .label = "pages", .description = "web UI surface, deepest dagOrder, imports from components/services" },
+        .{ .label = "commands", .description = "CLI/bot interaction surface, deepest dagOrder, imports from all shallower" },
+        .{ .label = "middleware", .description = "request pipeline surface, sits between services and components" },
+        .{ .label = "tasks", .description = "background job processing surface, imports from lib/db/middleware/services" },
     };
 
     const desc = for (prompts) |p| {
@@ -155,8 +179,8 @@ fn askYesNo(label: []const u8) !bool {
 
     std.debug.print("add {s}/? {s} [y/N]: ", .{ label, desc });
 
-    // read one byte at a time until newline — handles both terminal (line-buffered)
-    // and piped input (heredoc delivers one byte per read on a pipe)
+    // read one byte at a time until newline
+    // handles both terminal (line-buffered) and piped input (heredoc delivers one byte per read on a pipe)
     var buf: [32]u8 = undefined;
     var pos: usize = 0;
     while (pos < buf.len) {
@@ -169,7 +193,8 @@ fn askYesNo(label: []const u8) !bool {
 }
 
 /// apply interactive answers to the config by adding selected surfaces
-/// this regenerates the surfaces array with new entries inserted at correct depths
+/// surfaces under src/ get depth=1, lib gets depth=0
+/// dagOrder is set sequentially based on insertion position
 fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: InteractiveAnswers, presence: SurfacePresence) !void {
     // count how many new surfaces to add
     var new_count: usize = 0;
@@ -178,6 +203,7 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
     if (answers.pages and !presence.has_pages) new_count += 1;
     if (answers.commands and !presence.has_commands) new_count += 1;
     if (answers.middleware and !presence.has_middleware) new_count += 1;
+    if (answers.tasks and !presence.has_tasks) new_count += 1;
 
     if (new_count == 0) return;
 
@@ -191,52 +217,58 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 
     var insert_idx: usize = cfg.surfaces.len;
 
-    // add lib at depth 0 if requested (shift existing surfaces down, not lib itself)
+    // compute the base dagOrder: highest existing dagOrder + 1
+    var next_dag_order: u32 = 0;
+    for (cfg.surfaces) |surface| {
+        if (surface.dagOrder >= next_dag_order) next_dag_order = surface.dagOrder + 1;
+    }
+
+    // add lib at depth 0 (root-level), dagOrder = next
     if (answers.lib and !presence.has_lib) {
-        // shift all existing surfaces +1 to make room for lib at depth 0
-        for (new_surfaces[0..cfg.surfaces.len]) |*existing| {
-            existing.depth += 1;
-        }
-        new_surfaces[insert_idx] = createSurface(allocator, "lib", "lib", 0, &.{".ts"}, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{});
+        new_surfaces[insert_idx] = createSurface(allocator, "lib", "lib", 0, next_dag_order, &.{".ts"}, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{});
         insert_idx += 1;
+        next_dag_order += 1;
     }
 
-    // add db between lib and services — shift services/components +1 to make room
+    // add db under src/, depth 1
     if (answers.db and !presence.has_db) {
-        const db_depth: u32 = if (answers.lib and !presence.has_lib) @as(u32, 1) else 1;
-        // shift services and components +1 to make room for db
-        for (new_surfaces[0..cfg.surfaces.len]) |*existing| {
-            if (existing.depth >= db_depth) existing.depth += 1;
-        }
-        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", db_depth, &.{ ".repo.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
+        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, next_dag_order, &.{ ".repo.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
         insert_idx += 1;
+        next_dag_order += 1;
     }
 
-    // add middleware between services and components
+    // add middleware under src/, depth 1
     if (answers.middleware and !presence.has_middleware) {
-        const md_depth: u32 = 4;
-        for (new_surfaces[0..insert_idx]) |*existing| {
-            if (existing.depth >= md_depth) existing.depth += 1;
-        }
-        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", md_depth, &.{ ".middleware.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, &.{ "lib", "db", "services" });
+        const mid_allowed: []const []const u8 = if (answers.lib and !presence.has_lib) (if (answers.db and !presence.has_db) &.{ "lib", "db", "services" } else &.{"lib"}) else &.{"services"};
+        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", 1, next_dag_order, &.{ ".middleware.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, mid_allowed);
         insert_idx += 1;
+        next_dag_order += 1;
     }
 
-    // add pages at deep depth
+    // add pages under src/, depth 1
     if (answers.pages and !presence.has_pages) {
-        const pages_depth: u32 = @intCast(total - 2);
-        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", pages_depth, &.{ ".page.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
+        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", 1, next_dag_order, &.{ ".page.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
         insert_idx += 1;
+        next_dag_order += 1;
     }
 
-    // add commands at deepest depth
+    // add commands under src/, depth 1
     if (answers.commands and !presence.has_commands) {
-        const cmd_depth: u32 = @intCast(total - 1);
-        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", cmd_depth, &.{ ".command.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, &.{ "lib", "utils", "db", "services" });
+        const cmd_allowed: []const []const u8 = if (answers.db and !presence.has_db) &.{ "lib", "utils", "db", "services" } else &.{ "lib", "utils", "services" };
+        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", 1, next_dag_order, &.{ ".command.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, cmd_allowed);
         insert_idx += 1;
+        next_dag_order += 1;
     }
 
-    // swap the surfaces array (old one was allocated by parseFromSlice, freed by deinit)
+    // add tasks under src/, depth 1
+    if (answers.tasks and !presence.has_tasks) {
+        const tasks_allowed: []const []const u8 = if (answers.middleware and !presence.has_middleware) &.{ "lib", "db", "middleware", "services" } else &.{ "lib", "db", "services" };
+        new_surfaces[insert_idx] = createSurface(allocator, "tasks", "src/tasks", 1, next_dag_order, &.{ ".task.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, tasks_allowed);
+        insert_idx += 1;
+        next_dag_order += 1;
+    }
+
+    // swap the surfaces array
     cfg.surfaces = new_surfaces;
 
     // enable root lib if lib was added
@@ -246,7 +278,7 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 }
 
 /// create a heap-allocated Surface with all fields
-fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, suffixes: []const []const u8, innateMembers: []const []const u8, allowedImports: []const []const u8) config.Surface {
+fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, dagOrder: u32, suffixes: []const []const u8, innateMembers: []const []const u8, allowedImports: []const []const u8) config.Surface {
     const name_copy = allocator.dupe(u8, name) catch @panic("OOM");
     const path_copy = allocator.dupe(u8, path) catch @panic("OOM");
 
@@ -263,6 +295,7 @@ fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u
         .name = name_copy,
         .path = path_copy,
         .depth = depth,
+        .dagOrder = dagOrder,
         .suffixes = suffixes_copy,
         .innateMembers = innate_copy,
         .allowedImports = imports_copy,
@@ -298,6 +331,12 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
     // write package.json
     try writePackageJson(io, allocator, name);
 
+    // write .gitignore
+    try writeGitignore(io, name);
+
+    // scaffold .husky/
+    try scaffoldHusky(io, name);
+
     // create surface directories with example files
     for (cfg.surfaces) |surface| {
         var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -322,12 +361,83 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
         const lib_example_path = try std.fmt.allocPrint(allocator, "{s}/example.ts", .{lib_dir});
         defer allocator.free(lib_example_path);
         try templates.writeFile(io, lib_example_path, "// TODO: implement\n");
+
+        // write outcome.ts pattern
+        var outcome_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const outcome_path = try std.fmt.bufPrint(&outcome_path_buf, "{s}/outcome.ts", .{lib_dir});
+        try templates.writeFile(io, outcome_path, embedded_outcome);
     }
 
-    // create arch-rules/ directory
+    // create .arch-rules/ directory
     var rules_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const rules_dir = try std.fmt.bufPrint(&rules_dir_buf, "{s}/arch-rules", .{name});
+    const rules_dir = try std.fmt.bufPrint(&rules_dir_buf, "{s}/.arch-rules", .{name});
     try std.Io.Dir.cwd().createDirPath(io, rules_dir);
+}
+
+fn writeGitignore(io: std.Io, name: []const u8) !void {
+    const content =
+        \\node_modules/
+        \\dist/
+        \\*.log
+        \\.env
+        \\.env.*
+        \\.dev.vars
+        \\!.env.example
+        \\.pi
+        \\.rpiv
+    ;
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buf, "{s}/.gitignore", .{name});
+    try templates.writeFile(io, path, content);
+}
+
+fn scaffoldHusky(io: std.Io, name: []const u8) !void {
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+
+    // create .husky/ directory
+    const husky_dir = try std.fmt.bufPrint(&buf, "{s}/.husky", .{name});
+    try std.Io.Dir.cwd().createDirPath(io, husky_dir);
+
+    // write pre-commit
+    const precommit_path = try std.fmt.bufPrint(&buf, "{s}/.husky/pre-commit", .{name});
+    try templates.writeFile(io, precommit_path,
+        \\pnpm typecheck
+        \\pnpm lint
+        \\bash .husky/check-em-dash.sh
+        \\bash .husky/format-on-commit.sh
+    );
+
+    // write check-em-dash.sh
+    const check_emdash_path = try std.fmt.bufPrint(&buf, "{s}/.husky/check-em-dash.sh", .{name});
+    try templates.writeExecutableFile(io, check_emdash_path,
+        \\#!/usr/bin/env bash
+        \\# ban em-dash in source files
+        \\STATUS=0
+        \\if grep -rn $'\xe2\x80\x94' src/ --include="*.ts"; then
+        \\  echo ""
+        \\  echo "em-dash found in source files, banned in this project"
+        \\  echo "replace with a comma, colon, or sentence break instead"
+        \\  STATUS=1
+        \\fi
+        \\exit $STATUS
+    );
+
+    // write format-on-commit.sh
+    const format_commit_path = try std.fmt.bufPrint(&buf, "{s}/.husky/format-on-commit.sh", .{name});
+    try templates.writeExecutableFile(io, format_commit_path,
+        \\#!/usr/bin/env bash
+        \\STAGED_FILES=$(git diff --cached --name-only)
+        \\pnpm format
+        \\UNSTAGED_FILES=$(git diff --name-only)
+        \\FILES_TO_RESTAGE=$(comm -12 <(echo "$STAGED_FILES" | sort) <(echo "$UNSTAGED_FILES" | sort))
+        \\if [ -n "$FILES_TO_RESTAGE" ]; then
+        \\  echo "$FILES_TO_RESTAGE" | xargs git add
+        \\  echo "Re-staged formatted files:"
+        \\  echo "$FILES_TO_RESTAGE"
+        \\else
+        \\  echo "All staged files were already properly formatted."
+        \\fi
+    );
 }
 
 fn writePackageJson(io: std.Io, allocator: std.mem.Allocator, name: []const u8) !void {
@@ -338,8 +448,19 @@ fn writePackageJson(io: std.Io, allocator: std.mem.Allocator, name: []const u8) 
         \\  "private": true,
         \\  "scripts": {{
         \\    "check": "biome check",
+        \\    "lint": "biome lint",
         \\    "format": "biome format --write",
-        \\    "typecheck": "tsc --noEmit"
+        \\    "typecheck": "tsc --noEmit",
+        \\    "release": "commit-and-tag-version",
+        \\    "release:minor": "commit-and-tag-version --release-as minor",
+        \\    "release:patch": "commit-and-tag-version --release-as patch",
+        \\    "release:dry": "commit-and-tag-version --dry-run",
+        \\    "prepare": "husky"
+        \\  }},
+        \\  "devDependencies": {{
+        \\    "husky": "^9.1.7",
+        \\    "typescript": "^6.0.3",
+        \\    "commit-and-tag-version": "^12.7.3"
         \\  }}
         \\}}
     , .{name});

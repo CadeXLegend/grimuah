@@ -21,7 +21,7 @@ pub const Preset = enum {
     }
 };
 
-/// embedded preset JSON — compiled into the binary at build time
+/// embedded preset JSON, compiled into the binary at build time
 const embedded_default: []const u8 = @embedFile("preset_data/default.json");
 const embedded_webapp: []const u8 = @embedFile("preset_data/webapp.json");
 const embedded_cli: []const u8 = @embedFile("preset_data/cli.json");
@@ -51,10 +51,10 @@ pub fn loadPreset(allocator: std.mem.Allocator, preset: Preset) !std.json.Parsed
 /// get the display description for a preset
 pub fn description(preset: Preset) []const u8 {
     return switch (preset) {
-        .default => "bare-bones: services/, utils/, components/ — minimal scaffolding",
+        .default => "bare-bones: services/, utils/, components/ with minimal scaffolding",
         .webapp => "web application: lib/, utils/, services/, components/, pages/",
         .cli => "command-line tool: lib/, utils/, services/, commands/",
-        .backend => "backend service: lib/, db/, services/, tasks/",
+        .backend => "backend service: lib/, db/, middleware/, services/ (plus optional tasks/)",
         .bot => "telegram/chat bot: lib/, db/, services/, middleware/, components/, commands/, tasks/, handlers/",
     };
 }
