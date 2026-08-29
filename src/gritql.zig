@@ -19,7 +19,8 @@ pub const RuleLayer = enum {
 };
 
 /// generate all enabled .grit rule files into .arch-rules/
-pub fn generateRules(io: std.Io,
+pub fn generateRules(
+    io: std.Io,
     allocator: std.mem.Allocator,
     project_root: []const u8,
     cfg: *const config.Config,
@@ -94,46 +95,38 @@ fn appendResilience(allocator: std.mem.Allocator, buf: *std.ArrayList(u8)) !void
         \\  `switch ($expr) { $cases }` as $switch_stmt where {
         \\    register_diagnostic(span=$switch_stmt, message="do not use switch; use a dispatch table (Record/Map) instead", severity="error")
         \\  },
-        \\
         \\  // ban C-style for loops -- use map, filter, reduce, or for..of
         \\  `for ($init; $cond; $update) { $body }` as $for_stmt where {
         \\    register_diagnostic(span=$for_stmt, message="do not use imperative for loops; use map, filter, reduce, or for..of instead", severity="error")
         \\  },
-        \\
         \\  // ban let -- use const
         \\  // ban == -- use ===
         \\  `$left == $right` as $double_eq where {
         \\    register_diagnostic(span=$double_eq, message="use === instead of == to avoid type coercion bugs", severity="error")
         \\  },
-        
         \\  `let $name = $value` as $let_decl where {
         \\    register_diagnostic(span=$let_decl, message="do not use let; use const. only let at module-level mutable caches", severity="error")
         \\  },
-        \\
         \\  // ban null -- use undefined
         \\  `null` as $null_lit where {
         \\    register_diagnostic(span=$null_lit, message="do not use null; use undefined. null only at third-party boundaries (DB, RegExp)", severity="error")
         \\  },
-        \\
         \\  // ban as any -- use proper types
         \\  `$expr as any` as $any_cast where {
         \\    register_diagnostic(span=$any_cast, message="'as any' bypasses type safety entirely; use a proper type instead", severity="error")
         \\  },
-        \\
         \\  // ban chained as casts -- use a single cast
         \\  `$expr as $t1 as $t2` as $chained_cast where {
         \\    register_diagnostic(span=$chained_cast, message="chained 'as' casts bypass type safety; use a single cast only", severity="error")
         \\  },
-        \\
         \\  // ban proxy re-exports -- every export must add value
         \\  `export { $names } from $module` as $reexport where {
         \\    register_diagnostic(span=$reexport, message="do not proxy re-export; every export must originate from the file that defines it", severity="error")
         \\  },
-        \\
         \\  // ban const-as-enum -- use enum
         \\  `const $name = { $members } as const` as $asconst where {
         \\    register_diagnostic(span=$asconst, message="use enum instead of const + as const; enum gives you both value and type in one declaration", severity="error")
-        \\  },
+        \\  }
         \\}
         \\
     );
@@ -149,21 +142,24 @@ fn appendBehavioural(allocator: std.mem.Allocator, buf: *std.ArrayList(u8)) !voi
         \\  `throw $expr` as $throw_stmt where {
         \\    register_diagnostic(span=$throw_stmt, message="do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts", severity="error")
         \\  },
-        \\
         \\  // ban bare catch -- must log or handle the error
         \\  `try { $body } catch {}` as $bare_catch where {
         \\    register_diagnostic(span=$bare_catch, message="do not use bare catch with silent failure; log the error or return an Outcome", severity="error")
         \\  },
-        \\
-        \\  // ban catch without logging (no binding)
-        \\  `try { $body } catch { $_ }` as $silent_catch where {
+        \\  // ban catch that neither handles, logs, nor rethrows the error
+        \\  `try { $body } catch { $catch_body }` as $silent_catch where {
+        \\    not $catch_body <: contains `return $_`,
+        \\    not $catch_body <: contains `throw $_`,
+        \\    not $catch_body <: contains `console`,
         \\    register_diagnostic(span=$silent_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
         \\  },
-        \\
-        \\  // ban catch with bound error but no logging
-        \\  `try { $body } catch ($err) { $_ }` as $bound_catch where {
+        \\  // ban catch with bound error that neither handles, logs, nor rethrows
+        \\  `try { $body } catch ($err) { $catch_body }` as $bound_catch where {
+        \\    not $catch_body <: contains `return $_`,
+        \\    not $catch_body <: contains `throw $_`,
+        \\    not $catch_body <: contains `console`,
         \\    register_diagnostic(span=$bound_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
-        \\  },
+        \\  }
         \\}
         \\
     );
@@ -210,6 +206,7 @@ test "generateLayer behavioural contains all patterns" {
     try testing.expect(std.mem.containsAtLeast(u8, content, 1, "throw"));
     try testing.expect(std.mem.containsAtLeast(u8, content, 1, "catch {}"));
     try testing.expect(std.mem.containsAtLeast(u8, content, 1, "catch ($err)"));
+    try testing.expect(std.mem.containsAtLeast(u8, content, 1, "not $catch_body <: contains"));
 }
 
 test "RuleLayer.fileName returns correct name" {

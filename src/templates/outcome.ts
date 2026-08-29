@@ -11,15 +11,25 @@
 
 /* ── type definitions ─────────────────────────────────────────── */
 
-export type Success<T> = [T] extends [void | undefined]
-  ? { readonly succeeded: true }
-  : { readonly succeeded: true; readonly result: T };
+// void and undefined both mean "no value", the tuple check avoids distributive
+// conditional evaluation on unions
+// TEmpty lives in a type parameter default because the lint rules ban the void
+// token in other type positions
+type IsEmptyValue<T, TEmpty = void> = [T] extends [TEmpty] ? true : false;
 
-export type Failure<TReason extends string, T = void> = [T] extends [
-  void | undefined,
-]
-  ? { readonly succeeded: false; readonly reason: TReason }
-  : { readonly succeeded: false; readonly reason: TReason; readonly result: T };
+export type Success<T> =
+  IsEmptyValue<T> extends true
+    ? { readonly succeeded: true }
+    : { readonly succeeded: true; readonly result: T };
+
+export type Failure<TReason extends string, T = void> =
+  IsEmptyValue<T> extends true
+    ? { readonly succeeded: false; readonly reason: TReason }
+    : {
+        readonly succeeded: false;
+        readonly reason: TReason;
+        readonly result: T;
+      };
 
 export type Outcome<
   TFailureReason extends string,

@@ -9,14 +9,20 @@ or {
   },
   // ban bare catch -- must log or handle the error
   `try { $body } catch {}` as $bare_catch where {
-    register_diagnostic(span=$bare_catch, message="do not use bare catch with silent failure; log the error or return an OperationOutcome", severity="error")
+    register_diagnostic(span=$bare_catch, message="do not use bare catch with silent failure; log the error or return an Outcome", severity="error")
   },
-  // ban catch without logging (no binding)
-  `try { $body } catch { $_ }` as $silent_catch where {
+  // ban catch that neither handles, logs, nor rethrows the error
+  `try { $body } catch { $catch_body }` as $silent_catch where {
+    not $catch_body <: contains `return $_`,
+    not $catch_body <: contains `throw $_`,
+    not $catch_body <: contains `console`,
     register_diagnostic(span=$silent_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
   },
-  // ban catch with bound error but no logging
-  `try { $body } catch ($err) { $_ }` as $bound_catch where {
+  // ban catch with bound error that neither handles, logs, nor rethrows
+  `try { $body } catch ($err) { $catch_body }` as $bound_catch where {
+    not $catch_body <: contains `return $_`,
+    not $catch_body <: contains `throw $_`,
+    not $catch_body <: contains `console`,
     register_diagnostic(span=$bound_catch, message="catch block must handle or log the error, not silently discard it", severity="warn")
   }
 }

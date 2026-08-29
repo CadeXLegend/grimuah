@@ -111,7 +111,7 @@ done
 "$BIOME" check "$P1" 2>&1 | grep -q "Failed to compile" && fail "biome check: fails" || ok "biome check: passes"
 
 # ── 12. biome format check ──
-"$BIOME" format "$P1" 2>&1 | grep -q "Formatter would have written" && fail "biome format: would change" || ok "biome format: already clean"
+"$BIOME" format "$P1" 2>&1 | grep -q "Formatter would have printed" && fail "biome format: would change" || ok "biome format: already clean"
 
 # ── 13. arch check clean ──
 echo "// extra" > "$P1/src/utils/second.util.ts"

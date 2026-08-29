@@ -29,6 +29,7 @@ const biome_config_template: []const u8 =
     \\    "enabled": true
     \\  }
     \\}
+    \\
 ;
 
 const tsconfig_template: []const u8 =
@@ -55,6 +56,7 @@ const tsconfig_template: []const u8 =
     \\  "include": ["src/**/*.ts"],
     \\  "exclude": ["node_modules", "dist"]
     \\}
+    \\
 ;
 
 /// interactive refinement answers: user choices beyond the preset
@@ -315,7 +317,7 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
     const config_path = try std.fmt.bufPrint(&config_path_buf, "{s}/architecture.config.json", .{name});
 
     var json_buf: [16384]u8 = undefined;
-    const config_json_str = try std.fmt.bufPrint(&json_buf, "{f}", .{std.json.fmt(cfg.*, .{ .whitespace = .indent_2 })});
+    const config_json_str = try std.fmt.bufPrint(&json_buf, "{f}", .{config.Formatter{ .value = cfg }});
     try templates.writeFile(io, config_path, config_json_str);
 
     // write biome.json
@@ -463,6 +465,7 @@ fn writePackageJson(io: std.Io, allocator: std.mem.Allocator, name: []const u8) 
         \\    "commit-and-tag-version": "^12.7.3"
         \\  }}
         \\}}
+        \\
     , .{name});
     defer allocator.free(pkg);
 

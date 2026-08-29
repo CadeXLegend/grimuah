@@ -313,3 +313,156 @@ test "validate passes for valid config" {
 
     try validate(&cfg);
 }
+
+/// biome-format-clean json emitter, mirrors std.json.Formatter so it works in
+/// {f} format strings
+/// hand-rolled because std.json's indent options expand arrays onto separate
+/// lines while biome's formatter inlines them
+/// biome's formatter inlines an array when the whole line fits its line width
+/// and expands it otherwise, so this emitter applies the same rule
+pub const Formatter = struct {
+    value: *const Config,
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try self.writeConfig(writer);
+        try writer.writeByte('\n');
+    }
+
+    fn writeConfig(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const config = self.value;
+        try writer.writeAll("{\n  \"surfaces\": [\n");
+        for (config.surfaces, 0..) |surface, surface_index| {
+            const is_last_surface = surface_index + 1 == config.surfaces.len;
+            try writer.writeAll("    {\n");
+            try writer.writeAll("      \"name\": ");
+            try std.json.Stringify.value(surface.name, .{}, writer);
+            try writer.writeAll(",\n      \"path\": ");
+            try std.json.Stringify.value(surface.path, .{}, writer);
+            try writer.print(",\n      \"depth\": {},", .{surface.depth});
+            try writer.print("\n      \"dagOrder\": {}", .{surface.dagOrder});
+            try writer.writeAll(",\n      ");
+            try writeArrayField(writer, "suffixes", surface.suffixes, true);
+            try writer.writeAll("\n      ");
+            try writeArrayField(writer, "innateMembers", surface.innateMembers, true);
+            try writer.writeAll("\n      ");
+            try writeArrayField(writer, "allowedImports", surface.allowedImports, false);
+            try writer.writeAll(if (is_last_surface) "\n    }\n" else "\n    },\n");
+        }
+        try writer.writeAll("  ],\n  \"layers\": {\n");
+        try writer.print("    \"cosmetic\": {},\n", .{config.layers.cosmetic});
+        try writer.print("    \"structural\": {},\n", .{config.layers.structural});
+        try writer.print("    \"resilience\": {},\n", .{config.layers.resilience});
+        try writer.print("    \"behavioural\": {}\n", .{config.layers.behavioural});
+        try writer.writeAll("  },\n  \"rootLib\": {\n");
+        try writer.print("    \"enabled\": {},\n", .{config.rootLib.enabled});
+        try writer.writeAll("    \"path\": ");
+        try std.json.Stringify.value(config.rootLib.path, .{}, writer);
+        try writer.writeAll("\n  }\n}");
+    }
+
+    fn writeArrayField(writer: *std.Io.Writer, key: []const u8, values: []const []const u8, has_trailing_comma: bool) std.Io.Writer.Error!void {
+        const FIELD_INDENT = 6;
+        const line_len = FIELD_INDENT + key.len + KEY_PREFIX_OVERHEAD + inlineArrayLen(values) + @intFromBool(has_trailing_comma);
+        if (line_len <= LINE_WIDTH) {
+            try writer.writeAll("\"");
+            try writer.writeAll(key);
+            try writer.writeAll("\": ");
+            try writeInlineArray(writer, values);
+        } else {
+            try writer.writeAll("\"");
+            try writer.writeAll(key);
+            try writer.writeAll("\": [\n");
+            for (values, 0..) |value, value_index| {
+                const is_last_element = value_index + 1 == values.len;
+                try writer.writeAll("        ");
+                try std.json.Stringify.value(value, .{}, writer);
+                try writer.writeAll(if (is_last_element) "\n" else ",\n");
+            }
+            try writer.writeAll("      ]");
+        }
+        if (has_trailing_comma) try writer.writeByte(',');
+    }
+
+    /// length of the inline form of an array, e.g. ["a", "b"]
+    /// assumes values need no json escaping, true for surface names, paths,
+    /// and suffixes
+    fn inlineArrayLen(values: []const []const u8) usize {
+        var len: usize = 2; // brackets
+        for (values, 0..) |value, value_index| {
+            if (value_index > 0) len += 2; // ", " separator
+            len += value.len + 2; // quoted value
+        }
+        return len;
+    }
+
+    fn writeInlineArray(writer: *std.Io.Writer, values: []const []const u8) std.Io.Writer.Error!void {
+        try writer.writeByte('[');
+        for (values, 0..) |value, value_index| {
+            if (value_index > 0) try writer.writeAll(", ");
+            try std.json.Stringify.value(value, .{}, writer);
+        }
+        try writer.writeByte(']');
+    }
+};
+
+/// biome's default formatter line width, kept in sync with the generated
+/// biome.json which does not override lineWidth
+const LINE_WIDTH = 80;
+
+/// chars around the key in `"key": `, two quotes, a colon, and a space
+const KEY_PREFIX_OVERHEAD = 4;
+
+test "formatter emits biome-clean json" {
+    const allocator = testing.allocator;
+
+    var surfaces = try allocator.alloc(Surface, 2);
+    surfaces[0] = try testSurface(allocator, "lib", "lib", 0, 0, &.{".ts"});
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{ ".service.ts", ".config.ts" });
+    surfaces[1].innateMembers = &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" };
+    surfaces[1].allowedImports = &.{ "lib", "db" };
+    const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
+    defer cfg.deinit(allocator);
+
+    var buf: [1024]u8 = undefined;
+    const json = try std.fmt.bufPrint(&buf, "{f}", .{Formatter{ .value = &cfg }});
+    const expected =
+        \\{
+        \\  "surfaces": [
+        \\    {
+        \\      "name": "lib",
+        \\      "path": "lib",
+        \\      "depth": 0,
+        \\      "dagOrder": 0,
+        \\      "suffixes": [".ts"],
+        \\      "innateMembers": [],
+        \\      "allowedImports": []
+        \\    },
+        \\    {
+        \\      "name": "services",
+        \\      "path": "src/services",
+        \\      "depth": 1,
+        \\      "dagOrder": 1,
+        \\      "suffixes": [".service.ts", ".config.ts"],
+        \\      "innateMembers": [
+        \\        ".types.ts",
+        \\        ".config.ts",
+        \\        ".spec.ts",
+        \\        ".regex-patterns.ts"
+        \\      ],
+        \\      "allowedImports": ["lib", "db"]
+        \\    }
+        \\  ],
+        \\  "layers": {
+        \\    "cosmetic": true,
+        \\    "structural": true,
+        \\    "resilience": true,
+        \\    "behavioural": true
+        \\  },
+        \\  "rootLib": {
+        \\    "enabled": false,
+        \\    "path": "lib"
+        \\  }
+        \\}
+    ;
+    try testing.expectEqualStrings(expected ++ "\n", json);
+}
