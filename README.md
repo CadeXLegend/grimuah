@@ -333,7 +333,7 @@ a file cannot call itself a service-citizen if it is named `*.component.ts`
 
 depth controls where the directory lives, dagOrder controls who can import from whom
 
-these are two distinct parameters because the file tree and the dependency graph are different things
+depth and dagOrder are two distinct parameters because the file tree and the dependency graph are different things
 
 **constraints**: the citizen may only import from surfaces listed in the surface's `allowedImports`
 
@@ -465,7 +465,7 @@ a surface with dagOrder 3 can import from surfaces with dagOrder 0, 1, or 2
 
 it cannot import from dagOrder 4, 5, or 6
 
-these are independent because the file tree and the dependency graph are different things
+depth and dagOrder are independent because the file tree and the dependency graph are different things
 
 multiple surfaces can share the same file depth with different dagOrders
 
