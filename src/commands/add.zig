@@ -71,10 +71,10 @@ fn findDeepestDagOrder(cfg: *const config.Config) u32 {
 
 fn suffixesForSurface(allocator: std.mem.Allocator, name: []const u8) ![]const []const u8 {
     // heuristic: surface name to standard suffix pattern
-    if (std.mem.eql(u8, name, "validators")) return allocator.dupe([]const u8, &.{ ".validator.ts", ".config.ts" });
-    if (std.mem.eql(u8, name, "guards")) return allocator.dupe([]const u8, &.{ ".guard.ts", ".config.ts" });
-    if (std.mem.eql(u8, name, "states")) return allocator.dupe([]const u8, &.{ ".state.ts", ".config.ts" });
-    if (std.mem.eql(u8, name, "repositories")) return allocator.dupe([]const u8, &.{ ".repo.ts", ".config.ts" });
+    if (std.mem.eql(u8, name, "validators")) return allocator.dupe([]const u8, &.{ ".validator.ts" });
+    if (std.mem.eql(u8, name, "guards")) return allocator.dupe([]const u8, &.{ ".guard.ts" });
+    if (std.mem.eql(u8, name, "states")) return allocator.dupe([]const u8, &.{ ".state.ts" });
+    if (std.mem.eql(u8, name, "repositories")) return allocator.dupe([]const u8, &.{ ".repo.ts" });
 
     // default: <name>/<name>.ts (strip trailing 's' for singular)
     var singular = name;
@@ -83,7 +83,6 @@ fn suffixesForSurface(allocator: std.mem.Allocator, name: []const u8) ![]const [
     }
     return try allocator.dupe([]const u8, &.{
         try std.fmt.allocPrint(allocator, ".{s}.ts", .{singular}),
-        ".config.ts",
     });
 }
 

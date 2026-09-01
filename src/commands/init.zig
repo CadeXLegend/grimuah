@@ -234,7 +234,7 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 
     // add db under src/, depth 1
     if (answers.db and !presence.has_db) {
-        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, next_dag_order, &.{ ".repo.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
+        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, next_dag_order, &.{ ".repo.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
         insert_idx += 1;
         next_dag_order += 1;
     }
@@ -242,14 +242,14 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
     // add middleware under src/, depth 1
     if (answers.middleware and !presence.has_middleware) {
         const mid_allowed: []const []const u8 = if (answers.lib and !presence.has_lib) (if (answers.db and !presence.has_db) &.{ "lib", "db", "services" } else &.{"lib"}) else &.{"services"};
-        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", 1, next_dag_order, &.{ ".middleware.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, mid_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", 1, next_dag_order, &.{ ".middleware.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, mid_allowed);
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add pages under src/, depth 1
     if (answers.pages and !presence.has_pages) {
-        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", 1, next_dag_order, &.{ ".page.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
+        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", 1, next_dag_order, &.{ ".page.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
         insert_idx += 1;
         next_dag_order += 1;
     }
@@ -257,7 +257,7 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
     // add commands under src/, depth 1
     if (answers.commands and !presence.has_commands) {
         const cmd_allowed: []const []const u8 = if (answers.db and !presence.has_db) &.{ "lib", "utils", "db", "services" } else &.{ "lib", "utils", "services" };
-        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", 1, next_dag_order, &.{ ".command.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, cmd_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", 1, next_dag_order, &.{ ".command.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, cmd_allowed);
         insert_idx += 1;
         next_dag_order += 1;
     }
@@ -265,7 +265,7 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
     // add tasks under src/, depth 1
     if (answers.tasks and !presence.has_tasks) {
         const tasks_allowed: []const []const u8 = if (answers.middleware and !presence.has_middleware) &.{ "lib", "db", "middleware", "services" } else &.{ "lib", "db", "services" };
-        new_surfaces[insert_idx] = createSurface(allocator, "tasks", "src/tasks", 1, next_dag_order, &.{ ".task.ts", ".config.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, tasks_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "tasks", "src/tasks", 1, next_dag_order, &.{ ".task.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, tasks_allowed);
         insert_idx += 1;
         next_dag_order += 1;
     }

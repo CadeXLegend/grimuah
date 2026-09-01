@@ -315,7 +315,7 @@ fn checkSingletonFolders(io: std.Io,
     }
 }
 
-/// join `[]const []const u8` into a comma-separated string, e.g. `.util.ts, .config.ts`
+/// join `[]const []const u8` into a comma-separated string, e.g. `.util.ts, .service.ts`
 /// caller owns the returned slice (allocator.free)
 fn formatStringSlice(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
     var result: std.ArrayList(u8) = .empty;

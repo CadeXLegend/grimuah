@@ -14,7 +14,7 @@
       "path": "src/db",
       "depth": 1,
       "dagOrder": 1,
-      "suffixes": [".repo.ts", ".config.ts"],
+      "suffixes": [".repo.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts", "schema.ts"],
       "allowedImports": ["lib"]
     },
@@ -23,7 +23,7 @@
       "path": "src/middleware",
       "depth": 1,
       "dagOrder": 2,
-      "suffixes": [".middleware.ts", ".config.ts"],
+      "suffixes": [".middleware.ts"],
       "innateMembers": [
         ".types.ts",
         ".config.ts",
@@ -37,7 +37,7 @@
       "path": "src/services",
       "depth": 1,
       "dagOrder": 3,
-      "suffixes": [".service.ts", ".config.ts"],
+      "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["lib", "db", "middleware"]
     }

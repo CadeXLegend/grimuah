@@ -5,7 +5,7 @@
       "path": "src/utils",
       "depth": 1,
       "dagOrder": 0,
-      "suffixes": [".util.ts", ".config.ts"],
+      "suffixes": [".util.ts"],
       "innateMembers": [
         ".types.ts",
         ".config.ts",
@@ -19,7 +19,7 @@
       "path": "src/services",
       "depth": 1,
       "dagOrder": 1,
-      "suffixes": [".service.ts", ".config.ts"],
+      "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["utils"]
     },
@@ -28,7 +28,7 @@
       "path": "src/components",
       "depth": 1,
       "dagOrder": 2,
-      "suffixes": [".component.ts", ".config.ts"],
+      "suffixes": [".component.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["utils", "services"]
     }

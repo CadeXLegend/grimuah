@@ -517,7 +517,7 @@ this is the edge table of the graph
   "path": "src/services",
   "depth": 1,
   "dagOrder": 1,
-  "suffixes": [".service.ts", ".config.ts"],
+  "suffixes": [".service.ts"],
   "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
   "allowedImports": ["utils"]
 }
@@ -543,7 +543,7 @@ grimuah generates this file into every scaffolded project, it is not part of thi
       "path": "src/utils",
       "depth": 1,
       "dagOrder": 0,
-      "suffixes": [".util.ts", ".config.ts"],
+      "suffixes": [".util.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
       "allowedImports": []
     },
@@ -552,7 +552,7 @@ grimuah generates this file into every scaffolded project, it is not part of thi
       "path": "src/services",
       "depth": 1,
       "dagOrder": 1,
-      "suffixes": [".service.ts", ".config.ts"],
+      "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["utils"]
     },
@@ -561,7 +561,7 @@ grimuah generates this file into every scaffolded project, it is not part of thi
       "path": "src/components",
       "depth": 1,
       "dagOrder": 2,
-      "suffixes": [".component.ts", ".config.ts"],
+      "suffixes": [".component.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["utils", "services"]
     }
@@ -705,7 +705,7 @@ suffixes come from a name heuristic:
 - `repositories` → `.repo.ts`
 - anything else → `.<singular>.ts`
 
-every surface also gets `.config.ts`
+every surface also gets `.config.ts` as an innate member
 
 **`remove <surface-name>`**
 

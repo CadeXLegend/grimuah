@@ -417,7 +417,7 @@ test "formatter emits biome-clean json" {
 
     var surfaces = try allocator.alloc(Surface, 2);
     surfaces[0] = try testSurface(allocator, "lib", "lib", 0, 0, &.{".ts"});
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{ ".service.ts", ".config.ts" });
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{ ".service.ts" });
     surfaces[1].innateMembers = &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" };
     surfaces[1].allowedImports = &.{ "lib", "db" };
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
@@ -442,7 +442,7 @@ test "formatter emits biome-clean json" {
         \\      "path": "src/services",
         \\      "depth": 1,
         \\      "dagOrder": 1,
-        \\      "suffixes": [".service.ts", ".config.ts"],
+        \\      "suffixes": [".service.ts"],
         \\      "innateMembers": [
         \\        ".types.ts",
         \\        ".config.ts",

@@ -14,7 +14,7 @@
       "path": "src/utils",
       "depth": 1,
       "dagOrder": 1,
-      "suffixes": [".util.ts", ".config.ts"],
+      "suffixes": [".util.ts"],
       "innateMembers": [
         ".types.ts",
         ".config.ts",
@@ -28,7 +28,7 @@
       "path": "src/services",
       "depth": 1,
       "dagOrder": 2,
-      "suffixes": [".service.ts", ".config.ts"],
+      "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
       "allowedImports": ["lib", "utils"]
     },
@@ -37,7 +37,7 @@
       "path": "src/commands",
       "depth": 1,
       "dagOrder": 3,
-      "suffixes": [".command.ts", ".config.ts"],
+      "suffixes": [".command.ts"],
       "innateMembers": [
         ".types.ts",
         ".config.ts",
