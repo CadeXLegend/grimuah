@@ -1,4 +1,4 @@
-# grimuah
+# grimuah 📖👩‍🍳💋🤌
 
 [![Zig](https://img.shields.io/badge/language-Zig-%23F7A41D)](https://ziglang.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6)](https://www.typescriptlang.org/)
@@ -8,10 +8,10 @@
 the grimoire for typescript architecture 🤌
 
 summon typescript projects with linter-enforced architecture and dag-driven scaffolding
-one ~260kb zig binary, zero runtime dependencies, and no second config file to argue with
 
-conventional folder layouts group by category, not by dependency
-buckets with hidden social contracts, every folder equally addressable, nothing stopping a component from reaching into a database repository
+one ~260kb zig binary, zero runtime dependencies
+
+projects usually have folders as glorified buckets with hidden social contracts, nothing stopping a component from reaching into the database layer or a service handling UI operations  
 
 grimuah treats each folder as a surface with a declared identity, an import firewall, and enforceable obligations
 the graph is declared in `architecture.config.json`, every import is checked against it, and the dag stays a dag
