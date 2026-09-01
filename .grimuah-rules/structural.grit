@@ -4,6 +4,6 @@ engine biome(1.0)
 // enforced by CLI pre-passes, not GritQL
 // folder-as-suffix naming, import firewall, centralized directory detection,
 // singleton warnings, innate member depth scoping
-// see: arch check
+// see: grimuah check
 
 `undefined` where {}
