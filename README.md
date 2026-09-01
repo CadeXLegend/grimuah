@@ -258,7 +258,7 @@ runtime safety and error handling discipline
 
 | Rule                                 | Why                                                                                                                                                                                        |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `throw` is banned                    | every fallible operation returns `OperationOutcome`, a discriminated union narrowed on `succeeded`, this makes error handling explicit at every call site                                   |
+| `throw` is banned                    | every fallible operation returns `Outcome`, a discriminated union narrowed on `succeeded`, this makes error handling explicit at every call site                                   |
 | Bare `catch {}`                      | an empty catch swallows every error, including ones the developer did not anticipate, there is no path to observability or recovery                                                        |
 | `catch { $_ }`                       | a discarded parameter does not make the silence acceptable, same structural problem as a bare catch, with the added misdirection of naming the ignored error                               |
 | Input validation at trust boundaries | untrusted input causes most runtime failures in practice, validating at the boundary stops malformed data from reaching deeper layers where the original context is lost                    |
@@ -279,7 +279,7 @@ the suffix tells you the role before you open the file
 
 **contractual obligation**: the file must follow the rules of its surface
 
-a service does not throw errors, it returns `OperationOutcome`
+a service does not throw errors, it returns `Outcome`
 
 a component does not import from deeper surfaces than its own
 
