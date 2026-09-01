@@ -19,7 +19,7 @@ nothing stops a component from reaching into the database layer, or a service fr
 
 grimuah gives every folder an identity, an import firewall, and enforceable obligations
 
-the import graph is declared in [architecture.config.json](examples/webapp/architecture.config.json)
+the import graph is declared in `architecture.config.json`
 
 `grimuah check` validates every import against this graph
 
@@ -194,7 +194,7 @@ a rule that blocks a violating import before it lands is worth a hundred paragra
 
 this generator encodes architectural rules as static analysis
 
-the import graph is declared in [architecture.config.json](examples/webapp/architecture.config.json)
+the import graph is declared in `architecture.config.json`
 
 file naming, suffix conventions, and surface membership are checked by CLI pre-passes
 
@@ -208,7 +208,7 @@ architectural rules are grouped into four layers
 
 each layer targets a distinct class of problem
 
-each layer can be toggled independently in [architecture.config.json](examples/webapp/architecture.config.json)
+each layer can be toggled independently in `architecture.config.json`
 
 a project can adopt the layers it needs without committing to all four at once
 
@@ -373,7 +373,7 @@ surfaces at the same dagOrder level do not see each other unless explicitly conf
 
 the graph is not documentation
 
-it is declared in [architecture.config.json](examples/webapp/architecture.config.json)
+it is declared in `architecture.config.json`
 
 `grimuah check` validates every import against it
 
@@ -531,7 +531,9 @@ every edge in the DAG is declared here, there is no implicit connectivity betwee
 
 ### the config file
 
-the full [architecture.config.json](examples/webapp/architecture.config.json) includes surfaces, layers, and an optional rootLib
+the full `architecture.config.json` includes surfaces, layers, and an optional rootLib
+
+grimuah generates this file into every scaffolded project, it is not part of this repository
 
 ```json
 {
