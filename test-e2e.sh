@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ARCH="${ARCH:-$SCRIPT_DIR/zig-out/bin/grimuah}"
+GRIMUAH="${GRIMUAH:-$SCRIPT_DIR/zig-out/bin/grimuah}"
 BIOME="${BIOME:-biome}"
 TMPDIR="$(mktemp -d /tmp/grimuah-e2e-XXXXXXXX)"
 P1="$TMPDIR/p1"
@@ -16,13 +16,13 @@ trap cleanup EXIT
 
 ok()     { PASS=$((PASS+1)); echo "  ok $*"; }
 fail()   { FAIL=$((FAIL+1)); echo "  FAIL $*"; }
-achk()   { cd "$P1" && "$ARCH" check 2>&1 || true; }
+achk()   { cd "$P1" && "$GRIMUAH" check 2>&1 || true; }
 dagok(){ jq -e '[.surfaces[].dagOrder] | sort == [range(length)]' "$1" >/dev/null; }
 
 "$BIOME" --version >/dev/null 2>&1 || { echo "biome not found"; exit 1; }
 
 # ── 1. init default ──
-"$ARCH" init "$P1" --preset default 2>/dev/null <<< ""
+"$GRIMUAH" init "$P1" --preset default 2>/dev/null <<< ""
 for f in architecture.config.json tsconfig.json package.json biome.json .gitignore; do
   test -f "$P1/$f" && ok "$f" || fail "missing $f"
 done
@@ -55,7 +55,7 @@ jq -e '.devDependencies.typescript' "$P1/package.json"  >/dev/null && ok "packag
 jq -e '.devDependencies["commit-and-tag-version"]' "$P1/package.json" >/dev/null && ok "package.json: commit-and-tag-version" || fail "package.json: catv missing"
 
 # ── 5. init bot ──
-"$ARCH" init "$TMPDIR/p2" --preset bot 2>/dev/null <<< "n"
+"$GRIMUAH" init "$TMPDIR/p2" --preset bot 2>/dev/null <<< "n"
 s=$(jq '.surfaces | length' "$TMPDIR/p2/architecture.config.json"); test "$s" -eq 8 && ok "bot: 8 surfaces" || fail "bot: expected 8, got $s"
 dagok "$TMPDIR/p2/architecture.config.json" && ok "bot: dagOrder 0-7" || fail "bot: dagOrder not sequential"
 jq -e '.rootLib.enabled' "$TMPDIR/p2/architecture.config.json" >/dev/null && ok "bot: rootLib enabled" || fail "bot: rootLib missing"
@@ -66,7 +66,7 @@ alld1=$(jq '[.surfaces[] | select(.name!="lib") | .depth] | map(. == 1) | all' "
 test "$alld1" = "true" && ok "bot: all other surfaces depth 1" || fail "bot: some surfaces not depth 1"
 
 # ── 6. init backend (middleware preset, tasks optional) ──
-"$ARCH" init "$TMPDIR/p3" --preset backend 2>/dev/null <<< ""
+"$GRIMUAH" init "$TMPDIR/p3" --preset backend 2>/dev/null <<< ""
 s=$(jq '.surfaces | length' "$TMPDIR/p3/architecture.config.json"); test "$s" -eq 4 && ok "backend: 4 surfaces (tasks not added)" || fail "backend: expected 4, got $s"
 jq -e '.surfaces[] | select(.name=="middleware")' "$TMPDIR/p3/architecture.config.json" >/dev/null && ok "backend: has middleware" || fail "backend: middleware missing"
 jq -e '.surfaces[] | select(.name=="tasks")' "$TMPDIR/p3/architecture.config.json" >/dev/null && fail "backend: tasks should not be present" || ok "backend: tasks not in preset"
@@ -74,7 +74,7 @@ jq -e '.rootLib.enabled' "$TMPDIR/p3/architecture.config.json" >/dev/null && ok 
 dagok "$TMPDIR/p3/architecture.config.json" && ok "backend: dagOrder sequential" || fail "backend: dagOrder not sequential"
 
 # ── 7. init backend with tasks answered yes ──
-printf 'n\nn\ny\n' | "$ARCH" init "$TMPDIR/p3-tasks" --preset backend 2>/dev/null
+printf 'n\nn\ny\n' | "$GRIMUAH" init "$TMPDIR/p3-tasks" --preset backend 2>/dev/null
 s=$(jq '.surfaces | length' "$TMPDIR/p3-tasks/architecture.config.json"); test "$s" -eq 5 && ok "backend+tasks: 5 surfaces" || fail "backend+tasks: expected 5, got $s"
 jq -e '.surfaces[] | select(.name=="tasks")' "$TMPDIR/p3-tasks/architecture.config.json" >/dev/null && ok "backend+tasks: tasks added" || fail "backend+tasks: tasks missing"
 dagok "$TMPDIR/p3-tasks/architecture.config.json" && ok "backend+tasks: dagOrder sequential" || fail "backend+tasks: dagOrder not sequential"
@@ -136,37 +136,37 @@ achk | grep -q "importing from 'components'" && ok "grimuah check: catches impor
 rm "$P1/src/services/import-test.service.ts"
 
 # ── 17. add ──
-cd "$P1" && "$ARCH" add validators 2>/dev/null || true
+cd "$P1" && "$GRIMUAH" add validators 2>/dev/null || true
 test -d "$P1/src/validators" && ok "add: creates dir" || fail "add: no dir"
 test -f "$P1/src/validators/example.validator.ts" && ok "add: example.validator.ts" || fail "add: no example"
 jq -e '.surfaces[] | select(.name=="validators")' "$P1/architecture.config.json" >/dev/null && ok "add: surface in config" || fail "add: missing from config"
 
 # ── 18. add suffix heuristics ──
-cd "$P1" && "$ARCH" add guards 2>/dev/null || true
+cd "$P1" && "$GRIMUAH" add guards 2>/dev/null || true
 test "$(jq -r '.surfaces[] | select(.name=="guards") | .suffixes[0]' "$P1/architecture.config.json")" = ".guard.ts" && ok "add guards: .guard.ts" || fail "add guards"
-cd "$P1" && "$ARCH" add states 2>/dev/null || true
+cd "$P1" && "$GRIMUAH" add states 2>/dev/null || true
 test "$(jq -r '.surfaces[] | select(.name=="states") | .suffixes[0]' "$P1/architecture.config.json")" = ".state.ts" && ok "add states: .state.ts" || fail "add states"
-cd "$P1" && "$ARCH" add repositories 2>/dev/null || true
+cd "$P1" && "$GRIMUAH" add repositories 2>/dev/null || true
 test "$(jq -r '.surfaces[] | select(.name=="repositories") | .suffixes[0]' "$P1/architecture.config.json")" = ".repo.ts" && ok "add repos: .repo.ts" || fail "add repos"
 
 # ── 19. add rejects duplicate ──
-cd "$P1" && "$ARCH" add validators 2>&1 | grep -q "already exists" && ok "add: rejects duplicate" || fail "add: duplicate allowed"
+cd "$P1" && "$GRIMUAH" add validators 2>&1 | grep -q "already exists" && ok "add: rejects duplicate" || fail "add: duplicate allowed"
 
 # ── 20. remove ──
-cd "$P1" && "$ARCH" remove validators 2>&1 | grep -q "removed surface" && ok "remove: succeeded" || fail "remove: failed"
+cd "$P1" && "$GRIMUAH" remove validators 2>&1 | grep -q "removed surface" && ok "remove: succeeded" || fail "remove: failed"
 test ! -d "$P1/src/validators" && ok "remove: dir deleted" || fail "remove: dir left"
 jq -e '.surfaces[] | select(.name=="validators")' "$P1/architecture.config.json" >/dev/null 2>&1 && fail "remove: surface left in config" || ok "remove: stripped from config"
 
 # ── 21. remove non-existent ──
-cd "$P1" && "$ARCH" remove nonexistent 2>&1 | grep -q "not found" && ok "remove: errors on missing" || fail "remove: no error"
+cd "$P1" && "$GRIMUAH" remove nonexistent 2>&1 | grep -q "not found" && ok "remove: errors on missing" || fail "remove: no error"
 
 # ── 22. upgrade "already up to date" ──
-cd "$P1" && "$ARCH" upgrade 2>&1 | grep -q "already up to date" && ok "upgrade: already up to date" || fail "upgrade: unexpected"
+cd "$P1" && "$GRIMUAH" upgrade 2>&1 | grep -q "already up to date" && ok "upgrade: already up to date" || fail "upgrade: unexpected"
 
 # ── 23. upgrade preserves user-added surface ──
-cd "$P1" && "$ARCH" add custom 2>/dev/null || true
+cd "$P1" && "$GRIMUAH" add custom 2>/dev/null || true
 jq -e '.surfaces[] | select(.name=="custom")' "$P1/architecture.config.json" >/dev/null && ok "upgrade: custom surface added via add" || fail "upgrade: custom surface not added"
-cd "$P1" && "$ARCH" upgrade 2>&1 | grep -q "already up to date" && ok "upgrade: preserves user surface" || fail "upgrade: user surface issue"
+cd "$P1" && "$GRIMUAH" upgrade 2>&1 | grep -q "already up to date" && ok "upgrade: preserves user surface" || fail "upgrade: user surface issue"
 jq -e '.surfaces[] | select(.name=="custom")' "$P1/architecture.config.json" >/dev/null && ok "  custom surface still in config" || fail "  custom surface removed"
 
 # ── 24. disable layers ──
