@@ -6,10 +6,10 @@
     "indentWidth": 2
   },
   "plugins": [
-    ".arch-rules/cosmetic.grit",
-    ".arch-rules/structural.grit",
-    ".arch-rules/resilience.grit",
-    ".arch-rules/behavioural.grit"
+    ".grimuah-rules/cosmetic.grit",
+    ".grimuah-rules/structural.grit",
+    ".grimuah-rules/resilience.grit",
+    ".grimuah-rules/behavioural.grit"
   ],
   "linter": {
     "enabled": true
