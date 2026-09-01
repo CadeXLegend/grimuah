@@ -31,6 +31,20 @@ the rest is scaffolding, lint rules, and a chef's kiss
 
 ---
 
+## table of contents
+
+- [quickstart](#quickstart)
+- [core principles](#core-principles)
+- [the four rule layers](#the-four-rule-layers)
+- [identity](#identity)
+- [surfaces](#surfaces)
+- [innate members](#innate-members)
+- [the dag in practice](#the-dag-in-practice)
+- [the enforcement tiers](#the-enforcement-tiers)
+- [presets and commands](#presets-and-commands)
+
+---
+
 ## quickstart
 
 ### install
@@ -97,20 +111,6 @@ grimuah check
 `grimuah check` runs biome lint itself, so it replaces the `pnpm lint` line
 
 other commands are documented in [presets and commands](#presets-and-commands)
-
----
-
-## table of contents
-
-- [quickstart](#quickstart)
-- [core principles](#core-principles)
-- [the four rule layers](#the-four-rule-layers)
-- [identity](#identity)
-- [surfaces](#surfaces)
-- [innate members](#innate-members)
-- [the dag in practice](#the-dag-in-practice)
-- [the enforcement tiers](#the-enforcement-tiers)
-- [presets and commands](#presets-and-commands)
 
 ---
 
