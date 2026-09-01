@@ -1,4 +1,4 @@
-# zig-aware pre-commit for the archi-cade generator repo itself
+# zig-aware pre-commit for the grimuah generator repo itself
 # this repo is zig, not typescript, so the pnpm gates from the scaffold template
 # do not apply here; the real gates are the zig build, the unit tests, and the
 # e2e suite that validates the generated projects end to end

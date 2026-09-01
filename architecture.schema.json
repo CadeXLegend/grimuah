@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arch.dev/schemas/architecture-config.json",
+  "$id": "https://github.com/CadeXLegend/grimuah/schemas/architecture-config.json",
   "title": "ArchitectureConfig",
-  "description": "declarative architecture configuration for archi-cade, defines surfaces, edge rules, depth ordering, dag ordering, and rule layer toggles",
+  "description": "declarative architecture configuration for grimuah, defines surfaces, edge rules, depth ordering, dag ordering, and rule layer toggles",
   "type": "object",
   "required": ["surfaces", "layers"],
   "additionalProperties": false,

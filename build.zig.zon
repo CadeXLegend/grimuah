@@ -1,7 +1,7 @@
 .{
-    .name = .archicade,
+    .name = .grimuah,
     .version = "0.1.0",
-    .fingerprint = 0xd5701b59aa3fd6f4,
+    .fingerprint = 0xa54c220a9552a00a,
     .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",

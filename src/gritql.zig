@@ -18,7 +18,7 @@ pub const RuleLayer = enum {
     }
 };
 
-/// generate all enabled .grit rule files into .arch-rules/
+/// generate all enabled .grit rule files into .grimuah-rules/
 pub fn generateRules(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -36,7 +36,7 @@ pub fn generateRules(
         defer allocator.free(content);
 
         var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "{s}/.arch-rules/{s}", .{ project_root, layer.fileName() });
+        const path = try std.fmt.bufPrint(&path_buf, "{s}/.grimuah-rules/{s}", .{ project_root, layer.fileName() });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = content });
     }
 }
@@ -78,7 +78,7 @@ fn appendStructural(allocator: std.mem.Allocator, buf: *std.ArrayList(u8)) !void
         \\// enforced by CLI pre-passes, not GritQL
         \\// folder-as-suffix naming, import firewall, centralized directory detection,
         \\// singleton warnings, innate member depth scoping
-        \\// see: arch check
+        \\// see: grimuah check
         \\
         \\`undefined` where {}
         \\

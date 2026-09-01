@@ -6,7 +6,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
     // load config from the current directory
     const parsed = config.load(io, allocator, "architecture.config.json") catch |err| {
         std.debug.print("error: could not load architecture.config.json: {s}\n", .{@errorName(err)});
-        std.debug.print("run 'arch init' first to scaffold a project.\n", .{});
+        std.debug.print("run 'grimuah init' first to scaffold a project.\n", .{});
         return;
     };
     defer parsed.deinit();
@@ -59,9 +59,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
     if (finding_count > 0) exit_code = 1;
 
     if (exit_code == 0) {
-        std.debug.print("arch check: clean\n", .{});
+        std.debug.print("grimuah check: clean\n", .{});
     } else {
-        std.debug.print("arch check: {d} violation(s) found\n", .{finding_count});
+        std.debug.print("grimuah check: {d} violation(s) found\n", .{finding_count});
     }
 
     if (exit_code != 0) std.process.exit(exit_code);

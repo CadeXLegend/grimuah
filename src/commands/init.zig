@@ -20,10 +20,10 @@ const biome_config_template: []const u8 =
     \\    "indentWidth": 2
     \\  },
     \\  "plugins": [
-    \\    ".arch-rules/cosmetic.grit",
-    \\    ".arch-rules/structural.grit",
-    \\    ".arch-rules/resilience.grit",
-    \\    ".arch-rules/behavioural.grit"
+    \\    ".grimuah-rules/cosmetic.grit",
+    \\    ".grimuah-rules/structural.grit",
+    \\    ".grimuah-rules/resilience.grit",
+    \\    ".grimuah-rules/behavioural.grit"
     \\  ],
     \\  "linter": {
     \\    "enabled": true
@@ -370,9 +370,9 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
         try templates.writeFile(io, outcome_path, embedded_outcome);
     }
 
-    // create .arch-rules/ directory
+    // create .grimuah-rules/ directory
     var rules_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const rules_dir = try std.fmt.bufPrint(&rules_dir_buf, "{s}/.arch-rules", .{name});
+    const rules_dir = try std.fmt.bufPrint(&rules_dir_buf, "{s}/.grimuah-rules", .{name});
     try std.Io.Dir.cwd().createDirPath(io, rules_dir);
 }
 

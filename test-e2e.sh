@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# e2e: end-to-end test for arch (architecture generator)
+# e2e: end-to-end test for grimuah (architecture generator)
 # Auto-cleanup via trap
 # 60+ checks across init/check/add/remove/upgrade/biome
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ARCH="${ARCH:-$SCRIPT_DIR/zig-out/bin/archicade}"
+ARCH="${ARCH:-$SCRIPT_DIR/zig-out/bin/grimuah}"
 BIOME="${BIOME:-biome}"
-TMPDIR="$(mktemp -d /tmp/arch-e2e-XXXXXXXX)"
+TMPDIR="$(mktemp -d /tmp/grimuah-e2e-XXXXXXXX)"
 P1="$TMPDIR/p1"
 PASS=0; FAIL=0
 
@@ -100,9 +100,9 @@ test -f "$P1/src/components/example.component.ts"&& ok "example.component.ts"   
 test "$(jq '.plugins | length' "$P1/biome.json")" = "4" && ok "biome.json: 4 plugins" || fail "biome.json: expected 4"
 
 # ── 10. .grit files ──
-test "$(find "$P1/.arch-rules" -name '*.grit' | wc -l)" = "4" && ok "4 .grit files" || fail "expected 4"
+test "$(find "$P1/.grimuah-rules" -name '*.grit' | wc -l)" = "4" && ok "4 .grit files" || fail "expected 4"
 for L in cosmetic structural resilience behavioural; do
-  f="$P1/.arch-rules/$L.grit"
+  f="$P1/.grimuah-rules/$L.grit"
   test -f "$f" && ok "  $L.grit" || { fail "  $L.grit missing"; continue; }
   test "$(head -1 "$f")" = "engine biome(1.0)" && ok "  $L.grit engine line" || fail "  $L.grit bad engine"
 done
@@ -113,26 +113,26 @@ done
 # ── 12. biome format check ──
 "$BIOME" format "$P1" 2>&1 | grep -q "Formatter would have printed" && fail "biome format: would change" || ok "biome format: already clean"
 
-# ── 13. arch check clean ──
+# ── 13. grimuah check clean ──
 echo "// extra" > "$P1/src/utils/second.util.ts"
 echo "// extra" > "$P1/src/services/second.service.ts"
 echo "// extra" > "$P1/src/components/second.component.ts"
-achk | grep -q "arch check: clean" && ok "arch check: clean on multi-file" || fail "arch check not clean"
+achk | grep -q "grimuah check: clean" && ok "grimuah check: clean on multi-file" || fail "grimuah check not clean"
 
-# ── 14. arch check catches wrong suffix ──
+# ── 14. grimuah check catches wrong suffix ──
 echo "junk" > "$P1/src/services/wrong.txt"
-achk | grep -qE "wrong\.txt.*does not match" && ok "arch check: catches wrong suffix" || fail "arch check: missed wrong suffix"
+achk | grep -qE "wrong\.txt.*does not match" && ok "grimuah check: catches wrong suffix" || fail "grimuah check: missed wrong suffix"
 rm "$P1/src/services/wrong.txt"
 
-# ── 15. arch check catches centralized dirs ──
+# ── 15. grimuah check catches centralized dirs ──
 mkdir -p "$P1/src/config"
 echo "export {}" > "$P1/src/config/app.config.ts"
-achk | grep -q "centralized.*config/" && ok "arch check: catches centralized config/" || fail "arch check: missed centralized dir"
+achk | grep -q "centralized.*config/" && ok "grimuah check: catches centralized config/" || fail "grimuah check: missed centralized dir"
 rm -rf "$P1/src/config"
 
-# ── 16. arch check catches import firewall ──
+# ── 16. grimuah check catches import firewall ──
 echo "import { x } from '../components';" > "$P1/src/services/import-test.service.ts"
-achk | grep -q "importing from 'components'" && ok "arch check: catches import firewall" || fail "arch check: missed import violation"
+achk | grep -q "importing from 'components'" && ok "grimuah check: catches import firewall" || fail "grimuah check: missed import violation"
 rm "$P1/src/services/import-test.service.ts"
 
 # ── 17. add ──
@@ -173,7 +173,7 @@ jq -e '.surfaces[] | select(.name=="custom")' "$P1/architecture.config.json" >/d
 cd "$P1"
 jq '.layers.cosmetic = false | .layers.structural = false | .layers.resilience = false | .layers.behavioural = false' architecture.config.json > tmp.json
 mv tmp.json architecture.config.json
-achk | grep -q "arch check: clean" && ok "all layers disabled: clean" || fail "all layers disabled: still flagged"
+achk | grep -q "grimuah check: clean" && ok "all layers disabled: clean" || fail "all layers disabled: still flagged"
 jq '.layers.cosmetic = true | .layers.structural = true | .layers.resilience = true | .layers.behavioural = true' architecture.config.json > tmp.json
 mv tmp.json architecture.config.json
 
@@ -181,7 +181,7 @@ mv tmp.json architecture.config.json
 for L in cosmetic structural resilience behavioural; do
   dir="$TMPDIR/biome-$L"
   mkdir -p "$dir"
-  cp "$P1/.arch-rules/$L.grit" "$dir/"
+  cp "$P1/.grimuah-rules/$L.grit" "$dir/"
   cat > "$dir/biome.json" <<-EOJ
 	{ "\$schema": "https://biomejs.dev/schemas/2.5.3/schema.json", "plugins": ["$L.grit"], "linter": { "enabled": true } }
 	EOJ

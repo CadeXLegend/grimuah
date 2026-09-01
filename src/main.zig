@@ -18,7 +18,7 @@ pub fn main(init: std.process.Init) !void {
 
     const command = args[1];
 
-    if (std.mem.eql(u8, command, "init")) {
+    if (std.mem.eql(u8, command, "init") or std.mem.eql(u8, command, "summon")) {
         const project_name = if (args.len > 2 and !std.mem.startsWith(u8, args[2], "--")) args[2] else null;
         const preset_name = parseFlag(args, "--preset") orelse parseFlag(args, "-p");
 
@@ -27,13 +27,13 @@ pub fn main(init: std.process.Init) !void {
         try checkCmd.run(allocator, io);
     } else if (std.mem.eql(u8, command, "add")) {
         const surface_name = if (args.len > 2) args[2] else null orelse {
-            std.debug.print("usage: arch add <surface>\n", .{});
+            std.debug.print("usage: grimuah add <surface>\n", .{});
             return;
         };
         try addCmd.run(allocator, io, surface_name);
     } else if (std.mem.eql(u8, command, "remove")) {
         const surface_name = if (args.len > 2) args[2] else null orelse {
-            std.debug.print("usage: arch remove <surface>\n", .{});
+            std.debug.print("usage: grimuah remove <surface>\n", .{});
             return;
         };
         try removeCmd.run(allocator, io, surface_name);
@@ -61,14 +61,14 @@ fn parseFlag(args: []const [:0]const u8, flag: []const u8) ?[]const u8 {
 
 fn printUsage() void {
     std.debug.print(
-        \\archicade :  scaffold enforceably-structured TypeScript projects
+        \\grimuah :  scaffold enforceably-structured TypeScript projects
         \\
         \\usage:
-        \\  archicade init [name] [--preset <name>]
-        \\  archicade check
-        \\  archicade add <surface>
-        \\  archicade remove <surface>
-        \\  archicade upgrade
+        \\  grimuah init [name] [--preset <name>]   (summon is an alias)
+        \\  grimuah check
+        \\  grimuah add <surface>
+        \\  grimuah remove <surface>
+        \\  grimuah upgrade
         \\
         \\presets: default, webapp, cli, backend, bot
         \\
