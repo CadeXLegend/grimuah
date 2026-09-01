@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.2](https://github.com/CadeXLegend/grimuah/compare/v0.1.1...v0.1.2) (2026-09-01)
+
+
+### Bug Fixes
+
+* update stale 'arch check' reference in structural.grit comment ([4eac8e0](https://github.com/CadeXLegend/grimuah/commit/4eac8e0543a899f919b9c8bb718d2f07537db073))
+
 ## [0.1.1](https://github.com/CadeXLegend/grimuah/compare/v0.1.0...v0.1.1) (2026-09-01)
 
 
