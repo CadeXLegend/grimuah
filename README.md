@@ -2,10 +2,10 @@
 
 [![Zig](https://img.shields.io/badge/language-Zig-%23F7A41D)](https://ziglang.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6)](https://www.typescriptlang.org/)
-[![Biome](https://img.shields.io/badge/linter-Biome-60A5FA)](https://biomejs.dev/)
+[![Biome](https://img.shields.io/badge/linter-Biome-8f36c9)](https://biomejs.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/CadeXLegend/grimuah/build.yml)](https://github.com/CadeXLegend/grimuah/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah)](https://github.com/CadeXLegend/grimuah/releases)
+[![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah?color=blue)](https://github.com/CadeXLegend/grimuah/releases)
 
 the grimoire for typescript architecture 🤌
 
