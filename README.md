@@ -15,7 +15,7 @@ one ~260kb zig binary, zero runtime dependencies
 
 most projects treat folders as glorified buckets with hidden social contracts
 
-nothing stops a component from reaching into the database layer, or a service from handling UI operations
+nothing stops a component from reaching into the database layer, or a service from handling presentation logic
 
 grimuah gives every folder an identity, an import firewall, and enforceable obligations
 
