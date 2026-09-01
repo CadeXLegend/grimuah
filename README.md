@@ -14,6 +14,7 @@ one ~260kb zig binary, zero runtime dependencies
 projects usually have folders as glorified buckets with hidden social contracts, nothing stopping a component from reaching into the database layer or a service handling UI operations  
 
 grimuah treats each folder as a surface with a declared identity, an import firewall, and enforceable obligations
+
 the graph is declared in `architecture.config.json`, every import is checked against it, and the dag stays a dag
 
 the rest is scaffolding, lint rules, and a chef's kiss
