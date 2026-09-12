@@ -134,6 +134,7 @@ pub const silent_catch = "catch block must handle or log the error, not silently
 /// the shipped messages predate
 pub const max_nesting_depth = "This block is nested {d} levels deep. Return early or extract a helper.";
 pub const max_parameters = "This function takes {d} parameters. Group them into a named readonly type, or split the function.";
+pub const lowercase_copy = "This copy starts lowercase. Capitalise the first letter of the sentence.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -243,6 +244,13 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = complexity.checkMaxParameters,
+    },
+    .{
+        .layer = .cosmetic,
+        .severity = .warn,
+        .message = lowercase_copy,
+        .oracle = false,
+        .match = cosmetic.checkLowercaseCopy,
     },
     .{
         .layer = .hygiene,
