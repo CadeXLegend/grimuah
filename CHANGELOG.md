@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `max-function-lines`: a function body may not run past 80 lines
 * add `no-nested-ternary`: a conditional expression may not contain another one
 * add `max-file-lines`: a module may not run past 500 lines, and a `.d.ts` file is out
+* add `no-await-in-loop`: an `await` in a loop body serialises its iterations
 
 ### Bug Fixes
 

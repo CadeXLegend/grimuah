@@ -137,6 +137,34 @@ pub const Kind = enum {
             else => false,
         };
     }
+
+    /// whether a node is one of the statements the front-end produces in
+    /// statement position. it is what tells an `if`'s condition from the branch
+    /// that follows it, and a loop's condition from its body
+    pub fn isStatement(self: Kind) bool {
+        return switch (self) {
+            .block,
+            .if_stmt,
+            .for_stmt,
+            .while_stmt,
+            .switch_stmt,
+            .try_stmt,
+            .return_stmt,
+            .throw_stmt,
+            .break_stmt,
+            .continue_stmt,
+            .expression_stmt,
+            .variable_decl,
+            .function_decl,
+            .class_decl,
+            .type_decl,
+            .import_decl,
+            .export_decl,
+            .case_clause,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const Node = struct {

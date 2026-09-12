@@ -88,7 +88,7 @@ const Nesting = struct {
 
         var child = self.module.firstChildOf(index);
         while (child) |current| : (child = self.module.nextSiblingOf(current)) {
-            if (branch_count == 0 and !isStatement(self.module.kindOf(current))) {
+            if (branch_count == 0 and !self.module.kindOf(current).isStatement()) {
                 try self.visit(current, layer_depth, false, false);
                 continue;
             }
@@ -129,33 +129,6 @@ fn ownsBody(kind: ir.Kind) bool {
     if (isContainer(kind)) return true;
     return switch (kind) {
         .catch_clause, .case_clause => true,
-        else => false,
-    };
-}
-
-/// whether a node is one of the statements the parser produces in statement
-/// position. it tells an `if`'s condition from the branch that follows it
-fn isStatement(kind: ir.Kind) bool {
-    return switch (kind) {
-        .block,
-        .if_stmt,
-        .for_stmt,
-        .while_stmt,
-        .switch_stmt,
-        .try_stmt,
-        .return_stmt,
-        .throw_stmt,
-        .break_stmt,
-        .continue_stmt,
-        .expression_stmt,
-        .variable_decl,
-        .function_decl,
-        .class_decl,
-        .type_decl,
-        .import_decl,
-        .export_decl,
-        .case_clause,
-        => true,
         else => false,
     };
 }

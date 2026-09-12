@@ -139,6 +139,7 @@ pub const boolean_flag_argument = "This call passes a bare boolean literal. Name
 pub const max_function_lines = "This function body is {d} lines long. Extract each distinct job into a named function.";
 pub const nested_ternary = "This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup.";
 pub const max_file_lines = "This file is {d} lines long. Split it along the responsibilities its sections already show.";
+pub const await_in_loop = "This loop awaits inside its body, so every iteration runs in sequence. Map the items to promises and await Promise.all once.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -286,6 +287,14 @@ pub const all = [_]Rule{
         .message = max_file_lines,
         .oracle = false,
         .match = complexity.checkMaxFileLines,
+    },
+    .{
+        .layer = .behavioural,
+        .severity = .warn,
+        .message = await_in_loop,
+        .syntax = .ir,
+        .oracle = false,
+        .match = behavioural.checkAwaitInLoop,
     },
     .{
         .layer = .hygiene,
