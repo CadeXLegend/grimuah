@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file. See [commit
 ### Features
 
 * enforce every rule in-process and freeze the findings biome validated in `tests/oracle/`, so the corpus check runs without biome
+* add `any-type`: `any` used as a type is an error, wherever it stands: `: any`, `any[]`, `Array<any>` and a return annotation. `o.any` and `{ any: 1 }` are names rather than types, and the `as any` cast keeps its own message
 * add `max-nesting-depth-three`: a statement container may not nest more than three layers deep inside one function, method or class body
 * add `max-parameters`: a function may not declare more than four parameters, counted from the signature so a destructured parameter stays one slot
 * add `require-capitalised-user-facing-copy`: user-facing copy in a `.config.ts` file must start with a capital letter

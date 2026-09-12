@@ -123,6 +123,7 @@ pub const switch_stmt = "do not use switch; use a dispatch table (Record/Map) in
 pub const imperative_for = "do not use imperative for loops; use map, filter, reduce, or for..of instead";
 pub const double_equals = "use === instead of == to avoid type coercion bugs";
 pub const as_any = "'as any' bypasses type safety entirely; use a proper type instead";
+pub const any_type = "This `any` type bypasses type safety. Write the type you mean instead.";
 pub const chained_cast = "chained 'as' casts bypass type safety; use a single cast only";
 pub const reexport = "do not proxy re-export; every export must originate from the file that defines it";
 pub const as_const = "use enum instead of const + as const; enum gives you both value and type in one declaration";
@@ -203,6 +204,13 @@ pub const all = [_]Rule{
         .severity = .err,
         .message = as_any,
         .match = resilience.checkAsAny,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .err,
+        .message = any_type,
+        .oracle = false,
+        .match = resilience.checkAnyType,
     },
     .{
         .layer = .resilience,

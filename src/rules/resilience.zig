@@ -142,6 +142,30 @@ pub fn checkAsConst(context: *const root.Context) !void {
     }
 }
 
+/// `any` used as a type anywhere, which is the `as any` cast's sibling: the
+/// annotation escape and the cast escape defeat the same check
+///
+/// a word is a type until it is a name, so three places are left alone: a member
+/// access (`o.any`), an object or type-literal key (`{ any: 1 }`), and the tail
+/// of the `as any` cast, which the ban beside this one reports. `any[]`,
+/// `Array<any>`, `Promise<any>` and a return annotation all hold the word in
+/// type position and are all reported, one finding per occurrence
+///
+/// this one stays on the token stream: the tree models a type only as an extent,
+/// so a property key and a property's type look the same to it. the plugin era
+/// reported `: any` and biome's recommended set owned it, and the native engine
+/// then reported nothing at all for an annotation, which is the gap this closes
+pub fn checkAnyType(context: *const root.Context) !void {
+    const tokens = context.tokens;
+    for (tokens, 0..) |token, i| {
+        if (!token.isWord("any")) continue;
+        if (tokens_mod.isMemberAccess(tokens, i)) continue;
+        if (i > 0 and tokens[i - 1].isWord("as")) continue;
+        if (i + 1 < tokens.len and tokens[i + 1].isPunct(":")) continue;
+        try context.report(token.line, .resilience, root.any_type, .err);
+    }
+}
+
 /// a call that passes a bare `true` or `false`, one finding per argument
 ///
 /// `true` and `false` parse as literals, and a call's children are its callee
@@ -667,5 +691,32 @@ test "a run of three branches over one subject is reported, and shorter or mixed
         "2: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
         "38: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
         "76: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
+    });
+}
+
+test "any in type position is reported, and a name spelled any is not" {
+    const source =
+        \\export function widen(values: any[]): Array<any> {
+        \\  return values;
+        \\}
+        \\
+        \\export const narrow = (value: unknown): any => value;
+        \\
+        \\export type Loose = { field: any };
+        \\
+        \\export const named = { any: "any" };
+        \\
+        \\export const read = named.any;
+        \\
+        \\export function keyed(): { any: string } {
+        \\  return { any: "value" };
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This `any` type bypasses type safety. Write the type you mean instead.",
+        "1: This `any` type bypasses type safety. Write the type you mean instead.",
+        "5: This `any` type bypasses type safety. Write the type you mean instead.",
+        "7: This `any` type bypasses type safety. Write the type you mean instead.",
     });
 }

@@ -41,3 +41,11 @@ too: `await-in-loop.ts`, `boolean-flag-argument.ts`,
 `nested-ternary.ts` and `unbounded-collection-read.ts`
 each one trips its rule and pins the shapes that rule must leave alone, and the
 two named `.config.ts` are the pair whose rules read the file's own name
+
+`asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
+pin the silence of `: any`: the plugin era warned on it, biome's recommended set
+owned it, and the native engine reported nothing at all for an annotation. the
+`any` type ban replaced that silence, so those files carry its rows as well as
+the rows that were already there, and `any-type.ts` pins the shapes it reads
+(`any[]`, `Array<any>`, a return annotation) against the names it must not
+(`named.any`, `{ any: "any" }`)

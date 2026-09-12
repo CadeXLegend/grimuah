@@ -1,7 +1,15 @@
 src/components:0: [structural] surface 'components' names the directory src/components/, which does not exist; create it or drop the surface from architecture.config.json
+src/probe/any-type.ts:5: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
+src/probe/any-type.ts:5: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
+src/probe/any-type.ts:9: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/asany-arr.ts:3: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asany-param.ts:1: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
+src/probe/asany-param.ts:1: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/asany.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asany-type.ts:1: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
+src/probe/asany-type.ts:2: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/asany-union.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asany-union.ts:1: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/asconst-local.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
 src/probe/asconst.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
 src/probe/await-in-loop.ts:27: [behavioural] This loop awaits inside its body, so every iteration runs in sequence. Map the items to promises and await Promise.all once.
