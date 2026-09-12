@@ -13,12 +13,12 @@ pub fn render(content: []const u8, vars: TemplateVars, allocator: std.mem.Alloca
     while (i < content.len) {
         if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
             const end = std.mem.indexOfPos(u8, content, i + 2, "}}") orelse {
-                try result.appendSlice(content[i..]);
+                try result.appendSlice(allocator, content[i..]);
                 break;
             };
             const key = std.mem.trim(u8, content[i + 2 .. end], " ");
             const value = getVar(key, vars);
-            try result.appendSlice(value);
+            try result.appendSlice(allocator, value);
             i = end + 2;
         } else {
             try result.append(allocator, content[i]);
@@ -105,7 +105,7 @@ fn isTextFile(name: []const u8) bool {
     const text_extensions = [_][]const u8{
         ".ts",   ".tsx",  ".js",   ".jsx",  ".json",
         ".md",   ".html", ".css",  ".yml",  ".yaml",
-        ".toml", ".grit", ".gitignore", ".env",
+        ".toml", ".grit", "gitignore", ".env",
     };
     for (text_extensions) |ext| {
         if (std.mem.endsWith(u8, name, ext)) return true;

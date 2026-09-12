@@ -15,6 +15,6 @@
     "enabled": true
   },
   "files": {
-    "includes": ["**", "!**/.pi", "!**/examples"]
+    "includes": ["**", "!**/.pi", "!**/examples", "!**/.auto"]
   }
 }

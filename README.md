@@ -593,21 +593,25 @@ architectural rules fall into two tiers that compose into a single check run
 
 not all rules can be enforced at the same level
 
-### tier one: GritQL plugins
+### tier one: grimuah's rule matcher
 
-AST-level rules run inside Biome as GritQL plugins
+AST-level rules run inside `grimuah check` itself
 
-these operate on the parsed syntax tree and detect patterns in the code itself
+these operate on the tokens of the source and detect patterns in the code itself
 
 the resilience and behavioural layers are enforced here
 
-switch statements, c-style for loops, let bindings, null literals, `as any` casts, chained casts, proxy re-exports, const-as-enum patterns, and loose equality are detected by matching their AST structure
+switch statements, c-style for loops, let bindings, null literals, `as any` casts, chained casts, proxy re-exports, const-as-enum patterns, and loose equality are matched structurally
 
-throw statements, bare catches, and silent discards are detected the same way
+throw statements, bare catches, and silent discards are matched the same way
 
-each layer produces a `.grit` file in `.grimuah-rules/` referenced from `biome.json`
+the rules also ship as `.grimuah-rules/*.grit` files referenced from `biome.json`, so a project whose biome config has been customised keeps them enforced by Biome's plugin engine instead
 
-the plugins ship with every scaffolded project and run as part of `biome lint`
+when `biome.json` still lists exactly the scaffolded layout, grimuah skips Biome's plugin engine entirely and enforces the rules itself, which is the fast path
+
+three rules are enforced by grimuah only: em-dashes, `let` bindings and `switch` statements
+
+Biome 2.5.11's GritQL subset cannot compile those patterns and discards them without reporting anything, so no scaffolded project has ever had them enforced by Biome
 
 ### tier two: CLI pre-passes
 
@@ -643,7 +647,7 @@ each tier enforces the rule layers that are enabled in `architecture.config.json
 
 if structural is disabled, the pre-pass skips the import firewall and singleton checks
 
-if resilience is disabled, Biome skips the `.grit` file for that layer
+if resilience is disabled, the matcher skips the resilience rules
 
 ---
 

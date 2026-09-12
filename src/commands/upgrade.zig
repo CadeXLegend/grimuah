@@ -144,8 +144,18 @@ fn rewriteConfig(io: std.Io, allocator: std.mem.Allocator, cfg: *const config.Co
     var json_buf: std.ArrayList(u8) = .empty;
     defer json_buf.deinit(allocator);
 
-    // write user's surfaces (preserving any custom surfaces not in preset)
-    try json_buf.appendSlice(allocator, "{\n  \"surfaces\": [\n");
+    // write the user's source roots first, as the config formatter does, then
+    // their surfaces (preserving any custom surfaces not in the preset)
+    try json_buf.appendSlice(allocator, "{");
+    if (cfg.sourceRoots.len > 0) {
+        try json_buf.appendSlice(allocator, "\n  \"sourceRoots\": [");
+        for (cfg.sourceRoots, 0..) |root, root_index| {
+            if (root_index > 0) try json_buf.appendSlice(allocator, ", ");
+            try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{root}));
+        }
+        try json_buf.appendSlice(allocator, "],");
+    }
+    try json_buf.appendSlice(allocator, "\n  \"surfaces\": [\n");
     for (cfg.surfaces, 0..) |surface, i| {
         if (i > 0) try json_buf.appendSlice(allocator, ",\n");
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(

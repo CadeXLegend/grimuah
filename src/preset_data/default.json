@@ -1,4 +1,5 @@
 {
+  "sourceRoots": ["src"],
   "surfaces": [
     {
       "name": "utils",

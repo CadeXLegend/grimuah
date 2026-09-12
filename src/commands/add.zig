@@ -3,7 +3,7 @@ const config = @import("../config.zig");
 const templates = @import("../templates.zig");
 const gritql = @import("../gritql.zig");
 
-pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !void {
+pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8, requested_path: ?[]const u8) !void {
     var parsed = config.load(io, allocator, "architecture.config.json") catch |err| {
         std.debug.print("error: could not load architecture.config.json: {s}\n", .{@errorName(err)});
         return;
@@ -22,8 +22,20 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
     // determine dagOrder (deepest + 1)
     const new_dag_order: u32 = findDeepestDagOrder(&cfg) + 1;
 
-    // depth is always 1 for src/ surfaces
-    const new_depth: u32 = 1;
+    // the surface path is explicit. `src/<name>` is the convention for the src/
+    // tree, but a standalone program at the project root (a bot entry point, a
+    // CLI) is a surface too, and nothing in the model requires src/
+    // a trailing slash is trimmed because shell tab-completion adds one, and
+    // "gateway/" would not match "gateway/x.ts" on a segment boundary
+    const surface_path = if (requested_path) |explicit_path|
+        try allocator.dupe(u8, std.mem.trimEnd(u8, explicit_path, "/"))
+    else
+        try std.fmt.allocPrint(allocator, "src/{s}", .{surface_name});
+    defer allocator.free(surface_path);
+
+    // depth is nesting below the project root, matching the presets:
+    // "lib" is 0, "src/db" is 1
+    const new_depth: u32 = @intCast(std.mem.count(u8, surface_path, "/"));
 
     // collect allowedImports: surfaces with lower dagOrder
     var allowed: std.ArrayList([]const u8) = .empty;
@@ -41,15 +53,13 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
     const innateMembers = [_][]const u8{ ".types.ts", ".config.ts", ".spec.ts" };
 
     // create the surface directory
-    const surface_path = try std.fmt.allocPrint(allocator, "src/{s}", .{surface_name});
-    defer allocator.free(surface_path);
     try std.Io.Dir.cwd().createDirPath(io, surface_path);
 
     // create example file
     const example_name = try std.fmt.allocPrint(allocator, "example{s}", .{suffixes[0]});
     defer allocator.free(example_name);
     var example_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const example_path = try std.fmt.bufPrint(&example_path_buf, "src/{s}/{s}", .{ surface_name, example_name });
+    const example_path = try std.fmt.bufPrint(&example_path_buf, "{s}/{s}", .{ surface_path, example_name });
     try templates.writeFile(io, example_path, "// TODO: implement\n");
 
     // regenerate architecture.config.json with new surface
@@ -58,7 +68,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
     // regenerate GritQL rules
     try gritql.generateRules(io, allocator, ".", &cfg);
 
-    std.debug.print("added surface '{s}' at dagOrder {d}\n", .{ surface_name, new_dag_order });
+    std.debug.print("added surface '{s}' at {s} (dagOrder {d})\n", .{ surface_name, surface_path, new_dag_order });
 }
 
 fn findDeepestDagOrder(cfg: *const config.Config) u32 {
@@ -102,8 +112,19 @@ fn rewriteConfig(
     var json_buf: std.ArrayList(u8) = .empty;
     defer json_buf.deinit(allocator);
 
-    // write opening
-    try json_buf.appendSlice(allocator, "{\n  \"surfaces\": [\n");
+    // write opening. a declared source root is written first, matching the
+    // order the config formatter uses, and is omitted when the project derives
+    // it from the surfaces so an older config round-trips unchanged
+    try json_buf.appendSlice(allocator, "{");
+    if (cfg.sourceRoots.len > 0) {
+        try json_buf.appendSlice(allocator, "\n  \"sourceRoots\": [");
+        for (cfg.sourceRoots, 0..) |root, root_index| {
+            if (root_index > 0) try json_buf.appendSlice(allocator, ", ");
+            try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{root}));
+        }
+        try json_buf.appendSlice(allocator, "],");
+    }
+    try json_buf.appendSlice(allocator, "\n  \"surfaces\": [\n");
 
     // write existing surfaces
     for (cfg.surfaces, 0..) |surface, i| {

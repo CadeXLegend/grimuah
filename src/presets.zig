@@ -115,6 +115,7 @@ test "parseFromSlice ignores unknown fields when disabled" {
         \\      "name": "utils",
         \\      "path": "src/utils",
         \\      "depth": 0,
+        \\      "dagOrder": 0,
         \\      "suffixes": [".util.ts"]
         \\    }
         \\  ],
@@ -146,6 +147,7 @@ test "parseFromSlice fails on unknown fields with strict mode" {
         \\      "name": "utils",
         \\      "path": "src/utils",
         \\      "depth": 0,
+        \\      "dagOrder": 0,
         \\      "suffixes": [".util.ts"]
         \\    }
         \\  ],

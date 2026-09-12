@@ -42,11 +42,21 @@ pub const RootLib = struct {
 
 /// parsed architecture configuration
 pub const Config = struct {
+    /// repo-relative directories the lint walk starts from. this is the whole
+    /// ignore list: a file outside every root is not part of the declared
+    /// architecture, so nothing lints it, and build output, agent scratch
+    /// directories and vendored trees need no glob patterns to be skipped
+    ///
+    /// absent means "derive it from the surfaces" (see `lintRootAt`), so a
+    /// config that predates the field keeps the same scope
+    sourceRoots: []const []const u8 = &.{},
     surfaces: []Surface,
     layers: Layers,
     rootLib: RootLib = .{ .enabled = false, .path = "lib" },
 
     pub fn deinit(self: *const Config, allocator: std.mem.Allocator) void {
+        for (self.sourceRoots) |root| allocator.free(root);
+        if (self.sourceRoots.len > 0) allocator.free(self.sourceRoots);
         for (self.surfaces) |*surface| surface.deinit(allocator);
         allocator.free(self.surfaces);
         self.rootLib.deinit(allocator);
@@ -76,19 +86,77 @@ pub const Config = struct {
         return from.dagOrder > to.dagOrder;
     }
 
-    /// find which surface owns a given file path, or null if none
-    pub fn owningSurface(self: *const Config, file_path: []const u8) ?*const Surface {
-        for (self.surfaces) |*surface| {
-            if (std.mem.startsWith(u8, file_path, surface.path)) return surface;
+    /// true when `file_path` sits under a declared source root or rootLib
+    pub fn lintsFile(self: *const Config, file_path: []const u8) bool {
+        var index: usize = 0;
+        while (index < self.lintRootCount()) : (index += 1) {
+            if (pathIsWithin(file_path, self.lintRootAt(index))) return true;
         }
-        return null;
+        return self.rootLib.enabled and pathIsWithin(file_path, self.rootLib.path);
+    }
+
+    /// the walk's prune test: true when descending into `dir_path` could still
+    /// reach a linted file, i.e. some root sits inside it or above it
+    pub fn mayContainLintedFile(self: *const Config, dir_path: []const u8) bool {
+        var index: usize = 0;
+        while (index < self.lintRootCount()) : (index += 1) {
+            const root = self.lintRootAt(index);
+            if (pathIsWithin(root, dir_path) or pathIsWithin(dir_path, root)) return true;
+        }
+        if (self.rootLib.enabled) {
+            if (pathIsWithin(self.rootLib.path, dir_path) or pathIsWithin(dir_path, self.rootLib.path)) return true;
+        }
+        return false;
+    }
+
+    /// how many lint roots this config has. a config that declares none derives
+    /// one per surface, so the count follows the surfaces instead
+    fn lintRootCount(self: *const Config) usize {
+        return if (self.sourceRoots.len > 0) self.sourceRoots.len else self.surfaces.len;
+    }
+
+    fn lintRootAt(self: *const Config, index: usize) []const u8 {
+        if (self.sourceRoots.len > 0) return self.sourceRoots[index];
+        return surfaceContainer(self.surfaces[index].path);
+    }
+
+    /// find which surface owns a given normalised repo-relative path, or null
+    /// matches on segment boundaries, so "src/db-extra/x.ts" is not inside "src/db",
+    /// and keeps the longest match, so a nested surface path beats its parent
+    pub fn owningSurface(self: *const Config, file_path: []const u8) ?*const Surface {
+        var owner: ?*const Surface = null;
+        for (self.surfaces) |*surface| {
+            if (!pathIsWithin(file_path, surface.path)) continue;
+            if (owner == null or surface.path.len > owner.?.path.len) owner = surface;
+        }
+        return owner;
     }
 };
+
+/// the directory a lint walk starts from for a surface that declared no source
+/// roots: its container. a surface sitting at the project root is its own
+/// container, because the root above it is the whole repo and taking that would
+/// lint every unrelated tree in it
+fn surfaceContainer(surface_path: []const u8) []const u8 {
+    const parent = std.fs.path.dirname(surface_path) orelse return surface_path;
+    if (parent.len == 0) return surface_path;
+    return parent;
+}
+
+/// true when `file_path` is `dir_path` itself or sits underneath it, the
+/// boundary check keeps "src/db-extra" from matching the "src/db" surface
+fn pathIsWithin(file_path: []const u8, dir_path: []const u8) bool {
+    if (dir_path.len == 0) return false;
+    if (!std.mem.startsWith(u8, file_path, dir_path)) return false;
+    if (file_path.len == dir_path.len) return true;
+    return file_path[dir_path.len] == '/';
+}
 
 /// validation error, returned when config fails structural checks
 pub const ValidationError = error{
     DuplicateSurfaceNames,
     DuplicateDagOrders,
+    EmptySourceRoot,
     EmptySurfaces,
     InvalidDagOrder,
     InvalidRootLibPath,
@@ -133,6 +201,12 @@ pub fn validate(config: *const Config) ValidationError!void {
             if (config.getSurface(import_name) == null)
                 return ValidationError.MissingSurfaceInEdge;
         }
+    }
+
+    // a source root must name a directory, an empty string would silently match
+    // no path at all and lint nothing
+    for (config.sourceRoots) |root| {
+        if (root.len == 0) return ValidationError.EmptySourceRoot;
     }
 
     // rootLib path must be non-empty when enabled
@@ -330,7 +404,14 @@ pub const Formatter = struct {
 
     fn writeConfig(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const config = self.value;
-        try writer.writeAll("{\n  \"surfaces\": [\n");
+        try writer.writeAll("{");
+        // omitted when absent, so a derived config round-trips unchanged and the
+        // field only appears once the project declares roots
+        if (config.sourceRoots.len > 0) {
+            try writer.writeAll("\n  ");
+            try writeArrayField(writer, "sourceRoots", config.sourceRoots, true, TOP_LEVEL_INDENT);
+        }
+        try writer.writeAll("\n  \"surfaces\": [\n");
         for (config.surfaces, 0..) |surface, surface_index| {
             const is_last_surface = surface_index + 1 == config.surfaces.len;
             try writer.writeAll("    {\n");
@@ -341,11 +422,11 @@ pub const Formatter = struct {
             try writer.print(",\n      \"depth\": {},", .{surface.depth});
             try writer.print("\n      \"dagOrder\": {}", .{surface.dagOrder});
             try writer.writeAll(",\n      ");
-            try writeArrayField(writer, "suffixes", surface.suffixes, true);
+            try writeArrayField(writer, "suffixes", surface.suffixes, true, SURFACE_FIELD_INDENT);
             try writer.writeAll("\n      ");
-            try writeArrayField(writer, "innateMembers", surface.innateMembers, true);
+            try writeArrayField(writer, "innateMembers", surface.innateMembers, true, SURFACE_FIELD_INDENT);
             try writer.writeAll("\n      ");
-            try writeArrayField(writer, "allowedImports", surface.allowedImports, false);
+            try writeArrayField(writer, "allowedImports", surface.allowedImports, false, SURFACE_FIELD_INDENT);
             try writer.writeAll(if (is_last_surface) "\n    }\n" else "\n    },\n");
         }
         try writer.writeAll("  ],\n  \"layers\": {\n");
@@ -360,9 +441,8 @@ pub const Formatter = struct {
         try writer.writeAll("\n  }\n}");
     }
 
-    fn writeArrayField(writer: *std.Io.Writer, key: []const u8, values: []const []const u8, has_trailing_comma: bool) std.Io.Writer.Error!void {
-        const FIELD_INDENT = 6;
-        const line_len = FIELD_INDENT + key.len + KEY_PREFIX_OVERHEAD + inlineArrayLen(values) + @intFromBool(has_trailing_comma);
+    fn writeArrayField(writer: *std.Io.Writer, key: []const u8, values: []const []const u8, has_trailing_comma: bool, indent: usize) std.Io.Writer.Error!void {
+        const line_len = indent + key.len + KEY_PREFIX_OVERHEAD + inlineArrayLen(values) + @intFromBool(has_trailing_comma);
         if (line_len <= LINE_WIDTH) {
             try writer.writeAll("\"");
             try writer.writeAll(key);
@@ -374,11 +454,12 @@ pub const Formatter = struct {
             try writer.writeAll("\": [\n");
             for (values, 0..) |value, value_index| {
                 const is_last_element = value_index + 1 == values.len;
-                try writer.writeAll("        ");
+                try writer.splatByteAll(' ', indent + 2);
                 try std.json.Stringify.value(value, .{}, writer);
                 try writer.writeAll(if (is_last_element) "\n" else ",\n");
             }
-            try writer.writeAll("      ]");
+            try writer.splatByteAll(' ', indent);
+            try writer.writeAll("]");
         }
         if (has_trailing_comma) try writer.writeByte(',');
     }
@@ -409,6 +490,12 @@ pub const Formatter = struct {
 /// biome.json which does not override lineWidth
 const LINE_WIDTH = 80;
 
+/// indent of a field directly inside the root object
+const TOP_LEVEL_INDENT = 2;
+
+/// indent of a field inside a surface object
+const SURFACE_FIELD_INDENT = 6;
+
 /// chars around the key in `"key": `, two quotes, a colon, and a space
 const KEY_PREFIX_OVERHEAD = 4;
 
@@ -417,9 +504,20 @@ test "formatter emits biome-clean json" {
 
     var surfaces = try allocator.alloc(Surface, 2);
     surfaces[0] = try testSurface(allocator, "lib", "lib", 0, 0, &.{".ts"});
-    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{ ".service.ts" });
-    surfaces[1].innateMembers = &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" };
-    surfaces[1].allowedImports = &.{ "lib", "db" };
+    surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
+    // both fields are owned by the surface once set, so they have to be
+    // allocated: Surface.deinit frees every element
+    const innate_members = try allocator.alloc([]const u8, 4);
+    for ([_][]const u8{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, 0..) |literal, index| {
+        innate_members[index] = try allocator.dupe(u8, literal);
+    }
+    surfaces[1].innateMembers = innate_members;
+
+    const allowed_imports = try allocator.alloc([]const u8, 2);
+    for ([_][]const u8{ "lib", "db" }, 0..) |literal, index| {
+        allowed_imports[index] = try allocator.dupe(u8, literal);
+    }
+    surfaces[1].allowedImports = allowed_imports;
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);
 
@@ -465,4 +563,122 @@ test "formatter emits biome-clean json" {
         \\}
     ;
     try testing.expectEqualStrings(expected ++ "\n", json);
+}
+
+/// surfaces shaped like a real project: most live under `src/`, while `lib` and
+/// `gateway` sit at the project root. returned by value so each caller owns its
+/// own copy and can hand out a pointer to it
+fn testProjectSurfaces() [3]Surface {
+    return .{
+        .{ .name = "lib", .path = "lib", .depth = 0, .dagOrder = 0, .suffixes = &.{".ts"} },
+        .{ .name = "db", .path = "src/db", .depth = 1, .dagOrder = 1, .suffixes = &.{".repo.ts"} },
+        .{ .name = "gateway", .path = "gateway", .depth = 1, .dagOrder = 2, .suffixes = &.{".ts"} },
+    };
+}
+
+test "lintsFile uses the declared source roots as the whole ignore list" {
+    var roots = [_][]const u8{ "src", "scripts" };
+    var surfaces = testProjectSurfaces();
+    const cfg = Config{
+        .sourceRoots = &roots,
+        .surfaces = &surfaces,
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+        .rootLib = .{ .enabled = true, .path = "lib" },
+    };
+
+    try testing.expect(cfg.lintsFile("src/bot.ts"));
+    try testing.expect(cfg.lintsFile("src/db/x.repo.ts"));
+    try testing.expect(cfg.lintsFile("scripts/seed.ts"));
+    try testing.expect(cfg.lintsFile("lib/x.ts"));
+    // a declared root is the whole ignore list: build output and agent scratch
+    // directories are outside every root and need no glob patterns
+    try testing.expect(!cfg.lintsFile("dist/foo.ts"));
+    try testing.expect(!cfg.lintsFile(".rpiv/artifacts/x.mjs"));
+    // declared roots replace the derivation, so a surface outside them is out
+    try testing.expect(!cfg.lintsFile("gateway/bot.ts"));
+}
+
+test "a config without source roots derives them from the surface containers" {
+    var surfaces = testProjectSurfaces();
+    const cfg = Config{
+        .surfaces = &surfaces,
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+    };
+
+    // the container of src/db is src, so a file sitting directly in src belongs
+    // to the declared architecture even though no surface path covers it
+    try testing.expect(cfg.lintsFile("src/bot.ts"));
+    try testing.expect(cfg.lintsFile("src/db/x.repo.ts"));
+    // a root-level surface is its own container, the repo root above it would
+    // pull in every unrelated tree
+    try testing.expect(cfg.lintsFile("gateway/bot.ts"));
+    try testing.expect(cfg.lintsFile("lib/x.ts"));
+    try testing.expect(!cfg.lintsFile("dist/foo.ts"));
+    try testing.expect(!cfg.lintsFile(".rpiv/artifacts/x.mjs"));
+}
+
+test "mayContainLintedFile keeps the walk open only above a lint root" {
+    var surfaces = testProjectSurfaces();
+    const cfg = Config{
+        .surfaces = &surfaces,
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+    };
+
+    try testing.expect(cfg.mayContainLintedFile("src"));
+    try testing.expect(cfg.mayContainLintedFile("src/db"));
+    try testing.expect(cfg.mayContainLintedFile("gateway"));
+    try testing.expect(cfg.mayContainLintedFile("lib"));
+    try testing.expect(!cfg.mayContainLintedFile("dist"));
+    try testing.expect(!cfg.mayContainLintedFile(".rpiv"));
+    try testing.expect(!cfg.mayContainLintedFile("node_modules"));
+}
+
+test "mayContainLintedFile stays open on the path down to a nested root" {
+    var surfaces = [_]Surface{
+        .{ .name = "web-store", .path = "apps/web/store", .depth = 1, .dagOrder = 0, .suffixes = &.{".ts"} },
+    };
+    const cfg = Config{
+        .surfaces = &surfaces,
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+    };
+
+    // the walk starts at the project root, so every ancestor of the container
+    // has to answer true or the root is never reached
+    try testing.expect(cfg.mayContainLintedFile("apps"));
+    try testing.expect(cfg.mayContainLintedFile("apps/web"));
+    try testing.expect(!cfg.mayContainLintedFile("apps/server"));
+    try testing.expect(!cfg.mayContainLintedFile("dist"));
+}
+
+test "validate rejects an empty source root" {
+    var roots = [_][]const u8{""};
+    var surfaces = testProjectSurfaces();
+    const cfg = Config{ .sourceRoots = &roots, .surfaces = &surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
+
+    try testing.expectError(ValidationError.EmptySourceRoot, validate(&cfg));
+}
+
+test "validate accepts a declared source root" {
+    var roots = [_][]const u8{"src"};
+    var surfaces = testProjectSurfaces();
+    const cfg = Config{ .sourceRoots = &roots, .surfaces = &surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
+
+    try validate(&cfg);
+}
+
+test "formatter writes a declared source root and omits a derived one" {
+    var roots = [_][]const u8{ "src", "scripts" };
+    var surfaces = testProjectSurfaces();
+    const declared = Config{ .sourceRoots = &roots, .surfaces = &surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
+
+    var buf: [1024]u8 = undefined;
+    const json = try std.fmt.bufPrint(&buf, "{f}", .{Formatter{ .value = &declared }});
+    try testing.expect(std.mem.startsWith(u8, json, "{\n  \"sourceRoots\": [\"src\", \"scripts\"],\n  \"surfaces\": ["));
+
+    // derived configs round-trip without the field, so add/upgrade on an older
+    // project does not invent a declaration it never had
+    var derived_surfaces = testProjectSurfaces();
+    const derived = Config{ .surfaces = &derived_surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
+    const derived_json = try std.fmt.bufPrint(&buf, "{f}", .{Formatter{ .value = &derived }});
+    try testing.expect(std.mem.startsWith(u8, derived_json, "{\n  \"surfaces\": ["));
 }

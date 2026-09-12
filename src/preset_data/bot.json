@@ -1,4 +1,5 @@
 {
+  "sourceRoots": ["lib", "src"],
   "surfaces": [
     {
       "name": "lib",

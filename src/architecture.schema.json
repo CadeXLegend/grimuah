@@ -7,6 +7,14 @@
   "required": ["surfaces", "layers"],
   "additionalProperties": false,
   "properties": {
+    "sourceRoots": {
+      "type": "array",
+      "description": "repo-relative directories the lint walk starts from. a file outside every root is not linted",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "surfaces": {
       "type": "array",
       "description": "ordered list of surfaces, each with physical depth and DAG order for the import graph topology",
@@ -38,19 +46,25 @@
             "type": "array",
             "description": "legal file suffixes for this surface, files not matching any suffix are flagged as Cosmetic violations",
             "minItems": 1,
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "innateMembers": {
             "type": "array",
             "description": "suffixes that can exist in any surface but inherit that surface's depth (e.g. '.types.ts', '.config.ts', '.spec.ts', '.regex-patterns.ts')",
             "default": [],
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "allowedImports": {
             "type": "array",
             "description": "names of surfaces this surface may import from, any import from a surface not in this list is a Structural violation",
             "default": [],
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       }
@@ -94,7 +108,10 @@
           "description": "path to the root lib directory (default: 'lib')"
         }
       },
-      "default": { "enabled": false, "path": "lib" }
+      "default": {
+        "enabled": false,
+        "path": "lib"
+      }
     }
   }
 }

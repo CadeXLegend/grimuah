@@ -10,28 +10,6 @@ const embedded_schema: []const u8 = @embedFile("../architecture.schema.json");
 /// embedded outcome pattern file, written to lib/ when surface is selected
 const embedded_outcome: []const u8 = @embedFile("../templates/outcome.ts");
 
-/// embedded biome config template
-const biome_config_template: []const u8 =
-    \\{
-    \\  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
-    \\  "formatter": {
-    \\    "enabled": true,
-    \\    "indentStyle": "space",
-    \\    "indentWidth": 2
-    \\  },
-    \\  "plugins": [
-    \\    ".grimuah-rules/cosmetic.grit",
-    \\    ".grimuah-rules/structural.grit",
-    \\    ".grimuah-rules/resilience.grit",
-    \\    ".grimuah-rules/behavioural.grit"
-    \\  ],
-    \\  "linter": {
-    \\    "enabled": true
-    \\  }
-    \\}
-    \\
-;
-
 const tsconfig_template: []const u8 =
     \\{
     \\  "compilerOptions": {
@@ -304,6 +282,42 @@ fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u
     };
 }
 
+/// write biome.json with a plugin entry for every GritQL rule the config enables
+///
+/// `files.includes` matters: biome only ignores node_modules by default, and the
+/// generated tsconfig emits to ./dist, so without this every `grimuah check` in a
+/// built project lints its own build output
+fn writeBiomeConfig(io: std.Io, allocator: std.mem.Allocator, path: []const u8, cfg: *const config.Config) !void {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator,
+        \\{
+        \\  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+        \\  "files": {
+        \\    "includes": ["**", "!**/dist", "!**/.pi", "!**/.rpiv", "!**/.auto"]
+        \\  },
+        \\  "formatter": {
+        \\    "enabled": true,
+        \\    "indentStyle": "space",
+        \\    "indentWidth": 2
+        \\  },
+        \\  "plugins": [
+        \\
+    );
+    try gritql.appendBiomePlugins(allocator, &buf, cfg);
+    try buf.appendSlice(allocator,
+        \\  ],
+        \\  "linter": {
+        \\    "enabled": true
+        \\  }
+        \\}
+        \\
+    );
+
+    try templates.writeFile(io, path, buf.items);
+}
+
 fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, cfg: *const config.Config) !void {
     try std.Io.Dir.cwd().createDirPath(io, name);
 
@@ -323,7 +337,7 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
     // write biome.json
     var biome_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const biome_path = try std.fmt.bufPrint(&biome_path_buf, "{s}/biome.json", .{name});
-    try templates.writeFile(io, biome_path, biome_config_template);
+    try writeBiomeConfig(io, allocator, biome_path, cfg);
 
     // write tsconfig.json
     var tsconfig_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
