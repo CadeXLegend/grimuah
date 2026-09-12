@@ -67,6 +67,7 @@ src/probe/for-of.ts:2: [resilience] do not use let; use const. only let at modul
 src/probe/handled-comment.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/handled-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
 src/probe/handled-throw.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/if-chain-dispatch.ts:6: [resilience] These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.
 src/probe/let-destructure.ts:2: [hygiene] This let declares a variable that is only assigned once.
 src/probe/let-destructure.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/let-init.ts:2: [hygiene] This let declares a variable that is only assigned once.

@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `require-limit-on-collection-reads`: a query that reads a collection must carry a LIMIT
 * add `no-for-of-push-accumulation`: a `for..of` loop may not build an array by pushing into it
 * add `config-declares-data-only`: a `.config.ts` file may declare data, never a function
+* add `no-if-chain-dispatch`: a run of three or more branches over one subject is a dispatch table
 
 ### Bug Fixes
 

@@ -229,36 +229,185 @@ fn holdsAccumulatorCall(module: *const ir.Module, index: ir.NodeIndex) bool {
     return false;
 }
 
-const probe = @import("probe.zig");
+/// a run of three or more branches that all test one subject
+///
+/// the shipped switch ban says to use a dispatch table, and an if-chain of
+/// predicate tests and early returns is the same construct with the same
+/// properties: one linear scan, one place to edit to add a case, and no place
+/// that lists the cases. it passes the ban, which is why it needs its own rule
+///
+/// the run is recognisable without types, because every branch tests the same
+/// subject and every branch returns. two shapes count: sibling `if` statements
+/// that return and carry no `else`, grouped into runs of one subject so a single
+/// unrelated guard in front of the run does not hide it, and an `else if` chain,
+/// counted once at its head and only when every link of it is an `if`
+pub fn checkIfChainDispatch(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    var dispatch = Dispatch{ .module = module, .context = context };
 
-test "a for..of that pushes into an array is reported, and the neighbouring shapes are not" {
-    const source =
-        \\export function collect(records: readonly string[]): string[] {
-        \\  const names: string[] = [];
-        \\  for (const record of records) {
-        \\    names.push(record);
-        \\  }
-        \\  while (names.length < 3) {
-        \\    names.push(records[names.length]);
-        \\  }
-        \\  for (const record of records) {
-        \\    const take = (): void => {
-        \\      names.push(record);
-        \\    };
-        \\    handTo(take);
-        \\  }
-        \\  for (const record of records) {
-        \\    push(record);
-        \\  }
-        \\  names.unshift("");
-        \\  return names;
-        \\}
-        \\
-    ;
-    try probe.expect(.resilience, "probe.ts", source, &.{
-        "3: This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.",
-    });
+    for (context.walk) |entry| {
+        switch (entry.kind) {
+            .block, .case_clause => try dispatch.scanStatements(entry.index),
+            .if_stmt => try dispatch.scanChain(entry.index),
+            else => {},
+        }
+    }
 }
+
+const Dispatch = struct {
+    module: *const ir.Module,
+    context: *const root.Context,
+    group_subject: []const u8 = "",
+    group_line: u32 = 0,
+    group_count: usize = 0,
+
+    /// the run in progress, which the detector groups by subject: a dispatch run
+    /// is often preceded by one unrelated guard, and requiring the whole
+    /// sequence to agree would hide every such run
+    fn scanStatements(self: *Dispatch, container: ir.NodeIndex) !void {
+        var child = self.module.firstChildOf(container);
+        while (child) |statement| : (child = self.module.nextSiblingOf(statement)) {
+            // a `case` clause holds its case value first, which is not a statement
+            if (!self.module.kindOf(statement).isStatement()) continue;
+
+            const subject = branchSubject(self.module, statement) orelse {
+                try self.flushGroup();
+                continue;
+            };
+            if (self.group_count > 0 and !std.mem.eql(u8, self.group_subject, subject)) try self.flushGroup();
+            if (self.group_count == 0) {
+                self.group_subject = subject;
+                self.group_line = self.module.spanOf(statement).line;
+            }
+            self.group_count += 1;
+        }
+        try self.flushGroup();
+    }
+
+    fn flushGroup(self: *Dispatch) !void {
+        const count = self.group_count;
+        const line = self.group_line;
+        self.group_count = 0;
+        if (count < dispatch_branch_minimum) return;
+        try report(self.context, line, count);
+    }
+
+    /// an `else if` chain, reported at its head only, because a chain of n
+    /// branches would otherwise report itself n minus two times. a chain whose
+    /// `else` is not another `if` is not a chain at all, which is what the
+    /// detector's own early return says
+    fn scanChain(self: *Dispatch, head: ir.NodeIndex) !void {
+        if (isElseBranch(self.module, head)) return;
+
+        var count: usize = 0;
+        var subject: []const u8 = "";
+        var same_subject = true;
+        var current: ?ir.NodeIndex = head;
+        while (current) |branch| {
+            const condition = self.module.firstChildOf(branch) orelse break;
+            const branch_subject = subjectText(self.module, condition);
+            if (count == 0) subject = branch_subject else if (!std.mem.eql(u8, subject, branch_subject)) same_subject = false;
+            count += 1;
+
+            const next = elseBranchOf(self.module, branch) orelse break;
+            if (self.module.kindOf(next) != .if_stmt) return;
+            current = next;
+        }
+
+        if (count < dispatch_branch_minimum or !same_subject) return;
+        try report(self.context, self.module.spanOf(head).line, count);
+    }
+};
+
+const dispatch_branch_minimum = 3;
+
+fn report(context: *const root.Context, line: u32, count: usize) !void {
+    const message = try std.fmt.allocPrint(context.allocator, root.if_chain_dispatch, .{count});
+    defer context.allocator.free(message);
+    try context.report(line, .resilience, message, .warn);
+}
+
+/// the subject an `if` statement tests, when that statement is one branch of a
+/// dispatch: no `else`, and a branch that returns either the value or nothing
+fn branchSubject(module: *const ir.Module, statement: ir.NodeIndex) ?[]const u8 {
+    if (module.kindOf(statement) != .if_stmt) return null;
+
+    const condition = module.firstChildOf(statement) orelse return null;
+    const then_branch = module.nextSiblingOf(condition) orelse return null;
+    if (elseBranchOf(module, statement) != null) return null;
+    if (!branchReturns(module, then_branch)) return null;
+    return subjectText(module, condition);
+}
+
+/// the `else` of an `if`, which the front-end appends after the branch it runs
+fn elseBranchOf(module: *const ir.Module, statement: ir.NodeIndex) ?ir.NodeIndex {
+    const condition = module.firstChildOf(statement) orelse return null;
+    const then_branch = module.nextSiblingOf(condition) orelse return null;
+    return module.nextSiblingOf(then_branch);
+}
+
+/// whether a statement is the `else` half of the `if` that holds it, which is
+/// what tells a chain head from a link in it
+fn isElseBranch(module: *const ir.Module, statement: ir.NodeIndex) bool {
+    const parent = module.parentOf(statement) orelse return false;
+    if (module.kindOf(parent) != .if_stmt) return false;
+    const else_branch = elseBranchOf(module, parent) orelse return false;
+    return else_branch == statement;
+}
+
+/// whether a branch hands back a value: a `return`, or a block whose one
+/// statement is a `return`
+fn branchReturns(module: *const ir.Module, statement: ir.NodeIndex) bool {
+    if (module.kindOf(statement) == .return_stmt) return true;
+    if (module.kindOf(statement) != .block) return false;
+    const only = module.firstChildOf(statement) orelse return false;
+    if (module.nextSiblingOf(only) != null) return false;
+    return module.kindOf(only) == .return_stmt;
+}
+
+/// the subject a condition tests, which is the whole precision of the rule: a
+/// comparison is about its left side, a one-argument predicate call is about its
+/// argument, and each of those is unwrapped once, in that order, from a unary
+/// operand and from a parenthesised expression
+fn subjectText(module: *const ir.Module, condition: ir.NodeIndex) []const u8 {
+    var current = condition;
+    if (module.kindOf(current) == .unary) current = firstChildOr(module, current);
+    if (module.kindOf(current) == .paren) current = firstChildOr(module, current);
+    if (module.kindOf(current) == .binary) return expressionText(module, firstChildOr(module, current));
+
+    if (module.kindOf(current) == .call) {
+        const callee = module.firstChildOf(current) orelse return expressionText(module, current);
+        const argument = module.nextSiblingOf(callee) orelse return expressionText(module, current);
+        if (module.nextSiblingOf(argument) != null) return expressionText(module, current);
+        return expressionText(module, argument);
+    }
+    return expressionText(module, current);
+}
+
+fn firstChildOr(module: *const ir.Module, index: ir.NodeIndex) ir.NodeIndex {
+    return module.firstChildOf(index) orelse index;
+}
+
+/// the text of an expression. a chain of members and calls is one expression to
+/// a reader and to the detector, while a front-end span begins each member at the
+/// token before it, so the text runs from the leftmost token in the expression to
+/// the node's own end
+fn expressionText(module: *const ir.Module, index: ir.NodeIndex) []const u8 {
+    const span = module.spanOf(index);
+    const start = @min(leftmostStart(module, index), span.end);
+    return module.source[start..span.end];
+}
+
+fn leftmostStart(module: *const ir.Module, index: ir.NodeIndex) usize {
+    var start = module.spanOf(index).start;
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        start = @min(start, leftmostStart(module, current));
+    }
+    return start;
+}
+
+
 
 /// a `.all()` read whose `prepare` chain carries no LIMIT
 ///
@@ -362,6 +511,37 @@ fn isWordByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
+const probe = @import("probe.zig");
+
+test "a for..of that pushes into an array is reported, and the neighbouring shapes are not" {
+    const source =
+        \\export function collect(records: readonly string[]): string[] {
+        \\  const names: string[] = [];
+        \\  for (const record of records) {
+        \\    names.push(record);
+        \\  }
+        \\  while (names.length < 3) {
+        \\    names.push(records[names.length]);
+        \\  }
+        \\  for (const record of records) {
+        \\    const take = (): void => {
+        \\      names.push(record);
+        \\    };
+        \\    handTo(take);
+        \\  }
+        \\  for (const record of records) {
+        \\    push(record);
+        \\  }
+        \\  names.unshift("");
+        \\  return names;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "3: This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.",
+    });
+}
+
 test "a collection read with no LIMIT is reported, and the exclusions hold" {
     const source =
         \\export const each = database.prepare("SELECT fish_id FROM catches").all();
@@ -390,5 +570,102 @@ test "a bare boolean argument is reported once per argument" {
     try probe.expect(.resilience, "probe.ts", source, &.{
         "1: This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.",
         "1: This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.",
+    });
+}
+
+test "a run of three branches over one subject is reported, and shorter or mixed runs are not" {
+    const source =
+        \\export function labelFor(kind: string): string {
+        \\  if (kind === "slam") {
+        \\    return "Slam";
+        \\  }
+        \\  if (kind === "sweep") {
+        \\    return "Sweep";
+        \\  }
+        \\  if (kind === "swipe") {
+        \\    return "Swipe";
+        \\  }
+        \\  return "Unknown";
+        \\}
+        \\
+        \\export function pairFor(kind: string): string {
+        \\  if (kind === "a") {
+        \\    return "A";
+        \\  }
+        \\  if (kind === "b") {
+        \\    return "B";
+        \\  }
+        \\  return "Unknown";
+        \\}
+        \\
+        \\export function mixedFor(kind: string, other: string): string {
+        \\  if (kind === "a") {
+        \\    return "A";
+        \\  }
+        \\  if (other === "b") {
+        \\    return "B";
+        \\  }
+        \\  if (kind === "c") {
+        \\    return "C";
+        \\  }
+        \\  return "Unknown";
+        \\}
+        \\
+        \\export function chainFor(kind: string): string {
+        \\  if (kind === "a") {
+        \\    return "A";
+        \\  } else if (kind === "b") {
+        \\    return "B";
+        \\  } else if (kind === "c") {
+        \\    return "C";
+        \\  }
+        \\  return "Unknown";
+        \\}
+        \\
+        \\export function handledFor(kind: string): string {
+        \\  if (kind === "a") {
+        \\    return "A";
+        \\  } else if (kind === "b") {
+        \\    return "B";
+        \\  } else {
+        \\    return "C";
+        \\  }
+        \\}
+        \\
+        \\export function assignedFor(kind: string): string {
+        \\  var label = "Unknown";
+        \\  if (kind === "a") {
+        \\    label = "A";
+        \\  }
+        \\  if (kind === "b") {
+        \\    label = "B";
+        \\  }
+        \\  if (kind === "c") {
+        \\    label = "C";
+        \\  }
+        \\  return label;
+        \\}
+        \\
+        \\export function guardedFor(kind: string, blocked: boolean): string {
+        \\  if (blocked) {
+        \\    return "blocked";
+        \\  }
+        \\  if (kind === "a") {
+        \\    return "A";
+        \\  }
+        \\  if (kind === "b") {
+        \\    return "B";
+        \\  }
+        \\  if (kind === "c") {
+        \\    return "C";
+        \\  }
+        \\  return "Unknown";
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
+        "38: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
+        "76: These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.",
     });
 }

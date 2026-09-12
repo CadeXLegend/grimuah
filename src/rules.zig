@@ -145,6 +145,7 @@ pub const max_cyclomatic_complexity = "This function has a cyclomatic complexity
 pub const unbounded_collection_read = "This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.";
 pub const for_of_accumulation = "This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.";
 pub const config_behaviour = "This .config.ts file declares a function. Move the behaviour into the surface's own module.";
+pub const if_chain_dispatch = "These {d} branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -332,6 +333,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = structural.checkConfigBehaviour,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = if_chain_dispatch,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkIfChainDispatch,
     },
     .{
         .layer = .hygiene,
