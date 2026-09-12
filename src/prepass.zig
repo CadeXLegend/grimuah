@@ -217,7 +217,16 @@ fn checkSurface(io: std.Io,
     const dir_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_root, surface.path });
     defer allocator.free(dir_path);
 
-    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
+        // a surface that names a directory the project does not have is a config
+        // typo that disables the whole surface in silence, which is the one
+        // failure a lint gate must not have
+        if (structural and err == error.FileNotFound) {
+            const msg = try std.fmt.allocPrint(allocator, "surface '{s}' names the directory {s}/, which does not exist; create it or drop the surface from architecture.config.json", .{ surface.name, surface.path });
+            try reportFinding(allocator, findings, dir_path, 0, msg, "structural");
+        }
+        return;
+    };
     defer dir.close(io);
 
     var walker = try dir.walk(allocator);

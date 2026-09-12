@@ -3,11 +3,10 @@ const ts = @import("../lang/ts.zig");
 
 /// token-level helpers shared by the rules that read the token stream
 ///
-/// these are the readers the rules were verified against biome with, moved here
+/// these are the readers the rules were checked against the biome engine with
+/// while it was the oracle, moved here
 /// unchanged: the native engine in `src/lint.zig` is the reference the parity
-/// test holds this engine to, so the helpers keep the same semantics, including
-/// the deliberately narrow ones (`continuesType` exists so `as any[]` is not a
-/// bare `as any`)
+/// test holds this engine to, so the helpers keep the same semantics
 
 pub const Token = ts.Token;
 
@@ -86,17 +85,6 @@ pub fn inImportClause(tokens: []const Token, i: usize) bool {
         if (j == 0) return false;
         const before = tokens[j - 1];
         return isWord(before, "import") or isWord(before, "export") or isWord(before, "type");
-    }
-    return false;
-}
-
-/// token that can follow a cast type only if the type is too short to be a
-/// chain: `as any[]`, `as any | T`, `as A.B`
-pub fn continuesType(token: Token) bool {
-    if (token.kind != .punct) return false;
-    const continuations = [_][]const u8{ "[", "<", "|", "&", "." };
-    for (continuations) |text| {
-        if (std.mem.eql(u8, token.text, text)) return true;
     }
     return false;
 }

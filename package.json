@@ -3,9 +3,6 @@
   "version": "0.1.2",
   "private": true,
   "scripts": {
-    "check": "biome check",
-    "lint": "biome lint",
-    "format": "biome format --write",
     "typecheck": "tsc --noEmit",
     "regen:examples": "bash ./regenerate-examples.sh",
     "test": "bash ./test-e2e.sh",

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # e2e: end-to-end test for grimuah (architecture generator)
 # Auto-cleanup via trap
-# 60+ checks across init/check/add/remove/upgrade/biome
+# 60+ checks across init/check/add/remove/upgrade/layers/oracle
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GRIMUAH="${GRIMUAH:-$SCRIPT_DIR/zig-out/bin/grimuah}"
-BIOME="${BIOME:-biome}"
 TMPDIR="$(mktemp -d /tmp/grimuah-e2e-XXXXXXXX)"
 P1="$TMPDIR/p1"
 PASS=0; FAIL=0
@@ -19,11 +18,9 @@ fail()   { FAIL=$((FAIL+1)); echo "  FAIL $*"; }
 achk()   { cd "$P1" && "$GRIMUAH" check 2>&1 || true; }
 dagok(){ jq -e '[.surfaces[].dagOrder] | sort == [range(length)]' "$1" >/dev/null; }
 
-"$BIOME" --version >/dev/null 2>&1 || { echo "biome not found"; exit 1; }
-
 # ── 1. init default ──
 "$GRIMUAH" init "$P1" --preset default 2>/dev/null <<< ""
-for f in architecture.config.json tsconfig.json package.json biome.json .gitignore; do
+for f in architecture.config.json tsconfig.json package.json .gitignore; do
   test -f "$P1/$f" && ok "$f" || fail "missing $f"
 done
 for d in utils services components; do
@@ -44,10 +41,13 @@ done
 # ── 3. generated .husky/ ──
 test -f "$P1/.husky/pre-commit"           && ok ".husky/pre-commit"       || fail ".husky/pre-commit missing"
 test -f "$P1/.husky/check-em-dash.sh"     && ok ".husky/check-em-dash.sh" || fail ".husky/check-em-dash.sh missing"
-test -f "$P1/.husky/format-on-commit.sh"  && ok ".husky/format-on-commit.sh" || fail ".husky/format-on-commit.sh missing"
+# no formatter ships with the scaffold, so no hook may call one
+test -f "$P1/.husky/format-on-commit.sh"  && fail "format-on-commit.sh should not ship" || ok "no format-on-commit.sh"
+grep -qE 'pnpm (lint|format)|biome' "$P1/.husky/pre-commit" && fail "pre-commit calls a missing script" || ok "pre-commit calls only shipped scripts"
 
 # ── 4. package.json scripts ──
-jq -e '.scripts.lint' "$P1/package.json"     >/dev/null && ok "package.json: lint script"     || fail "package.json: lint missing"
+test "$(jq -r '.scripts.check' "$P1/package.json")" = "grimuah check" && ok "package.json: check runs grimuah" || fail "package.json: check is not grimuah check"
+jq -e '[.scripts[] | select(test("biome"))] | length == 0' "$P1/package.json" >/dev/null && ok "package.json: no biome script" || fail "package.json: biome script left"
 jq -e '.scripts.prepare' "$P1/package.json"   >/dev/null && ok "package.json: prepare script"  || fail "package.json: prepare missing"
 jq -e '.scripts.release' "$P1/package.json"   >/dev/null && ok "package.json: release script"  || fail "package.json: release missing"
 jq -e '.devDependencies.husky' "$P1/package.json"       >/dev/null && ok "package.json: husky dep"   || fail "package.json: husky missing"
@@ -96,29 +96,14 @@ test -f "$P1/src/utils/example.util.ts"          && ok "example.util.ts"        
 test -f "$P1/src/services/example.service.ts"    && ok "example.service.ts"       || fail "missing example.service.ts"
 test -f "$P1/src/components/example.component.ts"&& ok "example.component.ts"      || fail "missing example.component.ts"
 
-# ── 9. biome.json plugins ──
-rule_files=$(find "$P1/.grimuah-rules" -name '*.grit' | wc -l)
-test "$(jq '.plugins | length' "$P1/biome.json")" = "$rule_files" && ok "biome.json: one plugin per rule file" || fail "biome.json plugin count != rule file count"
+# ── 9. no biome output ──
+test -f "$P1/biome.json" && fail "biome.json should not be written" || ok "no biome.json"
+test -d "$P1/.grimuah-rules" && fail ".grimuah-rules should not be written" || ok "no .grimuah-rules"
 
-# ── 10. .grit files ──
-test "$rule_files" -gt 4 && ok "$rule_files .grit files (one rule per file)" || fail "expected more than 4 .grit files, got $rule_files"
-for f in "$P1"/.grimuah-rules/*.grit; do
-  name="$(basename "$f")"
-  test "$(head -1 "$f")" = "engine biome(1.0)" && ok "  $name engine line" || fail "  $name bad engine"
-  grep -q 'or {' "$f" && fail "  $name wraps rules in an or block" || ok "  $name has no or block"
-done
-# every declared plugin must exist on disk
-missing=0
-while read -r plugin; do test -f "$P1/$plugin" || missing=$((missing+1)); done < <(jq -r '.plugins[]' "$P1/biome.json")
-test "$missing" -eq 0 && ok "biome.json plugins all exist" || fail "$missing biome.json plugin(s) missing on disk"
+# ── 10. the scaffold carries no subprocess and no other linter ──
+grep -rqE 'biome' "$P1/src" "$P1/package.json" "$P1/.husky" && fail "scaffold still references biome" || ok "scaffold references no other linter"
 
-# ── 11. biome check clean ──
-"$BIOME" check "$P1" 2>&1 | grep -q "Failed to compile" && fail "biome check: fails" || ok "biome check: passes"
-
-# ── 12. biome format check ──
-"$BIOME" format "$P1" 2>&1 | grep -q "Formatter would have printed" && fail "biome format: would change" || ok "biome format: already clean"
-
-# ── 13. grimuah check clean ──
+# ── 11. grimuah check clean ──
 echo "// extra" > "$P1/src/utils/second.util.ts"
 echo "// extra" > "$P1/src/services/second.service.ts"
 echo "// extra" > "$P1/src/components/second.component.ts"
@@ -140,7 +125,7 @@ echo "import { x } from '../components';" > "$P1/src/services/import-test.servic
 achk | grep -q "importing from 'components'" && ok "grimuah check: catches import firewall" || fail "grimuah check: missed import violation"
 rm "$P1/src/services/import-test.service.ts"
 
-# ── 16b. grimuah check catches the rules biome's plugin engine cannot compile ──
+# ── 16b. grimuah check catches the three rules no other engine could compile ──
 printf 'export const f = (): number => {\n  let x = 1;\n  return x;\n};\n' > "$P1/src/utils/let.util.ts"
 achk | grep -q "do not use let" && ok "grimuah check: catches let" || fail "grimuah check: missed let"
 printf 'export const g = (x: number): number => {\n  switch (x) {\n    case 1: return 1;\n    default: return 0;\n  }\n};\n' > "$P1/src/utils/switch.util.ts"
@@ -184,26 +169,6 @@ jq -e '.surfaces[] | select(.name=="custom")' "$P1/architecture.config.json" >/d
 cd "$P1" && "$GRIMUAH" upgrade 2>&1 | grep -q "already up to date" && ok "upgrade: preserves user surface" || fail "upgrade: user surface issue"
 jq -e '.surfaces[] | select(.name=="custom")' "$P1/architecture.config.json" >/dev/null && ok "  custom surface still in config" || fail "  custom surface removed"
 
-# ── 23b. upgrade migrates the legacy per-layer plugin layout ──
-P4="$TMPDIR/p4"
-"$GRIMUAH" init "$P4" --preset default 2>/dev/null <<< ""
-rm -f "$P4"/.grimuah-rules/*.grit
-for L in cosmetic structural resilience behavioural; do
-  printf 'engine biome(1.0)\n\n`undefined` where {}\n' > "$P4/.grimuah-rules/$L.grit"
-done
-jq '.plugins = [".grimuah-rules/cosmetic.grit",".grimuah-rules/structural.grit",".grimuah-rules/resilience.grit",".grimuah-rules/behavioural.grit"]
-    | . + {"files": {"includes": ["**", "!dist"]}}' "$P4/biome.json" > "$P4/t.json"
-mv "$P4/t.json" "$P4/biome.json"
-cd "$P4" && "$GRIMUAH" remove utils >/dev/null 2>&1 || true
-cd "$P4" && "$GRIMUAH" upgrade >/dev/null 2>&1 || true
-legacy_left=$(jq -r '.plugins[]' "$P4/biome.json" | grep -cE '^\.grimuah-rules/(cosmetic|structural|resilience|behavioural)\.grit$' || true)
-test "$legacy_left" = "0" && ok "upgrade: legacy plugin layout migrated" || fail "upgrade: $legacy_left legacy plugin(s) left"
-jq -e '.files.includes == ["**", "!dist"]' "$P4/biome.json" >/dev/null && ok "upgrade: user biome.json settings preserved" || fail "upgrade: user settings lost"
-missing_plugins=0
-while read -r plugin; do test -f "$P4/$plugin" || missing_plugins=$((missing_plugins+1)); done < <(jq -r '.plugins[]' "$P4/biome.json")
-test "$missing_plugins" -eq 0 && ok "upgrade: migrated plugins exist" || fail "upgrade: $missing_plugins migrated plugin(s) missing"
-"$BIOME" lint "$P4" 2>&1 | grep -q "Failed to compile" && fail "upgrade: migrated rules fail to compile" || ok "upgrade: migrated rules compile"
-
 # ── 24. disable layers ──
 cd "$P1"
 jq '.layers.cosmetic = false | .layers.structural = false | .layers.resilience = false | .layers.behavioural = false' architecture.config.json > tmp.json
@@ -212,20 +177,14 @@ achk | grep -q "grimuah check: clean" && ok "all layers disabled: clean" || fail
 jq '.layers.cosmetic = true | .layers.structural = true | .layers.resilience = true | .layers.behavioural = true' architecture.config.json > tmp.json
 mv tmp.json architecture.config.json
 
-# ── 25. .grit files compile with biome ──
-for f in "$P1"/.grimuah-rules/*.grit; do
-  name="$(basename "$f")"
-  dir="$TMPDIR/biome-$name"
-  mkdir -p "$dir"
-  cp "$f" "$dir/"
-  cat > "$dir/biome.json" <<-EOJ
-	{ "\$schema": "https://biomejs.dev/schemas/2.5.3/schema.json", "plugins": ["$name"], "linter": { "enabled": true } }
-	EOJ
-  "$BIOME" lint "$dir" 2>&1 | grep -q "Failed to compile" && fail "  $name fails" || ok "  $name compiles"
-done
-
-# ── 26. biome lint on full scaffold ──
-"$BIOME" lint "$P1" 2>&1 | grep -q "Failed to compile" && fail "biome lint: scaffold fails" || ok "biome lint: scaffold passes"
+# ── 25. frozen oracle ──
+oracle_log="$TMPDIR/oracle.log"
+if bash "$SCRIPT_DIR/tests/oracle/check.sh" >"$oracle_log" 2>&1; then
+  ok "frozen oracle: corpus findings unchanged"
+else
+  fail "frozen oracle: corpus findings changed"
+  tail -20 "$oracle_log"
+fi
 
 echo ""
 echo "$PASS passed, $FAIL failed"

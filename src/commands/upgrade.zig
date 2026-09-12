@@ -1,7 +1,6 @@
 const std = @import("std");
 const config = @import("../config.zig");
 const presets = @import("../presets.zig");
-const gritql = @import("../gritql.zig");
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
     var parsed = config.load(io, allocator, "architecture.config.json") catch |err| {
@@ -38,9 +37,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
 
     // rewrite config with merged values
     try rewriteConfig(io, allocator, &cfg, &latest);
-
-    // regenerate GritQL rules
-    try gritql.generateRules(io, allocator, ".", &cfg);
 
     std.debug.print("upgrade: {d} change(s) applied\n", .{changes});
 }

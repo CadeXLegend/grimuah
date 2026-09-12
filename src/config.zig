@@ -388,12 +388,12 @@ test "validate passes for valid config" {
     try validate(&cfg);
 }
 
-/// biome-format-clean json emitter, mirrors std.json.Formatter so it works in
-/// {f} format strings
+/// compact json emitter, mirrors std.json.Formatter so it works in {f} format
+/// strings
 /// hand-rolled because std.json's indent options expand arrays onto separate
-/// lines while biome's formatter inlines them
-/// biome's formatter inlines an array when the whole line fits its line width
-/// and expands it otherwise, so this emitter applies the same rule
+/// lines while a generated config reads better with them inlined
+/// an array is inlined when the whole line fits the width and expanded
+/// otherwise, so a generated config stays stable across regeneration
 pub const Formatter = struct {
     value: *const Config,
 
@@ -486,8 +486,8 @@ pub const Formatter = struct {
     }
 };
 
-/// biome's default formatter line width, kept in sync with the generated
-/// biome.json which does not override lineWidth
+/// the width a generated config wraps at, so the layout stays stable across
+/// regeneration
 const LINE_WIDTH = 80;
 
 /// indent of a field directly inside the root object
@@ -499,7 +499,7 @@ const SURFACE_FIELD_INDENT = 6;
 /// chars around the key in `"key": `, two quotes, a colon, and a space
 const KEY_PREFIX_OVERHEAD = 4;
 
-test "formatter emits biome-clean json" {
+test "formatter emits compact json" {
     const allocator = testing.allocator;
 
     var surfaces = try allocator.alloc(Surface, 2);

@@ -146,10 +146,9 @@ test "render handles multiple substitutions" {
 test "isTextFile true for known extensions" {
     try testing.expect(isTextFile("foo.ts"));
     try testing.expect(isTextFile("bar.config.ts"));
-    try testing.expect(isTextFile("biome.json"));
+    try testing.expect(isTextFile("architecture.config.json"));
     try testing.expect(isTextFile("index.html"));
     try testing.expect(isTextFile(".env"));
-    try testing.expect(isTextFile("cosmetic.grit"));
     try testing.expect(isTextFile("_gitignore"));
 }
 

@@ -1,0 +1,20 @@
+src/const-block.ts:15: [hygiene] This let declares a variable that is only assigned once.
+src/const.ts:2: [hygiene] This let declares a variable that is only assigned once.
+src/jsx-component.tsx:2: [hygiene] This import is unused.
+src/jsx-component.tsx:7: [hygiene] This let declares a variable that is only assigned once.
+src/rest-siblings.ts:1: [hygiene] This variable solo is unused.
+src/rest-siblings.ts:2: [hygiene] This variable mate is unused.
+src/rest-siblings.ts:2: [hygiene] This variable pair is unused.
+src/rest-siblings.ts:3: [hygiene] This variable spread is unused.
+src/rest-siblings.ts:4: [hygiene] This variable firstRest is unused.
+src/rest-siblings.ts:4: [hygiene] This variable tail is unused.
+src/type-import.ts:1: [hygiene] This import is unused.
+src/unused.ts:12: [hygiene] This variable fromObject is unused.
+src/unused.ts:1: [hygiene] This variable orphan is unused.
+src/unused.ts:4: [hygiene] This variable alias is unused.
+src/unused.ts:5: [hygiene] This variable head is unused.
+src/unused.ts:7: [hygiene] This variable deep is unused.
+src/unused.ts:9: [hygiene] This function take is unused.
+src/updates.ts:4: [hygiene] This variable postfixInc is unused.
+src/updates.ts:6: [hygiene] This variable prefixDec is unused.
+src/updates.ts:9: [hygiene] This class Holder is unused.

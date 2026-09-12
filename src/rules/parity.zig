@@ -2,14 +2,20 @@ const std = @import("std");
 const config = @import("../config.zig");
 const engine = @import("../engine.zig");
 const lint = @import("../lint.zig");
+const rules = @import("../rules.zig");
 
 // the differential test for the rule migration
 //
 // `src/lint.zig` is the token-level engine grimuah shipped, verified against
-// biome 2.5.11's plugin engine by `.auto/native-diff.sh`. this test runs both it
-// and the new engine (`src/engine.zig` + `src/rules/`) over every file the
+// biome 2.5.11's plugin engine while biome was the oracle. this test runs both
+// it and the engine in `src/engine.zig` plus `src/rules/` over every file the
 // parser sweep covers and fails on any difference in (line, layer, severity,
-// message). moving a rule to a different reader has to be invisible.
+// message). moving a rule to a different reader has to be invisible
+//
+// the guard covers the rules the token engine has, which is the set the
+// migration moved. a rule added since has no twin in `src/lint.zig`, so its
+// findings are dropped from both sides before the comparison and
+// `tests/oracle/` is what pins it
 //
 // it is silent when it passes, because `zig build test` multiplexes the test
 // runner's progress over stderr
@@ -64,9 +70,12 @@ test "the engine reports what the token engine reports" {
                 }
                 candidate.deinit(a);
             }
-            // the hygiene layer is the native built-in subset, which biome's
-            // plugin engine is not the oracle for
+            // the hygiene layer is the built-in subset, which this parity test
+            // does not cover: `tests/oracle/hygiene-corpus.tsv` does
             try engine.lintContent(a, a, &cfg, &candidate, entry.path, source, false, .owned);
+
+            dropUncovered(&reference);
+            dropUncoveredEngine(&candidate);
 
             if (reference.items.len != 0) with_findings += 1;
             if (reference.items.len == candidate.items.len and sameFindings(reference.items, candidate.items)) continue;
@@ -88,6 +97,43 @@ test "the engine reports what the token engine reports" {
         .{ roots_found, files, with_findings, differences },
     );
     try std.testing.expectEqual(@as(usize, 0), differences);
+}
+
+/// whether `message` belongs to a rule `src/lint.zig` implements, i.e. one the
+/// token engine can have an opinion about
+fn tokenOracleCovers(message: []const u8) bool {
+    for (rules.all) |rule| {
+        if (!rule.oracle) continue;
+        if (std.mem.eql(u8, rule.message, message)) return true;
+    }
+    return false;
+}
+
+fn dropUncovered(findings: *std.ArrayList(lint.Finding)) void {
+    var kept: usize = 0;
+    for (findings.items) |finding| {
+        if (!tokenOracleCovers(finding.message)) {
+            std.testing.allocator.free(finding.path);
+            continue;
+        }
+        findings.items[kept] = finding;
+        kept += 1;
+    }
+    findings.shrinkRetainingCapacity(kept);
+}
+
+fn dropUncoveredEngine(findings: *std.ArrayList(engine.Finding)) void {
+    var kept: usize = 0;
+    for (findings.items) |finding| {
+        if (!tokenOracleCovers(finding.message)) {
+            std.testing.allocator.free(finding.path);
+            std.testing.allocator.free(finding.message);
+            continue;
+        }
+        findings.items[kept] = finding;
+        kept += 1;
+    }
+    findings.shrinkRetainingCapacity(kept);
 }
 
 /// findings as a multiset: the two engines may report them in a different order,

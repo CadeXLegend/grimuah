@@ -2,7 +2,6 @@ const std = @import("std");
 const config = @import("../config.zig");
 const presets = @import("../presets.zig");
 const templates = @import("../templates.zig");
-const gritql = @import("../gritql.zig");
 
 /// embedded schema, shipped in binary, written to every scaffolded project
 const embedded_schema: []const u8 = @embedFile("../architecture.schema.json");
@@ -85,9 +84,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, project_name: ?[]const u8, 
 
     // scaffold the project
     try scaffoldProject(io, allocator, name, cfg);
-
-    // generate GritQL rule files
-    try gritql.generateRules(io, allocator, name, cfg);
 
     std.debug.print("done. {s}/ is ready.\n", .{name});
 }
@@ -282,42 +278,6 @@ fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u
     };
 }
 
-/// write biome.json with a plugin entry for every GritQL rule the config enables
-///
-/// `files.includes` matters: biome only ignores node_modules by default, and the
-/// generated tsconfig emits to ./dist, so without this every `grimuah check` in a
-/// built project lints its own build output
-fn writeBiomeConfig(io: std.Io, allocator: std.mem.Allocator, path: []const u8, cfg: *const config.Config) !void {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator,
-        \\{
-        \\  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
-        \\  "files": {
-        \\    "includes": ["**", "!**/dist", "!**/.pi", "!**/.rpiv", "!**/.auto"]
-        \\  },
-        \\  "formatter": {
-        \\    "enabled": true,
-        \\    "indentStyle": "space",
-        \\    "indentWidth": 2
-        \\  },
-        \\  "plugins": [
-        \\
-    );
-    try gritql.appendBiomePlugins(allocator, &buf, cfg);
-    try buf.appendSlice(allocator,
-        \\  ],
-        \\  "linter": {
-        \\    "enabled": true
-        \\  }
-        \\}
-        \\
-    );
-
-    try templates.writeFile(io, path, buf.items);
-}
-
 fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, cfg: *const config.Config) !void {
     try std.Io.Dir.cwd().createDirPath(io, name);
 
@@ -333,11 +293,6 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
     var json_buf: [16384]u8 = undefined;
     const config_json_str = try std.fmt.bufPrint(&json_buf, "{f}", .{config.Formatter{ .value = cfg }});
     try templates.writeFile(io, config_path, config_json_str);
-
-    // write biome.json
-    var biome_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const biome_path = try std.fmt.bufPrint(&biome_path_buf, "{s}/biome.json", .{name});
-    try writeBiomeConfig(io, allocator, biome_path, cfg);
 
     // write tsconfig.json
     var tsconfig_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -383,11 +338,6 @@ fn scaffoldProject(io: std.Io, allocator: std.mem.Allocator, name: []const u8, c
         const outcome_path = try std.fmt.bufPrint(&outcome_path_buf, "{s}/outcome.ts", .{lib_dir});
         try templates.writeFile(io, outcome_path, embedded_outcome);
     }
-
-    // create .grimuah-rules/ directory
-    var rules_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const rules_dir = try std.fmt.bufPrint(&rules_dir_buf, "{s}/.grimuah-rules", .{name});
-    try std.Io.Dir.cwd().createDirPath(io, rules_dir);
 }
 
 fn writeGitignore(io: std.Io, name: []const u8) !void {
@@ -414,13 +364,13 @@ fn scaffoldHusky(io: std.Io, name: []const u8) !void {
     const husky_dir = try std.fmt.bufPrint(&buf, "{s}/.husky", .{name});
     try std.Io.Dir.cwd().createDirPath(io, husky_dir);
 
-    // write pre-commit
+    // write pre-commit: typecheck and the em-dash guard need no linter, and
+    // `grimuah check` stays out of the hook because a fresh scaffold reports the
+    // singleton-surface warning on every one-file directory it just created
     const precommit_path = try std.fmt.bufPrint(&buf, "{s}/.husky/pre-commit", .{name});
     try templates.writeFile(io, precommit_path,
         \\pnpm typecheck
-        \\pnpm lint
         \\bash .husky/check-em-dash.sh
-        \\bash .husky/format-on-commit.sh
     );
 
     // write check-em-dash.sh
@@ -437,23 +387,6 @@ fn scaffoldHusky(io: std.Io, name: []const u8) !void {
         \\fi
         \\exit $STATUS
     );
-
-    // write format-on-commit.sh
-    const format_commit_path = try std.fmt.bufPrint(&buf, "{s}/.husky/format-on-commit.sh", .{name});
-    try templates.writeExecutableFile(io, format_commit_path,
-        \\#!/usr/bin/env bash
-        \\STAGED_FILES=$(git diff --cached --name-only)
-        \\pnpm format
-        \\UNSTAGED_FILES=$(git diff --name-only)
-        \\FILES_TO_RESTAGE=$(comm -12 <(echo "$STAGED_FILES" | sort) <(echo "$UNSTAGED_FILES" | sort))
-        \\if [ -n "$FILES_TO_RESTAGE" ]; then
-        \\  echo "$FILES_TO_RESTAGE" | xargs git add
-        \\  echo "Re-staged formatted files:"
-        \\  echo "$FILES_TO_RESTAGE"
-        \\else
-        \\  echo "All staged files were already properly formatted."
-        \\fi
-    );
 }
 
 fn writePackageJson(io: std.Io, allocator: std.mem.Allocator, name: []const u8) !void {
@@ -463,9 +396,7 @@ fn writePackageJson(io: std.Io, allocator: std.mem.Allocator, name: []const u8) 
         \\  "version": "0.0.0",
         \\  "private": true,
         \\  "scripts": {{
-        \\    "check": "biome check",
-        \\    "lint": "biome lint",
-        \\    "format": "biome format --write",
+        \\    "check": "grimuah check",
         \\    "typecheck": "tsc --noEmit",
         \\    "release": "commit-and-tag-version",
         \\    "release:minor": "commit-and-tag-version --release-as minor",

@@ -5,6 +5,7 @@ const ts = @import("lang/ts.zig");
 const cosmetic = @import("rules/cosmetic.zig");
 const resilience = @import("rules/resilience.zig");
 const behavioural = @import("rules/behavioural.zig");
+const complexity = @import("rules/complexity.zig");
 const hygiene = @import("rules/hygiene.zig");
 const scope = @import("scope.zig");
 
@@ -20,8 +21,8 @@ const scope = @import("scope.zig");
 /// parse is the expensive half of the front-end (measured: 1243ms for 5000
 /// files against 734ms to tokenise) and the token-shaped rules do not need it.
 ///
-/// the messages are byte-identical to the ones the GritQL plugins carry, which
-/// is what `.auto/native-diff.sh` holds biome and this engine to at every check
+/// the messages are the ones the shipped plugin files carried, and
+/// `tests/oracle/` freezes the findings they produced
 
 pub const Severity = enum { err, warn };
 
@@ -39,9 +40,8 @@ pub const Layer = enum {
     structural,
     resilience,
     behavioural,
-    /// the curated native equivalent of biome's `recommended` built-in ruleset.
-    /// these are not a config layer: they are on whenever the native engine is,
-    /// and `--biome` hands the whole built-in pass back to biome instead
+    /// the curated native equivalent of biome's `recommended` built-in ruleset
+    /// these are not a config layer: they are on whenever the engine runs
     hygiene,
 
     pub fn name(self: Layer) []const u8 {
@@ -85,8 +85,8 @@ pub const Context = struct {
     /// visits the whole tree reads this instead of chasing links, which is what
     /// seven rules and the scope pass used to do separately
     walk: []const ir.WalkEntry = &.{},
-    /// whether the hygiene rules run. `--biome` turns them off, because biome's
-    /// own recommended ruleset already covers every one of them
+    /// whether the hygiene rules run. the parity test and the hygiene corpus
+    /// turn them off to isolate the architecture rules
     hygiene: bool = true,
 
     pub fn report(self: *const Context, line: u32, layer: Layer, message: []const u8, severity: Severity) !void {
@@ -106,10 +106,12 @@ pub const Rule = struct {
     message: []const u8,
     syntax: Syntax = .tokens,
     languages: []const Language = &.{.ts},
-    /// true when biome 2.5.11 cannot express the rule at all, so its `.grit`
-    /// file matches nothing and `.auto/native-diff.sh` asserts biome reports
-    /// nothing for it
-    native_only: bool = false,
+    /// `src/lint.zig`, the token engine the native one replaced, implements this
+    /// rule, so `src/rules/parity.zig` can compare the two over real code. a rule
+    /// added after the migration has no twin there: the corpus in
+    /// `tests/oracle/` is what pins it instead, which is why the guard reads
+    /// this field rather than assuming every rule is covered
+    oracle: bool = true,
     match: *const fn (*const Context) anyerror!void,
 };
 
@@ -127,6 +129,11 @@ pub const throw_stmt = "do not use throw; all errors must flow through Operation
 pub const bare_catch = "do not use bare catch with silent failure; log the error or return an Outcome";
 pub const silent_catch = "catch block must handle or log the error, not silently discard it";
 
+/// the rules added from the rule research (`docs/rule-candidates/catalogue.md`).
+/// they are user-facing sentences, so they carry the capital and the full stop
+/// the shipped messages predate
+pub const max_nesting_depth = "This block is nested {d} levels deep. Return early or extract a helper.";
+
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
 pub const unused_import = "This import is unused.";
@@ -143,7 +150,6 @@ pub const all = [_]Rule{
         .layer = .cosmetic,
         .severity = .err,
         .message = em_dash,
-        .native_only = true,
         .match = cosmetic.checkEmDash,
     },
     .{
@@ -157,7 +163,6 @@ pub const all = [_]Rule{
         .severity = .err,
         .message = let_decl,
         .syntax = .ir,
-        .native_only = true,
         .match = resilience.checkLetDeclaration,
     },
     .{
@@ -165,7 +170,6 @@ pub const all = [_]Rule{
         .severity = .err,
         .message = switch_stmt,
         .syntax = .ir,
-        .native_only = true,
         .match = resilience.checkSwitchStatement,
     },
     .{
@@ -222,6 +226,14 @@ pub const all = [_]Rule{
         .severity = .warn,
         .message = silent_catch,
         .match = behavioural.checkSilentCatch,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = max_nesting_depth,
+        .syntax = .ir,
+        .oracle = false,
+        .match = complexity.checkMaxNestingDepth,
     },
     .{
         .layer = .hygiene,

@@ -1,6 +1,5 @@
 const std = @import("std");
 const config = @import("../config.zig");
-const gritql = @import("../gritql.zig");
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !void {
     var parsed = config.load(io, allocator, "architecture.config.json") catch |err| {
@@ -28,9 +27,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8) !
 
     // regenerate architecture.config.json without the removed surface
     try rewriteConfigWithout(io, allocator, &cfg, surface_name);
-
-    // regenerate GritQL rules
-    try gritql.generateRules(io, allocator, ".", &cfg);
 
     std.debug.print("removed surface '{s}'\n", .{surface_name});
 }

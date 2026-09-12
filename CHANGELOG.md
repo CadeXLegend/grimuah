@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [Unreleased]
+
+### ⚠ BREAKING CHANGES
+
+* biome is gone. `grimuah check` no longer takes `--biome` and spawns no subprocess, and `init` writes no `biome.json` and no `.grimuah-rules/` directory. A project that wants biome's own recommended ruleset now runs biome itself, and a project that wants the old GritQL plugin files keeps its own copy. The generated `package.json` drops the `lint` and `format` scripts in favour of `check` running `grimuah check`, and the generated husky hook drops `pnpm lint` and `format-on-commit.sh`.
+
+### Features
+
+* enforce every rule in-process and freeze the findings biome validated in `tests/oracle/`, so the corpus check runs without biome
+
+### Bug Fixes
+
+* read JSX files again: a self-closing element consumed every byte after it, and a binding referenced only by a tag looked unreferenced, so `noUnusedImports` and `noUnusedVariables` now work on `.tsx` and `.jsx`
+* report the escapes from two shipped bans: `as any[]` (and `as any | T`) is a `as any` cast, and `export * from` is a proxy re-export
+* warn when a configured surface's directory is absent, where a typo in `architecture.config.json` used to disable the whole surface in silence
+
+### Features
+
+* add `max-nesting-depth-three`: a statement container may not nest more than three layers deep inside one function, method or class body
+
 ## [0.1.2](https://github.com/CadeXLegend/grimuah/compare/v0.1.1...v0.1.2) (2026-09-01)
 
 

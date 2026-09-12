@@ -6,4 +6,3 @@ zig build
 zig build test
 bash test-e2e.sh
 bash .husky/check-em-dash.sh
-bash .husky/format-on-commit.sh

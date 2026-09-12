@@ -12,8 +12,10 @@ const ir = @import("../ir.zig");
 /// what the lexer handles, because these are the parts a naive scanner gets
 /// wrong: comments, quoted strings with escapes, template literals (the text is
 /// skipped, the `${}` containers are tokenised), regex literals whose `/` would
-/// otherwise look like division, and JSX elements (the tags are skipped, the
-/// `{}` containers are tokenised).
+/// otherwise look like division, and JSX elements. a JSX tag is skipped, its
+/// `{}` containers are tokenised, and the element name it reads is recorded in
+/// `Lexed.jsx_names` instead of the token stream, because a tag name is a
+/// reference an unused-declaration rule has to see and no token rule may match
 ///
 /// what the parser does not model: types beyond their extent, decorators, and
 /// anything it does not recognise. unrecognised input becomes an `.unknown`
@@ -51,11 +53,30 @@ pub const Token = struct {
     }
 };
 
+/// a source file's tokens, plus the references the lexer had to fold away
+pub const Lexed = struct {
+    tokens: []Token,
+    /// the identifiers a JSX element name reads, in source order. a tag leaves
+    /// no token, so `<Panel />` is invisible in `tokens` and this is the only
+    /// record that `Panel` is live
+    jsx_names: []const []const u8,
+};
+
+/// tokenise `source`, dropping the JSX reference list a caller that has no
+/// unused-declaration rule to feed it does not need
 pub fn tokenize(allocator: std.mem.Allocator, source: []const u8, line_out: *u32) ![]Token {
+    const lexed = try tokenizeAll(allocator, source, line_out);
+    allocator.free(lexed.jsx_names);
+    return lexed.tokens;
+}
+
+pub fn tokenizeAll(allocator: std.mem.Allocator, source: []const u8, line_out: *u32) !Lexed {
     var lexer = Lexer{ .source = source, .allocator = allocator };
     try lex(&lexer, .end_of_input);
     line_out.* = lexer.line_number;
-    return lexer.tokens.toOwnedSlice(allocator);
+    const tokens = try lexer.tokens.toOwnedSlice(allocator);
+    errdefer allocator.free(tokens);
+    return .{ .tokens = tokens, .jsx_names = try lexer.jsx_names.toOwnedSlice(allocator) };
 }
 
 /// whether `/` starts a regex, as far as the lexer has worked it out. a word or
@@ -68,8 +89,24 @@ const Lexer = struct {
     pos: usize = 0,
     line_number: u32 = 1,
     tokens: std.ArrayList(Token) = .empty,
+    /// the JSX element names a tag reads. they stay out of `tokens` so no token
+    /// rule can match inside a tag, and they are slices of `source`
+    jsx_names: std.ArrayList([]const u8) = .empty,
     allocator: std.mem.Allocator,
     regex_state: RegexState = .allowed,
+
+    /// record the identifier a JSX element name reads. `<div />` names an
+    /// intrinsic and an attribute name names a prop, so neither is a reference
+    /// to a binding. a component name is: an uppercase name itself, or the root
+    /// of a dotted name, because `<Panel.Item />` reads `Panel` and then a
+    /// property of it
+    fn recordJsxElementName(self: *Lexer, start: usize, end: usize) !void {
+        const name = self.source[start..end];
+        if (name.len == 0) return;
+        const dotted = end < self.source.len and self.source[end] == '.';
+        if (!dotted and !isUpperAscii(name[0])) return;
+        try self.jsx_names.append(self.allocator, name);
+    }
 
     fn push(self: *Lexer, kind: TokenKind, start: usize, end: usize, line: u32) !void {
         try self.tokens.append(self.allocator, .{
@@ -311,6 +348,7 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
     const start_pos = lexer.pos;
     const start_line = lexer.line_number;
     const start_tokens = lexer.tokens.items.len;
+    const start_jsx_names = lexer.jsx_names.items.len;
     const start_regex_state = lexer.regex_state;
     var i = lexer.pos;
     var depth: usize = 0;
@@ -348,6 +386,10 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
             }
             if (!isIdentifierStart(next)) break;
             saw_element = true;
+            // the element name, the only part of a tag that reads a binding
+            var name_end = i + 1;
+            while (name_end < source.len and isIdentifierContinue(source[name_end])) name_end += 1;
+            try lexer.recordJsxElementName(i + 1, name_end);
             // opening tag: skip attributes until the tag ends
             var j = i + 1;
             var self_closing = false;
@@ -385,6 +427,11 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
             if (j >= source.len) break;
             if (self_closing) {
                 i = j + 2;
+                // a self-closing element at the top level is the whole element.
+                // scanning on treats every later `<` as a sibling and skips the
+                // code between them, which is how a file lost every finding past
+                // its first `<Panel />`
+                if (depth == 0) break;
                 continue;
             }
             i = j + 1;
@@ -409,8 +456,10 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
         lexer.pos = start_pos;
         lexer.line_number = start_line;
         // a `{ ... }` container scanned before the element proved false already
-        // pushed its tokens, so the fallback has to drop them too
+        // pushed its tokens, and that container may have held a nested element,
+        // so the fallback has to drop both lists back to where it started
         lexer.tokens.shrinkRetainingCapacity(start_tokens);
+        lexer.jsx_names.shrinkRetainingCapacity(start_jsx_names);
         lexer.regex_state = start_regex_state;
         return false;
     }
@@ -443,6 +492,12 @@ const identifier_bytes = struct {
 
 fn isIdentifierStart(char: u8) bool {
     return identifier_bytes.start[char];
+}
+
+/// whether a byte is an ASCII capital. a JSX element name that starts with one
+/// reads a binding, and a lowercase name is an intrinsic string like `div`
+fn isUpperAscii(byte: u8) bool {
+    return byte >= 'A' and byte <= 'Z';
 }
 
 pub fn isIdentifierContinue(char: u8) bool {
@@ -559,6 +614,61 @@ test "tokenize keeps operators distinct and tracks lines" {
     try testing.expectEqual(@as(u32, 5), tokens[1].end);
     try testing.expectEqual(@as(u32, 8), tokens[3].start);
     try testing.expectEqual(@as(u32, 10), tokens[3].end);
+}
+
+test "a self-closing jsx element does not swallow the rest of the file" {
+    const a = testing.allocator;
+    const source =
+        \\const Widget = (): unknown => <Panel />;
+        \\void Widget;
+        \\
+    ;
+    var line: u32 = 1;
+    const lexed = try tokenizeAll(a, source, &line);
+    defer a.free(lexed.tokens);
+    defer a.free(lexed.jsx_names);
+
+    var saw_widget_reference = false;
+    for (lexed.tokens) |token| {
+        if (token.isWord("Widget") and token.line == 2) saw_widget_reference = true;
+    }
+    try testing.expect(saw_widget_reference);
+    try testing.expectEqual(@as(usize, 1), lexed.jsx_names.len);
+    try testing.expectEqualStrings("Panel", lexed.jsx_names[0]);
+}
+
+test "a jsx element name is recorded, an intrinsic and an attribute are not" {
+    const a = testing.allocator;
+    const source =
+        \\const view = <div className="x"><Panel.Item title={1} /></div>;
+        \\
+    ;
+    var line: u32 = 1;
+    const lexed = try tokenizeAll(a, source, &line);
+    defer a.free(lexed.tokens);
+    defer a.free(lexed.jsx_names);
+
+    try testing.expectEqual(@as(usize, 1), lexed.jsx_names.len);
+    try testing.expectEqualStrings("Panel", lexed.jsx_names[0]);
+}
+
+test "a generic arrow records no jsx element name" {
+    const a = testing.allocator;
+    const source =
+        \\const pickRandom = <T>(options: readonly T[]): T => options[0];
+        \\void pickRandom;
+        \\
+    ;
+    var line: u32 = 1;
+    const lexed = try tokenizeAll(a, source, &line);
+    defer a.free(lexed.tokens);
+    defer a.free(lexed.jsx_names);
+
+    try testing.expectEqual(@as(usize, 0), lexed.jsx_names.len);
+    for (lexed.tokens) |token| {
+        if (token.isWord("pickRandom") and token.line == 2) return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 test "tokenize matches every operator at its longest form" {

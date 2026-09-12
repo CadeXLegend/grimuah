@@ -9,7 +9,9 @@ const ts = @import("lang/ts.zig");
 /// syntactic position the parser already records, and the token stream for the
 /// references, because the tree deliberately drops two things a reference can
 /// live in: type positions and shorthand object properties. a binding used only
-/// as a type, or only as `{ name }`, is used
+/// as a type, or only as `{ name }`, is used. `jsx_names` carries the third
+/// place a reference hides: a JSX tag leaves no token, so a component written
+/// as `<Panel />` is referenced only through the name the lexer recorded
 ///
 /// the analysis is file-level, not scope-level: a name used anywhere in the file
 /// keeps every binding of that name alive. shadowing can therefore only hide a
@@ -71,7 +73,13 @@ pub const Table = struct {
     }
 };
 
-pub fn analyze(allocator: std.mem.Allocator, module: *const ir.Module, tokens: []const ts.Token, walk: []const ir.WalkEntry) !Table {
+pub fn analyze(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    jsx_names: []const []const u8,
+    walk: []const ir.WalkEntry,
+) !Table {
     var bindings: std.ArrayList(Binding) = .empty;
     errdefer bindings.deinit(allocator);
 
@@ -187,6 +195,15 @@ pub fn analyze(allocator: std.mem.Allocator, module: *const ir.Module, tokens: [
             try writes.append(allocator, .{ .name = token.text, .block = blockAt(blocks, token.start) });
         }
 
+        state.referenced = true;
+    }
+
+    // a JSX element name is a read and never a write, so it can only keep a
+    // binding alive: `<Panel />` marks `Panel` used without touching its
+    // assignment counts
+    for (jsx_names) |name| {
+        if (!name_filter.couldName(name)) continue;
+        const state = names.getPtr(name) orelse continue;
         state.referenced = true;
     }
 
@@ -509,13 +526,14 @@ fn analyzeSource(allocator: std.mem.Allocator, source: []const u8) !Analyzed {
     try testing.expectEqual(@as(usize, 0), module.unknownCount());
 
     var line: u32 = 1;
-    const tokens = try ts.tokenize(allocator, source, &line);
-    defer allocator.free(tokens);
+    const lexed = try ts.tokenizeAll(allocator, source, &line);
+    defer allocator.free(lexed.tokens);
+    defer allocator.free(lexed.jsx_names);
 
     const walk = try module.walkOrder(allocator);
     defer allocator.free(walk);
 
-    const table = try analyze(allocator, &module, tokens, walk);
+    const table = try analyze(allocator, &module, lexed.tokens, lexed.jsx_names, walk);
     return .{ .module = module, .table = table };
 }
 

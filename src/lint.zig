@@ -1,36 +1,27 @@
 const std = @import("std");
 const config = @import("config.zig");
 
-/// grimuah's own GritQL rules enforced in-process instead of through biome's
-/// plugin engine. biome charges one full syntax-tree traversal per plugin file
-/// per source file (~300-900us, measured) whether or not the pattern can match,
-/// which is ~64% of biome's CPU on a lint run; a tokeniser over the same bytes
-/// costs a fraction of that.
+/// grimuah's own rules enforced in-process. they once shipped as GritQL plugin
+/// files, and biome charged one full syntax-tree traversal per plugin file per
+/// source file (~300-900us, measured) whether or not the pattern could match,
+/// which was ~64% of biome's CPU on a lint run. biome is gone, so the plugin
+/// engine and its files are too
 ///
-/// semantics are pinned to biome 2.5.11 with `.grimuah-rules/*.grit` loaded.
-/// two things about that behaviour are worth knowing:
+/// the semantics were pinned to biome 2.5.11 while it was the oracle, and
+/// `tests/oracle/` holds the findings it validated. three behaviours are worth
+/// knowing:
 ///
-///   - `cosmetic-em-dash.grit`, `resilience-let.grit` and
-///     `resilience-switch.grit` match nothing at all in biome 2.5.11. biome's
-///     GritQL subset cannot compile those patterns and discards them without a
-///     word (12 variants measured, every one silently ignored) while the same
-///     files are full of em-dashes, `let` and `switch`. this module enforces
-///     them, so they are native-only rules: `.auto/native-diff.sh` asserts at
-///     every check that biome's engine reports nothing for them, and
-///     `gritql.nativeOnlyMessages()` is the single source for that set
-///   - `let` is matched as a declaration (`let x`, `let {a}`, `let [a]`), which
-///     is wider than the shipped pattern's `let $name = $value`: a declaration
-///     with no initializer has no value for that pattern to bind to, and the
-///     rule bans the keyword. `o.let` and the `let` key in `{ let: string }`
-///     are not declarations and stay silent
-///   - plugin diagnostics carry biome severities. errors fail the check,
-///     warnings do not, and biome's output is only surfaced when it exits
-///     non-zero, so a warnings-only project prints nothing. check.zig keeps that
-///     behaviour by holding native warnings back unless something else failed
-///
-/// a check is only enabled when the project's biome.json lists exactly the
-/// canonical rule set, because `biome --skip=plugin` cannot skip a subset: a
-/// project with its own plugins still runs biome's plugin engine (see check.zig)
+///   - `cosmetic-em-dash`, `resilience-let` and `resilience-switch` matched
+///     nothing at all in biome 2.5.11: its GritQL subset could not compile those
+///     patterns and discarded them without a word (12 variants measured, every
+///     one silently ignored) while real files are full of em-dashes, `let` and
+///     `switch`. this module enforces all three
+///   - `let` is matched as a declaration (`let x`, `let {a}`, `let [a]`). a
+///     declaration with no initializer carries no value to bind, and the rule
+///     bans the keyword. `o.let` and the `let` key in `{ let: string }` are not
+///     declarations and stay silent
+///   - findings carry their original severities. errors fail the check, warnings
+///     do not, and a warnings-only project still prints nothing
 
 pub const Severity = enum { err, warn };
 
@@ -42,7 +33,8 @@ pub const Finding = struct {
     severity: Severity,
 };
 
-/// messages are byte-identical to the GritQL `register_diagnostic` ones
+/// messages are the ones the GritQL `register_diagnostic` calls carried, so a
+/// project that ran the plugin engine before reads the same text today
 const msg = struct {
     const null_literal = "do not use null; use undefined. null only at third-party boundaries (DB, RegExp)";
     const imperative_for = "do not use imperative for loops; use map, filter, reduce, or for..of instead";
@@ -132,12 +124,11 @@ fn isLintableSource(name: []const u8) bool {
     return false;
 }
 
-/// every live pattern needs one of these in the source, so a file without any of
-/// them cannot produce a diagnostic and never needs tokenising. this is a fast
-/// path in front of the tokeniser, nothing more: it may only *over*-include, and
-/// `.auto/native-diff.sh` proves over the bench repos, sleepy and the committed
-/// corpus that no file it skips was carrying a finding. every needle is the
-/// literal a pattern matches, so keep it in step with `src/gritql.zig`
+/// every live rule needs one of these in the source, so a file without any of
+/// them cannot produce a finding and never needs tokenising. this is a fast path
+/// in front of the tokeniser, nothing more: it may only over-include, and
+/// `tests/oracle/` plus the bench prove that no file it skips carried a finding
+/// each needle is the literal its rule matches, so keep the two in step
 fn maybeTrigger(content: []const u8) bool {
     if (containsWord(content, "null")) return true;
     if (containsWord(content, "let")) return true;
@@ -363,14 +354,14 @@ fn checkDoubleEquals(ctx: Ctx, tokens: []const Token) !void {
     }
 }
 
-/// `` `$expr as any` `` -- the type must be exactly `any`, so `as any[]`,
-/// `as any | T` and `: any` annotations do not match
+/// `` `$expr as any` `` -- the cast names `any`, whether it stands alone
+/// (`as any`), carries a collection (`as any[]`) or joins a union
+/// (`as any | T`). `: any` annotations and `import type` clauses are not casts
 fn checkAsAny(ctx: Ctx, tokens: []const Token) !void {
     for (tokens, 0..) |token, i| {
         if (!isWord(token, "as")) continue;
         if (inImportClause(tokens, i)) continue;
         if (i + 1 >= tokens.len or !isWord(tokens[i + 1], "any")) continue;
-        if (i + 2 < tokens.len and continuesType(tokens[i + 2])) continue;
         try ctx.report(token.line, "resilience", msg.as_any, .err);
     }
 }
@@ -389,13 +380,19 @@ fn checkChainedCast(ctx: Ctx, tokens: []const Token) !void {
     }
 }
 
-/// `` `export { $names } from $module` ``. `export type { ... } from`,
-/// `export * from` and a local `export { a }` all stay silent
+/// `` `export { $names } from $module` `` and `` `export * from $module` ``.
+/// `export type { ... } from` and a local `export { a }` stay silent
 fn checkReexport(ctx: Ctx, tokens: []const Token) !void {
     for (tokens, 0..) |token, i| {
         if (!isWord(token, "export")) continue;
         if (isMemberAccess(tokens, i)) continue;
-        if (i + 1 >= tokens.len or !isPunct(tokens[i + 1], "{")) continue;
+        if (i + 1 >= tokens.len) continue;
+
+        if (isPunct(tokens[i + 1], "*")) {
+            try ctx.report(token.line, "resilience", msg.reexport, .err);
+            continue;
+        }
+        if (!isPunct(tokens[i + 1], "{")) continue;
 
         const close = matchingBracket(tokens, i + 1) orelse continue;
         if (close + 1 >= tokens.len or !isWord(tokens[close + 1], "from")) continue;
@@ -561,17 +558,6 @@ fn inImportClause(tokens: []const Token, i: usize) bool {
         if (j == 0) return false;
         const before = tokens[j - 1];
         return isWord(before, "import") or isWord(before, "export") or isWord(before, "type");
-    }
-    return false;
-}
-
-/// token that can follow a cast type only if the type is too short to be a
-/// chain: `as any[]`, `as any | T`, `as A.B`
-fn continuesType(token: Token) bool {
-    if (token.kind != .punct) return false;
-    const continuations = [_][]const u8{ "[", "<", "|", "&", "." };
-    for (continuations) |text| {
-        if (std.mem.eql(u8, token.text, text)) return true;
     }
     return false;
 }
@@ -986,6 +972,11 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
             if (j >= source.len) break;
             if (self_closing) {
                 i = j + 2;
+                // a self-closing element at the top level is the whole element.
+                // scanning on treats every later `<` as a sibling and skips the
+                // code between them, which is how a file lost every finding past
+                // its first `<Panel />`
+                if (depth == 0) break;
                 continue;
             }
             i = j + 1;
@@ -1137,20 +1128,6 @@ test "native-only rules match the committed corpus expectations" {
     }
 }
 
-test "the native-only rules match gritql's native-only set" {
-    const gritql = @import("gritql.zig");
-    const enforced = [_][]const u8{ msg.em_dash, msg.let_decl, msg.switch_stmt };
-    const native_only = gritql.nativeOnlyMessages();
-    try testing.expectEqual(native_only.len, enforced.len);
-    for (enforced) |want| {
-        var found = false;
-        for (native_only) |message| {
-            if (std.mem.eql(u8, message, want)) found = true;
-        }
-        try testing.expect(found);
-    }
-}
-
 const testing = std.testing;
 
 const all_layers = config.Config{
@@ -1207,12 +1184,14 @@ test "double equals is flagged, === and != are not" {
     try expectCount(a, "export const s = \"a == b\";\n", msg.double_equals, 0);
 }
 
-test "as any matches only a bare any type" {
+test "as any matches the type the cast names, and not an annotation" {
     const a = testing.allocator;
     try expectCount(a, "export const f = (y: unknown): string => y as any;\n", msg.as_any, 1);
-    try expectCount(a, "export const f = (y: unknown): string[] => y as any[];\n", msg.as_any, 0);
-    try expectCount(a, "export const f = (y: unknown): string | number => y as any | number;\n", msg.as_any, 0);
+    try expectCount(a, "export const f = (y: unknown): string[] => y as any[];\n", msg.as_any, 1);
+    try expectCount(a, "export const f = (y: unknown): string | number => y as any | number;\n", msg.as_any, 1);
+    try expectCount(a, "export const f = (y: unknown): string => y as any as string;\n", msg.as_any, 1);
     try expectCount(a, "export const f = (x: any): any => x;\n", msg.as_any, 0);
+    try expectCount(a, "export type T = any;\n", msg.as_any, 0);
     try expectCount(a, "import { a as any } from \"./a\";\n", msg.as_any, 0);
     try expectCount(a, "export { a as any } from \"./a\";\n", msg.as_any, 0);
 }
@@ -1227,14 +1206,15 @@ test "chained casts only match nested as-expressions" {
     try expectCount(a, "export const a = (x: unknown): string => x as string;\nexport const c = (y: unknown): number => y as number as number;\n", msg.chained_cast, 1);
 }
 
-test "proxy re-exports are flagged, type exports and stars are not" {
+test "proxy re-exports are flagged, a local export and a type export are not" {
     const a = testing.allocator;
     try expectCount(a, "export { a } from \"./a\";\n", msg.reexport, 1);
     try expectCount(a, "export {\n  a,\n} from \"./a\";\n", msg.reexport, 1);
     try expectCount(a, "export { a as b } from \"./a\";\n", msg.reexport, 1);
     try expectCount(a, "export {} from \"./a\";\n", msg.reexport, 1);
+    try expectCount(a, "export * from \"./a\";\n", msg.reexport, 1);
+    try expectCount(a, "export * as ns from \"./a\";\n", msg.reexport, 1);
     try expectCount(a, "export type { A } from \"./a\";\n", msg.reexport, 0);
-    try expectCount(a, "export * from \"./a\";\n", msg.reexport, 0);
     try expectCount(a, "const a = 1;\nexport { a };\n", msg.reexport, 0);
 }
 

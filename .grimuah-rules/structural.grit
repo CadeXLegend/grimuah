@@ -1,9 +1,0 @@
-engine biome(1.0)
-
-// structural: graph integrity
-// enforced by CLI pre-passes, not GritQL
-// folder-as-suffix naming, import firewall, centralized directory detection,
-// singleton warnings, innate member depth scoping
-// see: grimuah check
-
-`undefined` where {}

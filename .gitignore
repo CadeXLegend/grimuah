@@ -7,6 +7,9 @@ zig-out/
 .pi-subagents/
 .rpiv/
 
+# local measurement harness, machine-bound paths (see the optimise-grimuah-performance skill)
+.auto/
+
 # package managers
 node_modules/
 

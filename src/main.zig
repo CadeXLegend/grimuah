@@ -26,7 +26,6 @@ test {
     _ = @import("rules/hygiene.zig");
     _ = @import("rules/parity.zig");
     _ = @import("scope.zig");
-    _ = @import("gritql.zig");
     _ = @import("ir.zig");
     _ = @import("lang/ts.zig");
     _ = @import("lint.zig");
@@ -59,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
 
         try initCmd.run(allocator, io, project_name, preset_name);
     } else if (std.mem.eql(u8, command, "check")) {
-        try checkCmd.run(allocator, io, hasFlag(args, "--biome"));
+        try checkCmd.run(allocator, io);
     } else if (std.mem.eql(u8, command, "add")) {
         const surface_name = if (args.len > 2 and !std.mem.startsWith(u8, args[2], "--")) args[2] else null orelse {
             std.debug.print("usage: grimuah add <surface> [--path <dir>]\n", .{});
@@ -94,26 +93,19 @@ fn parseFlag(args: []const [:0]const u8, flag: []const u8) ?[]const u8 {
     return null;
 }
 
-fn hasFlag(args: []const [:0]const u8, flag: []const u8) bool {
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, flag)) return true;
-    }
-    return false;
-}
-
 fn printUsage() void {
     std.debug.print(
         \\grimuah :  scaffold enforceably-structured TypeScript projects
         \\
         \\usage:
         \\  grimuah init [name] [--preset <name>]   (summon is an alias)
-        \\  grimuah check [--biome]
+        \\  grimuah check
         \\  grimuah add <surface> [--path <dir>]
         \\  grimuah remove <surface>
         \\  grimuah upgrade
         \\
-        \\check runs grimuah's rules and its built-in hygiene rules in-process.
-        \\--biome adds biome's own recommended ruleset, which needs biome installed.
+        \\check runs grimuah's architecture rules and its built-in hygiene rules
+        \\in-process, with no subprocess and no other linter involved
         \\
         \\presets: default, webapp, cli, backend, bot
         \\

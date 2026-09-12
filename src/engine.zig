@@ -33,8 +33,9 @@ const parallel_min_files = 64;
 
 /// scan every lintable source file under `project_root` and return the findings
 ///
-/// `hygiene` runs the native equivalent of biome's built-in ruleset. it is off
-/// only under `--biome`, where biome's own ruleset is the one that runs
+/// `hygiene` runs the native equivalent of the built-in ruleset biome used to
+/// provide. it is always on now, and it is a parameter only so the corpus tests
+/// can isolate the architecture rules
 ///
 /// the front-end is per file and shares nothing, so a repo with work to spread
 /// runs it on several cores. findings are merged in walk order, which is the
@@ -379,8 +380,12 @@ pub fn lintContent(
     teardown: Teardown,
 ) !void {
     var number_line: u32 = 1;
-    const tokens = try ts.tokenize(frontend_allocator, content, &number_line);
-    defer if (teardown == .owned) frontend_allocator.free(tokens);
+    const lexed = try ts.tokenizeAll(frontend_allocator, content, &number_line);
+    const tokens = lexed.tokens;
+    defer if (teardown == .owned) {
+        frontend_allocator.free(tokens);
+        frontend_allocator.free(lexed.jsx_names);
+    };
 
     var parsed: ?ir.Module = null;
     defer if (teardown == .owned) {
@@ -401,7 +406,7 @@ pub fn lintContent(
         if (scopes) |*table| table.deinit();
     };
     if (hygiene) {
-        if (parsed) |*module| scopes = scope.analyze(frontend_allocator, module, tokens, walk) catch null;
+        if (parsed) |*module| scopes = scope.analyze(frontend_allocator, module, tokens, lexed.jsx_names, walk) catch null;
     }
 
     var context = rules.Context{

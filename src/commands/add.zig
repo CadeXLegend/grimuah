@@ -1,7 +1,6 @@
 const std = @import("std");
 const config = @import("../config.zig");
 const templates = @import("../templates.zig");
-const gritql = @import("../gritql.zig");
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8, requested_path: ?[]const u8) !void {
     var parsed = config.load(io, allocator, "architecture.config.json") catch |err| {
@@ -64,9 +63,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8, r
 
     // regenerate architecture.config.json with new surface
     try rewriteConfig(io, allocator, &cfg, surface_name, surface_path, new_depth, new_dag_order, suffixes, &innateMembers, allowed.items);
-
-    // regenerate GritQL rules
-    try gritql.generateRules(io, allocator, ".", &cfg);
 
     std.debug.print("added surface '{s}' at {s} (dagOrder {d})\n", .{ surface_name, surface_path, new_dag_order });
 }

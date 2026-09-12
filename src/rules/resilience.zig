@@ -68,17 +68,17 @@ pub fn checkDoubleEquals(context: *const root.Context) !void {
     }
 }
 
-/// `` `$expr as any` `` -- the type must be exactly `any`, so `as any[]`,
-/// `as any | T` and `: any` annotations do not match. the tree stores a cast's
-/// type as text, which cannot tell `as any` from `as any[]` here without
-/// re-reading that text, so the token form stays
+/// `` `$expr as any` `` -- the cast names `any`, whether it stands alone
+/// (`as any`), carries a collection (`as any[]`) or joins a union
+/// (`as any | T`). the ban's message covers all three, and matching only the
+/// bare form left the escape hatch one word wide. `: any` annotations and
+/// `import type` clauses are not casts and stay out
 pub fn checkAsAny(context: *const root.Context) !void {
     const tokens = context.tokens;
     for (tokens, 0..) |token, i| {
         if (!token.isWord("as")) continue;
         if (tokens_mod.inImportClause(tokens, i)) continue;
         if (i + 1 >= tokens.len or !tokens[i + 1].isWord("any")) continue;
-        if (i + 2 < tokens.len and tokens_mod.continuesType(tokens[i + 2])) continue;
         try context.report(token.line, .resilience, root.as_any, .err);
     }
 }
@@ -96,16 +96,22 @@ pub fn checkChainedCast(context: *const root.Context) !void {
     }
 }
 
-/// `` `export { $names } from $module` ``. `export type { ... } from`,
-/// `export * from` and a local `export { a }` all stay silent, and the tree's
-/// reexport node does not separate the `{ ... }` form from `export * as ns`, so
-/// the token shape is what the rule reads
+/// `` `export { $names } from $module` `` and `` `export * from $module` ``,
+/// which re-export code the file does not define. `export type { ... } from`
+/// and a local `export { a }` stay silent. the star form is one word wide of
+/// the `{ ... }` form and the ban's message covers it, so it is a match
 pub fn checkReexport(context: *const root.Context) !void {
     const tokens = context.tokens;
     for (tokens, 0..) |token, i| {
         if (!token.isWord("export")) continue;
         if (tokens_mod.isMemberAccess(tokens, i)) continue;
-        if (i + 1 >= tokens.len or !tokens[i + 1].isPunct("{")) continue;
+        if (i + 1 >= tokens.len) continue;
+
+        if (tokens[i + 1].isPunct("*")) {
+            try context.report(token.line, .resilience, root.reexport, .err);
+            continue;
+        }
+        if (!tokens[i + 1].isPunct("{")) continue;
 
         const close = tokens_mod.matchingBracket(tokens, i + 1) orelse continue;
         if (close + 1 >= tokens.len or !tokens[close + 1].isWord("from")) continue;

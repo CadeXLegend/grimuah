@@ -1,0 +1,101 @@
+src/components:0: [structural] surface 'components' names the directory src/components/, which does not exist; create it or drop the surface from architecture.config.json
+src/probe/asany-arr.ts:3: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asany.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asany-union.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/asconst-local.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
+src/probe/asconst.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
+src/probe/barecatch-comment.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/barecatch-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/barecatch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/barecatch.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/barecatch-ws.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/barecatch-ws.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/c-both-catch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/c-both-catch.ts:4: [hygiene] This variable e is unused.
+src/probe/c-comment-only-bound.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/c-comment-only-bound.ts:4: [hygiene] This variable e is unused.
+src/probe/chained-paren.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/chained.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/c-nested-empty.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/c-nested-empty.ts:7: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/c-nested-empty.ts:7: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/c-throw-noval.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/d-as-generic.ts:2: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/d-as-generic.ts:2: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-as-newline.ts:2: [hygiene] This variable b is unused.
+src/probe/d-as-newline.ts:3: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-as-object-type.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-as-union.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/d-destructure-asconst.ts:2: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
+src/probe/d-export-brace-multiline.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/d-export-brace-nested.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/d-foo-qualified.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-nested.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/d-for-nested.ts:3: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
+src/probe/d-for-nested.ts:3: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/d-for-parens.ts:2: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
+src/probe/d-for-parens.ts:3: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-parens.ts:4: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-parens.ts:5: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-multiline-asconst.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
+src/probe/d-null-arrow.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/d-null-objectkey.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/d-throw-cond.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/d-two-as.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/emdash-comment.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
+src/probe/emdash-string.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
+src/probe/emdash-template.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
+src/probe/eq-double.ts:1: [resilience] use === instead of == to avoid type coercion bugs
+src/probe/e-return-in-string.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/for-cstyle.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/for-cstyle.ts:3: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
+src/probe/for-cstyle.ts:3: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/for-empty-init.ts:2: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
+src/probe/for-global.ts:2: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
+src/probe/for-in.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/for-of.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/handled-comment.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/handled-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/handled-throw.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/let-destructure.ts:2: [hygiene] This let declares a variable that is only assigned once.
+src/probe/let-destructure.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/let-init.ts:2: [hygiene] This let declares a variable that is only assigned once.
+src/probe/let-init.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/let-noinit.ts:2: [hygiene] This let declares a variable that is only assigned once.
+src/probe/let-noinit.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/let-typed.ts:2: [hygiene] This let declares a variable that is only assigned once.
+src/probe/let-typed.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/let-var.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/nesting-depth.ts:7: [resilience] This block is nested 4 levels deep. Return early or extract a helper.
+src/probe/nesting-depth.ts:8: [resilience] This block is nested 5 levels deep. Return early or extract a helper.
+src/probe/null-lit.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-prop.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-prop.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-type.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/reexport-empty.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/reexport-star.ts:3: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/reexport.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/sheet.js:1: [resilience] use === instead of == to avoid type coercion bugs
+src/probe/silent-catch-bound.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/silent-catch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/switch-basic.ts:2: [resilience] do not use switch; use a dispatch table (Record/Map) instead
+src/probe/switch-stmt.ts:2: [resilience] do not use switch; use a dispatch table (Record/Map) instead
+src/probe/throw-stmt.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/x-catch-destructure.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
+src/probe/y-dead-only.ts:11: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
+src/probe/y-dead-only.ts:12: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
+src/probe/y-dead-only.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/y-dead-only.ts:3: [resilience] do not use switch; use a dispatch table (Record/Map) instead
+src/probe/y-reexport-comment.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/y-reexport-line-comment.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/y-reexport-newline.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/z-jsx-text.tsx:4: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/z-jsx-text.tsx:5: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/services:0: [structural] surface 'services' names the directory src/services/, which does not exist; create it or drop the surface from architecture.config.json
+src/utils:0: [structural] surface 'utils' names the directory src/utils/, which does not exist; create it or drop the surface from architecture.config.json

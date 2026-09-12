@@ -2,7 +2,6 @@
 
 [![Zig](https://img.shields.io/badge/language-Zig-%23F7A41D)](https://ziglang.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6)](https://www.typescriptlang.org/)
-[![Biome](https://img.shields.io/badge/linter-Biome-8f36c9)](https://biomejs.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/CadeXLegend/grimuah/build.yml)](https://github.com/CadeXLegend/grimuah/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah?color=blue)](https://github.com/CadeXLegend/grimuah/releases)
@@ -79,12 +78,10 @@ pick whichever flavour you like
 
 - the folder structure
 - the architecture config
-- the biome config
 - the tsconfig
 - `package.json`
 - `.gitignore`
 - husky pre-commit hooks
-- the GritQL rule files
 
 five presets ship with the binary: `default`, `webapp`, `cli`, `backend`, `bot`
 
@@ -95,7 +92,7 @@ up to six yes or no questions add optional surfaces on top
 ### enforce the architecture
 
 ```sh
-grimuah check        # pre-passes plus biome lint, both must pass
+grimuah check        # the pre-passes plus the rule engine, in one process
 grimuah add guard    # new surface, rules regenerate
 grimuah upgrade      # sync to the closest preset
 ```
@@ -108,7 +105,7 @@ pnpm typecheck
 grimuah check
 ```
 
-`grimuah check` runs biome lint itself, so it replaces the `pnpm lint` line
+`grimuah check` needs no subprocess and no other linter installed, so it is the only lint step a project needs
 
 other commands are documented in [presets and commands](#presets-and-commands)
 
@@ -198,7 +195,7 @@ the import graph is declared in `architecture.config.json`
 
 file naming, suffix conventions, and surface membership are checked by CLI pre-passes
 
-AST-level patterns are enforced by GritQL plugins running in Biome
+AST-level patterns are enforced by grimuah's own rule engine, in-process
 
 ---
 
@@ -605,21 +602,23 @@ switch statements, c-style for loops, let bindings, null literals, `as any` cast
 
 throw statements, bare catches, and silent discards are matched the same way
 
-the rules also ship as `.grimuah-rules/*.grit` files referenced from `biome.json`, so a project whose biome config has been customised keeps them enforced by Biome's plugin engine instead
+the rules are enforced by grimuah's engine here, in the same process as the pre-passes
 
-when `biome.json` still lists exactly the scaffolded layout, grimuah skips Biome's plugin engine entirely and enforces the rules itself, which is the fast path
+there is nothing to install and nothing to configure: the engine is the binary
 
-three rules are enforced by grimuah only: em-dashes, `let` bindings and `switch` statements
+this tier used to be a set of GritQL plugin files that biome matched, which cost one full syntax-tree traversal per rule per file whether or not the pattern could match
 
-Biome 2.5.11's GritQL subset cannot compile those patterns and discards them without reporting anything, so no scaffolded project has ever had them enforced by Biome
+the plugin files are gone with biome, and `tests/oracle/` holds the findings the biome engine validated while it was still the oracle
+
+one fact from that history explains why grimuah has a rule engine at all: biome 2.5.11 could not compile the em-dash, `let` and `switch` patterns, and discarded them without reporting anything, so no scaffolded project ever had those three enforced by biome
 
 ### tier two: CLI pre-passes
 
-file-path-level rules run as CLI pre-passes before Biome is invoked
+file-path-level rules run as CLI pre-passes inside `grimuah check`
 
 these operate on the filesystem and file content rather than the syntax tree
 
-the cosmetic and structural layers rely on this tier for rules that GritQL cannot express
+the cosmetic and structural layers rely on this tier for rules that need the filesystem rather than the syntax tree
 
 | Pre-pass                        | What it checks                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -639,7 +638,7 @@ it covers the patterns that appear in practice
 
 ### how they compose
 
-`grimuah check` runs the CLI pre-passes first, then invokes `biome lint`
+`grimuah check` runs the CLI pre-passes first, then the rule engine
 
 both must pass for the check to succeed
 
@@ -683,15 +682,15 @@ adding middleware inserts it between services and components in the DAG order
 
 **`init [name] [--preset <name>]`** (alias `summon`)
 
-scaffolds a new project: folder structure, architecture config, biome config, tsconfig, `package.json`, `.gitignore`, husky pre-commit hooks, and generated GritQL rule files
+scaffolds a new project: folder structure, architecture config, tsconfig, `package.json`, `.gitignore`, and husky pre-commit hooks
 
 interactive refinement asks only about surfaces not already in the chosen preset
 
-templates produce output that passes Biome format without modification
+templates produce output that needs no reformatting
 
 **`check`**
 
-runs CLI pre-passes for cosmetic and structural rules, then invokes `biome lint` for resilience and behavioural rules
+runs CLI pre-passes for cosmetic and structural rules, then the rule engine for resilience and behavioural rules
 
 both tiers must pass for a zero exit code
 
@@ -699,7 +698,7 @@ pre-passes can be skipped by disabling the corresponding layer in the config
 
 **`add <surface-name>`**
 
-creates a new surface directory with an example file, updates `architecture.config.json`, and regenerates GritQL rules
+creates a new surface directory with an example file and updates `architecture.config.json`
 
 suffixes come from a name heuristic:
 
@@ -718,8 +717,6 @@ deletes the surface directory
 strips the surface from `architecture.config.json`, including every `allowedImports` entry across all surfaces
 
 compacts the dagOrder values
-
-regenerates GritQL rules
 
 **`upgrade`**
 

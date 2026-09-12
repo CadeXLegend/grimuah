@@ -9,31 +9,26 @@ const ts = @import("../lang/ts.zig");
 /// the subset is the five rules that catch a defect a compiler will not: an
 /// import nothing reads, a declaration nothing reads, a `let` that never
 /// changes, a condition that ignores its own test, and a statement that cannot
-/// run. biome's remaining recommended rules are deliberately not reimplemented,
-/// and `--biome` hands the whole built-in pass back to biome for a project that
-/// wants them
+/// run. the remaining recommended rules are deliberately not reimplemented, a
+/// decision recorded in `.rpiv/artifacts/designs/native-engine.md`: owning them
+/// means owning their false-positive contract, and the bench cannot vote on a
+/// ruleset it never triggers
 ///
-/// every rule here reads the tree, and three of them read the shared scope pass
-/// (`src/scope.zig`). they are all warnings except the two flow rules, which
-/// biome makes errors, so the exit code a project sees is the one biome gave it
+/// a rule here reads the tree, and three of them read the shared scope pass
+/// (`src/scope.zig`). the two flow rules are errors and the rest are warnings,
+/// the severity each carried in the ruleset this replaces
 
-/// a component or an import referenced only inside JSX looks unreferenced: the
-/// lexer folds a whole element into a skipped region, so `<Panel />` leaves no
-/// token behind. an unused-declaration rule that cannot see those references
-/// would report a live import, which is the one failure a lint gate must not
-/// have, so the two rules stay quiet on a JSX file and their coverage there is
-/// biome's job
-fn isJsxFile(path: []const u8) bool {
-    return std.mem.endsWith(u8, path, ".tsx") or std.mem.endsWith(u8, path, ".jsx");
-}
-
+/// a component or an import referenced only inside JSX is a reference like any
+/// other: the lexer folds a whole element's tags into a skipped region, and
+/// records the element name it reads in `Lexed.jsx_names` instead, which the
+/// scope pass reads alongside the token stream. biome covered JSX hygiene, so
+/// this keeps the parity rather than being an open gap
 /// `_ignored` is the project saying it knows
 fn isIntentionallyUnused(name: []const u8) bool {
     return name.len > 0 and name[0] == '_';
 }
 
 pub fn checkUnusedImports(context: *const root.Context) !void {
-    if (isJsxFile(context.path)) return;
     const table = context.scopes orelse return;
 
     for (table.bindings, 0..) |binding, i| {
@@ -45,7 +40,6 @@ pub fn checkUnusedImports(context: *const root.Context) !void {
 }
 
 pub fn checkUnusedVariables(context: *const root.Context) !void {
-    if (isJsxFile(context.path)) return;
     const table = context.scopes orelse return;
 
     for (table.bindings, 0..) |binding, i| {
@@ -275,57 +269,14 @@ fn startsAtWord(module: *const ir.Module, tokens: []const ts.Token, index: ir.No
     return tokens[token_index].isWord(word);
 }
 
-const testing = std.testing;
-const engine = @import("../engine.zig");
-const config = @import("../config.zig");
-
-/// the findings the hygiene layer reports for `source`, as `line: message`
-fn findingsFor(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
-    const cfg = config.Config{
-        .surfaces = &.{},
-        .layers = .{ .cosmetic = false, .structural = false, .resilience = false, .behavioural = false },
-    };
-
-    var findings: std.ArrayList(engine.Finding) = .empty;
-    defer {
-        for (findings.items) |finding| {
-            allocator.free(finding.path);
-            allocator.free(finding.message);
-        }
-        findings.deinit(allocator);
-    }
-    try engine.lintContent(allocator, allocator, &cfg, &findings, "probe.ts", source, true, .owned);
-
-    var lines: std.ArrayList([]const u8) = .empty;
-    errdefer lines.deinit(allocator);
-    for (findings.items) |finding| {
-        try lines.append(allocator, try std.fmt.allocPrint(allocator, "{d}: {s}", .{ finding.line, finding.message }));
-    }
-    return lines.toOwnedSlice(allocator);
-}
+const probe = @import("probe.zig");
 
 fn expectFindings(source: []const u8, expected: []const []const u8) !void {
-    const a = testing.allocator;
-    const actual = try findingsFor(a, source);
-    defer {
-        for (actual) |line| a.free(line);
-        a.free(actual);
-    }
+    try expectFindingsAt("probe.ts", source, expected);
+}
 
-    for (expected, 0..) |want, index| {
-        if (index >= actual.len) {
-            std.debug.print("missing finding: {s}\n", .{want});
-            return error.TestUnexpectedResult;
-        }
-        if (!std.mem.eql(u8, want, actual[index])) {
-            std.debug.print("finding {d}: want '{s}', got '{s}'\n", .{ index, want, actual[index] });
-            return error.TestUnexpectedResult;
-        }
-    }
-    if (actual.len != expected.len) {
-        for (actual[expected.len..]) |extra| std.debug.print("unexpected finding: {s}\n", .{extra});
-        return error.TestUnexpectedResult;
-    }
+fn expectFindingsAt(path: []const u8, source: []const u8, expected: []const []const u8) !void {
+    return probe.expect(.hygiene, path, source, expected);
 }
 
 test "the five hygiene rules report what they should" {
@@ -369,4 +320,46 @@ test "a binding read only inside its own definition is not reported" {
         \\
     ;
     try expectFindings(source, &.{});
+}
+
+test "a jsx element name is a reference" {
+    // biome reported this shape before it was removed, and the tag leaves no
+    // token, so the element name has to come from the lexer's own record
+    const source =
+        \\import { Panel } from "./panel";
+        \\import { Unused } from "./unused";
+        \\export const App = (): unknown => <Panel />;
+        \\
+    ;
+    try expectFindingsAt("probe.tsx", source, &.{"2: This import is unused."});
+}
+
+test "a dotted jsx element name reads its root" {
+    const source =
+        \\import { Panel } from "./panel";
+        \\import { Unused } from "./unused";
+        \\const Widget = (): unknown => <Panel.Item />;
+        \\void Widget;
+        \\
+    ;
+    try expectFindingsAt("probe.tsx", source, &.{"2: This import is unused."});
+}
+
+test "a lowercase jsx tag is an intrinsic, not a reference" {
+    const source =
+        \\import { div } from "./intrinsic";
+        \\const App = (): unknown => <div />;
+        \\void App;
+        \\
+    ;
+    try expectFindingsAt("probe.tsx", source, &.{"1: This import is unused."});
+}
+
+test "a declaration is live when jsx is its only reader" {
+    const source =
+        \\const Panel = (): unknown => <div />;
+        \\export const App = (): unknown => <Panel />;
+        \\
+    ;
+    try expectFindingsAt("probe.tsx", source, &.{});
 }
