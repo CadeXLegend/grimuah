@@ -147,7 +147,7 @@ pub fn checkMaxCyclomaticComplexity(context: *const root.Context) !void {
     const module = context.module orelse return;
     for (context.walk) |entry| {
         if (!entry.kind.isCallable()) continue;
-        const body = bodyOf(module, entry.index) orelse continue;
+        const body = module.bodyOf(entry.index) orelse continue;
         if (module.kindOf(body) != .block) continue;
 
         const complexity = 1 + pathsIn(module, body);
@@ -253,7 +253,7 @@ pub fn checkMaxFunctionLines(context: *const root.Context) !void {
     const module = context.module orelse return;
     for (context.walk) |entry| {
         if (!entry.kind.isCallable()) continue;
-        const body = bodyOf(module, entry.index) orelse continue;
+        const body = module.bodyOf(entry.index) orelse continue;
         const last = lastTokenOf(module, context.tokens, body) orelse continue;
         const lines = context.tokens[last].line - module.spanOf(body).line;
         if (lines <= function_line_limit) continue;
@@ -284,7 +284,7 @@ pub fn checkMaxParameters(context: *const root.Context) !void {
     const module = context.module orelse return;
     for (context.walk) |entry| {
         if (!entry.kind.isCallable()) continue;
-        if (!hasBody(module, entry.index)) continue;
+        if (module.bodyOf(entry.index) == null) continue;
         const slots = parameterCount(module, context, entry.index) orelse continue;
         if (slots <= parameter_limit) continue;
 
@@ -292,26 +292,6 @@ pub fn checkMaxParameters(context: *const root.Context) !void {
         defer context.allocator.free(message);
         try context.report(module.spanOf(entry.index).line, .resilience, message, .warn);
     }
-}
-
-/// whether a callable has a body. a declaration without one is a signature, and
-/// every arrow has one, because the front-end appends the body last
-fn hasBody(module: *const ir.Module, index: ir.NodeIndex) bool {
-    return bodyOf(module, index) != null;
-}
-
-/// the body a callable was declared with, or null for a signature
-///
-/// the front-end appends the body last, so an arrow's body is its last child
-/// whether that child is a block or an expression. a declaration or a method
-/// that declares no body at all has no block to find
-fn bodyOf(module: *const ir.Module, index: ir.NodeIndex) ?ir.NodeIndex {
-    if (module.kindOf(index) == .arrow) return module.lastChildOf(index);
-    var child = module.firstChildOf(index);
-    while (child) |current| : (child = module.nextSiblingOf(current)) {
-        if (module.kindOf(current) == .block) return current;
-    }
-    return null;
 }
 
 /// the parameter slots a callable declares, or null when it declares no list.

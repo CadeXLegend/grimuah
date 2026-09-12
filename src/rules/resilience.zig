@@ -175,6 +175,91 @@ fn isConstructed(module: *const ir.Module, index: ir.NodeIndex) bool {
     return std.mem.eql(u8, module.nodeOf(parent).operator, "new");
 }
 
+/// a `for..of` whose body builds an array by pushing into it
+///
+/// a loop that pushes is a map, a filter or a reduce written the long way: the
+/// reader has to run the loop in their head to learn what the result holds, and
+/// the accumulator is a mutable binding the rest of the rule set forbids. only a
+/// `for..of` counts, a property call is what counts as pushing (`push(item)` on a
+/// plain function is not this rule's business), and a nested function's `push`
+/// belongs to that function
+pub fn checkForOfAccumulation(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    try visitForOf(module, context, module.root);
+}
+
+fn visitForOf(module: *const ir.Module, context: *const root.Context, index: ir.NodeIndex) anyerror!void {
+    if (isForOf(module, index)) {
+        // a for..of appends its body last, after the declaration and the iterable
+        if (module.lastChildOf(index)) |body| {
+            if (holdsAccumulatorCall(module, body)) {
+                try context.report(module.spanOf(index).line, .resilience, root.for_of_accumulation, .err);
+                return;
+            }
+        }
+    }
+
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        try visitForOf(module, context, current);
+    }
+}
+
+fn isForOf(module: *const ir.Module, index: ir.NodeIndex) bool {
+    if (module.kindOf(index) != .for_stmt) return false;
+    return std.mem.eql(u8, module.nodeOf(index).operator, "of");
+}
+
+/// whether a `push` or `unshift` call sits in `index`'s subtree, skipping the
+/// subtrees of nested functions
+fn holdsAccumulatorCall(module: *const ir.Module, index: ir.NodeIndex) bool {
+    if (module.kindOf(index) == .call) {
+        const callee = module.firstChildOf(index) orelse return false;
+        if (module.kindOf(callee) == .member) {
+            const name = module.nodeOf(callee).name;
+            if (std.mem.eql(u8, name, "push") or std.mem.eql(u8, name, "unshift")) return true;
+        }
+    }
+
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        if (module.kindOf(current).isCallable()) continue;
+        if (holdsAccumulatorCall(module, current)) return true;
+    }
+    return false;
+}
+
+const probe = @import("probe.zig");
+
+test "a for..of that pushes into an array is reported, and the neighbouring shapes are not" {
+    const source =
+        \\export function collect(records: readonly string[]): string[] {
+        \\  const names: string[] = [];
+        \\  for (const record of records) {
+        \\    names.push(record);
+        \\  }
+        \\  while (names.length < 3) {
+        \\    names.push(records[names.length]);
+        \\  }
+        \\  for (const record of records) {
+        \\    const take = (): void => {
+        \\      names.push(record);
+        \\    };
+        \\    handTo(take);
+        \\  }
+        \\  for (const record of records) {
+        \\    push(record);
+        \\  }
+        \\  names.unshift("");
+        \\  return names;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "3: This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.",
+    });
+}
+
 /// a `.all()` read whose `prepare` chain carries no LIMIT
 ///
 /// the chain is walked down from the `.all()` call rather than up from the
@@ -276,8 +361,6 @@ fn holds(text: []const u8, word: []const u8, whole_word: bool) bool {
 fn isWordByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
-
-const probe = @import("probe.zig");
 
 test "a collection read with no LIMIT is reported, and the exclusions hold" {
     const source =

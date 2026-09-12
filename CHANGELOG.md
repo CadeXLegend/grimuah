@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `no-await-in-loop`: an `await` in a loop body serialises its iterations
 * add `max-cyclomatic-complexity`: a function may not hold more than 15 independent paths
 * add `require-limit-on-collection-reads`: a query that reads a collection must carry a LIMIT
+* add `no-for-of-push-accumulation`: a `for..of` loop may not build an array by pushing into it
 
 ### Bug Fixes
 

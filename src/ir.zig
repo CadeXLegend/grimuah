@@ -381,9 +381,41 @@ pub const Module = struct {
     pub fn childrenOf(self: *const Module, index: NodeIndex) Children {
         return .{ .module = self, .current = self.nodes.items[index].first_child };
     }
+
+    /// the body a callable was declared with, or null for a signature. the
+    /// front-end appends a body last, so an arrow's is its last child whether
+    /// that child is a block or an expression, while a declaration or a method
+    /// that declares no body at all has no block to find
+    pub fn bodyOf(self: *const Module, index: NodeIndex) ?NodeIndex {
+        if (self.kindOf(index) == .arrow) return self.lastChildOf(index);
+        var child = self.firstChildOf(index);
+        while (child) |current| : (child = self.nextSiblingOf(current)) {
+            if (self.kindOf(current) == .block) return current;
+        }
+        return null;
+    }
 };
 
 const testing = std.testing;
+
+test "a body is found for an arrow and for a declaration that has one" {
+    var module = try Module.init(testing.allocator, "");
+    defer module.deinit();
+
+    const arrow = try module.add(.arrow, .{ .start = 0, .end = 10, .line = 1 });
+    const expression = try module.add(.identifier, .{ .start = 8, .end = 9, .line = 1 });
+    module.appendChild(arrow, expression);
+    try testing.expectEqual(expression, module.bodyOf(arrow).?);
+
+    const declaration = try module.add(.function_decl, .{ .start = 10, .end = 20, .line = 1 });
+    const parameter = try module.add(.identifier, .{ .start = 19, .end = 20, .line = 1 });
+    module.appendChild(declaration, parameter);
+    try testing.expect(module.bodyOf(declaration) == null);
+
+    const block = try module.add(.block, .{ .start = 20, .end = 30, .line = 1 });
+    module.appendChild(declaration, block);
+    try testing.expectEqual(block, module.bodyOf(declaration).?);
+}
 
 test "spans merge to the smallest range covering both" {
     const first = Span{ .start = 10, .end = 20, .line = 3 };
