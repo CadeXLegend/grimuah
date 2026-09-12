@@ -216,7 +216,7 @@ pub fn checkMaxFileLines(context: *const root.Context) !void {
 /// a conditional expression whose enclosing expression is another one
 ///
 /// the walk up steps over parentheses, so `(a ? b : c) ? d : e` counts as
-/// nested: the wrapping does not make the inner decision any easier to read.
+/// nested: the wrapping does not make the inner decision any easier to read
 /// the inner conditional is the one reported, so a ladder of three reports
 /// twice rather than once per pair
 pub fn checkNestedTernary(context: *const root.Context) !void {
@@ -294,7 +294,7 @@ pub fn checkMaxParameters(context: *const root.Context) !void {
     }
 }
 
-/// the parameter slots a callable declares, or null when it declares no list.
+/// the parameter slots a callable declares, or null when it declares no list
 /// only modifiers, the name and a type-parameter list can precede the `(`, so
 /// the scan stops at the first one it meets
 fn parameterCount(module: *const ir.Module, context: *const root.Context, index: ir.NodeIndex) ?usize {
@@ -463,23 +463,23 @@ test "a method counts, and the brackets inside a default value do not" {
 }
 
 test "the complexity limit is the fifteenth decision" {
-    const a = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    const at_limit = try sourceWithBranches(a, 14);
-    defer a.free(at_limit);
+    const at_limit = try sourceWithBranches(allocator, 14);
+    defer allocator.free(at_limit);
     try probe.expect(.resilience, "probe.ts", at_limit, &.{});
 
-    const past_limit = try sourceWithBranches(a, 15);
-    defer a.free(past_limit);
+    const past_limit = try sourceWithBranches(allocator, 15);
+    defer allocator.free(past_limit);
     try probe.expect(.resilience, "probe.ts", past_limit, &.{
         "1: This function has a cyclomatic complexity of 16. Extract each decision into a named predicate or a lookup.",
     });
 }
 
 test "a nested function's branches count into the one that declares it" {
-    const a = std.testing.allocator;
-    const source = try sourceWithNestedBranches(a, 14);
-    defer a.free(source);
+    const allocator = std.testing.allocator;
+    const source = try sourceWithNestedBranches(allocator, 14);
+    defer allocator.free(source);
 
     // 1 + 14 + 1: an arrow's branches belong to the body that holds it, and the
     // arrow alone would be two paths, so the two readings are 16 and 15
@@ -538,22 +538,22 @@ fn sourceWithBranchBody(allocator: std.mem.Allocator, branch_count: usize, tail:
 }
 
 test "a file past the line cap is reported, and a declaration file is not" {
-    const a = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     // the count is the newlines plus one, which is the line the end of the file
     // sits on, so 499 newlines is a 500 line file
-    const at_limit = try sourceWithNewlines(a, 499);
-    defer a.free(at_limit);
+    const at_limit = try sourceWithNewlines(allocator, 499);
+    defer allocator.free(at_limit);
     try probe.expect(.resilience, "probe.ts", at_limit, &.{});
 
-    const past_limit = try sourceWithNewlines(a, 500);
-    defer a.free(past_limit);
+    const past_limit = try sourceWithNewlines(allocator, 500);
+    defer allocator.free(past_limit);
     try probe.expect(.resilience, "probe.ts", past_limit, &.{
         "1: This file is 501 lines long. Split it along the responsibilities its sections already show.",
     });
 
-    const declaration = try sourceWithNewlines(a, 500);
-    defer a.free(declaration);
+    const declaration = try sourceWithNewlines(allocator, 500);
+    defer allocator.free(declaration);
     try probe.expect(.resilience, "probe.d.ts", declaration, &.{});
 }
 
@@ -579,14 +579,14 @@ test "a conditional inside another is reported, and a parenthesised one still is
 }
 
 test "a body one line past the limit is reported, and a body at the limit is not" {
-    const a = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    const at_limit = try sourceWithBodyLines(a, 79);
-    defer a.free(at_limit);
+    const at_limit = try sourceWithBodyLines(allocator, 79);
+    defer allocator.free(at_limit);
     try probe.expect(.resilience, "probe.ts", at_limit, &.{});
 
-    const past_limit = try sourceWithBodyLines(a, 80);
-    defer a.free(past_limit);
+    const past_limit = try sourceWithBodyLines(allocator, 80);
+    defer allocator.free(past_limit);
     try probe.expect(.resilience, "probe.ts", past_limit, &.{
         "1: This function body is 81 lines long. Extract each distinct job into a named function.",
     });

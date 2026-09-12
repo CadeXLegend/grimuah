@@ -32,3 +32,12 @@ re-recorded, so every other row still carries biome's verdict.
 the largest real-code coverage came from the synthetic bench repos plus a
 `sleepy` overlay, both filtered through biome while biome was the oracle. those
 harnesses went with biome; the committed corpora are what still replay.
+
+the 12 rules ported from `docs/rule-candidates/catalogue.md` have fixtures here
+too: `await-in-loop.ts`, `boolean-flag-argument.ts`,
+`config-declares-data-only.config.ts`, `cyclomatic-complexity.ts`,
+`for-of-accumulation.ts`, `if-chain-dispatch.ts`, `lowercase-copy.config.ts`,
+`max-file-lines.ts`, `max-function-lines.ts`, `max-parameters.ts`,
+`nested-ternary.ts` and `unbounded-collection-read.ts`
+each one trips its rule and pins the shapes that rule must leave alone, and the
+two named `.config.ts` are the pair whose rules read the file's own name

@@ -128,7 +128,7 @@ pub const Kind = enum {
     unknown,
 
     /// something a caller invokes and a reader reads as a unit of behaviour: a
-    /// function declaration, a function expression, a class method or an arrow.
+    /// function declaration, a function expression, a class method or an arrow
     /// the front-end appends a method to its `class_decl` as one of these, so a
     /// rule that measures callables covers methods without naming them
     pub fn isCallable(self: Kind) bool {
@@ -139,8 +139,10 @@ pub const Kind = enum {
     }
 
     /// whether a node is one of the statements the front-end produces in
-    /// statement position. it is what tells an `if`'s condition from the branch
-    /// that follows it, and a loop's condition from its body
+    /// statement position
+    ///
+    /// it is what tells an `if`'s condition from the branch that follows it, and
+    /// a loop's condition from its body
     pub fn isStatement(self: Kind) bool {
         return switch (self) {
             .block,
@@ -382,11 +384,14 @@ pub const Module = struct {
         return .{ .module = self, .current = self.nodes.items[index].first_child };
     }
 
-    /// the body a callable was declared with, or null for a signature. the
-    /// front-end appends a body last, so an arrow's is its last child whether
-    /// that child is a block or an expression, while a declaration or a method
-    /// that declares no body at all has no block to find
+    /// the body a callable was declared with, or null for anything else: a node
+    /// that is not callable, or a signature that declares no body
+    ///
+    /// the front-end appends a body last, so an arrow's is its last child
+    /// whether that child is a block or an expression, while a declaration or a
+    /// method that declares no body at all has no block to find
     pub fn bodyOf(self: *const Module, index: NodeIndex) ?NodeIndex {
+        if (!self.kindOf(index).isCallable()) return null;
         if (self.kindOf(index) == .arrow) return self.lastChildOf(index);
         var child = self.firstChildOf(index);
         while (child) |current| : (child = self.nextSiblingOf(current)) {
@@ -415,6 +420,12 @@ test "a body is found for an arrow and for a declaration that has one" {
     const block = try module.add(.block, .{ .start = 20, .end = 30, .line = 1 });
     module.appendChild(declaration, block);
     try testing.expectEqual(block, module.bodyOf(declaration).?);
+
+    // a node that is not a callable has no body, however many blocks hang off it
+    const statement = try module.add(.if_stmt, .{ .start = 30, .end = 40, .line = 1 });
+    const branch = try module.add(.block, .{ .start = 31, .end = 39, .line = 1 });
+    module.appendChild(statement, branch);
+    try testing.expect(module.bodyOf(statement) == null);
 }
 
 test "spans merge to the smallest range covering both" {
