@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `max-file-lines`: a module may not run past 500 lines, and a `.d.ts` file is out
 * add `no-await-in-loop`: an `await` in a loop body serialises its iterations
 * add `max-cyclomatic-complexity`: a function may not hold more than 15 independent paths
+* add `require-limit-on-collection-reads`: a query that reads a collection must carry a LIMIT
 
 ### Bug Fixes
 

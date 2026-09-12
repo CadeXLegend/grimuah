@@ -141,6 +141,7 @@ pub const nested_ternary = "This conditional expression contains another conditi
 pub const max_file_lines = "This file is {d} lines long. Split it along the responsibilities its sections already show.";
 pub const await_in_loop = "This loop awaits inside its body, so every iteration runs in sequence. Map the items to promises and await Promise.all once.";
 pub const max_cyclomatic_complexity = "This function has a cyclomatic complexity of {d}. Extract each decision into a named predicate or a lookup.";
+pub const unbounded_collection_read = "This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -304,6 +305,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = complexity.checkMaxCyclomaticComplexity,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = unbounded_collection_read,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkUnboundedCollectionRead,
     },
     .{
         .layer = .hygiene,

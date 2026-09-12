@@ -175,7 +175,125 @@ fn isConstructed(module: *const ir.Module, index: ir.NodeIndex) bool {
     return std.mem.eql(u8, module.nodeOf(parent).operator, "new");
 }
 
+/// a `.all()` read whose `prepare` chain carries no LIMIT
+///
+/// the chain is walked down from the `.all()` call rather than up from the
+/// query, which is what the detector does: `all` is the read, and the statement
+/// it runs is the `prepare` call it hangs off through its members, parentheses
+/// and `await`. the query text is the literal's own source text, quotes and all,
+/// which is then what the two patterns read: any `select`, and a `limit` that is
+/// a word of its own
+pub fn checkUnboundedCollectionRead(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (entry.kind != .call) continue;
+        if (!isMemberCall(module, entry.index, "all")) continue;
+
+        const prepare_call = prepareCallOf(module, entry.index) orelse continue;
+        const query = queryText(module, prepare_call) orelse continue;
+        if (!holds(query, "select", false)) continue;
+        if (holds(query, "limit", true)) continue;
+
+        try context.report(module.spanOf(chainStartOf(module, entry.index)).line, .resilience, root.unbounded_collection_read, .warn);
+    }
+}
+
+/// the node a callee chain begins at. `a.b().c()` is one expression to a reader
+/// and the detector reports it where it starts, but a front-end span begins each
+/// member and call at the token before it, so the chain is followed down to the
+/// value it hangs off
+fn chainStartOf(module: *const ir.Module, index: ir.NodeIndex) ir.NodeIndex {
+    var current = index;
+    while (true) {
+        const kind = module.kindOf(current);
+        if (kind != .call and kind != .member) return current;
+        current = module.firstChildOf(current) orelse return current;
+    }
+}
+
+/// whether a call invokes the property `name` of something, as `rows.all()` does
+fn isMemberCall(module: *const ir.Module, index: ir.NodeIndex, name: []const u8) bool {
+    const callee = module.firstChildOf(index) orelse return false;
+    if (module.kindOf(callee) != .member) return false;
+    return std.mem.eql(u8, module.nodeOf(callee).name, name);
+}
+
+/// the `prepare(...)` call a chain hangs off, or null when the chain reaches
+/// something else first. each step follows the callee of a call, the object of a
+/// member, the operand of an `await` or the inner expression of a parenthesis
+fn prepareCallOf(module: *const ir.Module, index: ir.NodeIndex) ?ir.NodeIndex {
+    var current = index;
+    while (true) {
+        switch (module.kindOf(current)) {
+            .call => {
+                if (isMemberCall(module, current, "prepare")) return current;
+                current = module.firstChildOf(current) orelse return null;
+            },
+            .member, .paren => current = module.firstChildOf(current) orelse return null,
+            .unary => {
+                if (!std.mem.eql(u8, module.nodeOf(current).operator, "await")) return null;
+                current = module.firstChildOf(current) orelse return null;
+            },
+            else => return null,
+        }
+    }
+}
+
+/// the SQL a `prepare` call was handed. an argument that is not a quoted string
+/// or a template is not a query the rule can read, so it is left alone rather
+/// than guessed at
+fn queryText(module: *const ir.Module, prepare_call: ir.NodeIndex) ?[]const u8 {
+    const callee = module.firstChildOf(prepare_call) orelse return null;
+    const argument = module.nextSiblingOf(callee) orelse return null;
+
+    return switch (module.kindOf(argument)) {
+        .literal => if (isQuoted(module.nodeOf(argument).operator)) module.textOf(argument) else null,
+        .template => module.textOf(argument),
+        else => null,
+    };
+}
+
+fn isQuoted(text: []const u8) bool {
+    if (text.len < 2) return false;
+    return text[0] == '"' or text[0] == '\'';
+}
+
+/// whether `text` holds `word`, ignoring case. `whole_word` requires the bytes
+/// around it not to continue a word, which is what the `\b` in the pattern
+/// means: a column named `delimited` is not a LIMIT
+fn holds(text: []const u8, word: []const u8, whole_word: bool) bool {
+    var i: usize = 0;
+    while (i + word.len <= text.len) : (i += 1) {
+        if (!std.ascii.eqlIgnoreCase(text[i .. i + word.len], word)) continue;
+        if (!whole_word) return true;
+        const before_continues = i > 0 and isWordByte(text[i - 1]);
+        const after_continues = i + word.len < text.len and isWordByte(text[i + word.len]);
+        if (!before_continues and !after_continues) return true;
+    }
+    return false;
+}
+
+fn isWordByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
 const probe = @import("probe.zig");
+
+test "a collection read with no LIMIT is reported, and the exclusions hold" {
+    const source =
+        \\export const each = database.prepare("SELECT fish_id FROM catches").all();
+        \\export const bounded = database.prepare("SELECT fish_id FROM catches LIMIT 1").all();
+        \\export const delimited = database.prepare("SELECT fish_id FROM delimited").all();
+        \\export const wrapped = withRetry(database.prepare("SELECT x FROM y")).all();
+        \\export const named = database.prepare(query).all();
+        \\export const first = database.prepare("SELECT x FROM y").first();
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.",
+        "3: This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.",
+    });
+}
 
 test "a bare boolean argument is reported once per argument" {
     const source =

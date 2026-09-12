@@ -99,6 +99,7 @@ src/probe/silent-catch.ts:4: [behavioural] catch block must handle or log the er
 src/probe/switch-basic.ts:2: [resilience] do not use switch; use a dispatch table (Record/Map) instead
 src/probe/switch-stmt.ts:2: [resilience] do not use switch; use a dispatch table (Record/Map) instead
 src/probe/throw-stmt.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
+src/probe/unbounded-collection-read.ts:6: [resilience] This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.
 src/probe/x-catch-destructure.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/y-dead-only.ts:11: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
 src/probe/y-dead-only.ts:12: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
