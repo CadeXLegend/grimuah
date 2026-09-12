@@ -133,6 +133,63 @@ fn ownsBody(kind: ir.Kind) bool {
     };
 }
 
+/// the most independent paths a reader may be asked to hold at once
+const cyclomatic_limit = 15;
+
+/// a callable whose body holds more than `cyclomatic_limit` paths
+///
+/// only a body that is a block is measured, which leaves an expression-bodied
+/// arrow out: the detector reads a function type's paths, and a one-line arrow
+/// is a value rather than a run of decisions. a nested function's branches count
+/// into the one that declares it, which is what makes the number a measure of
+/// the body rather than of the file
+pub fn checkMaxCyclomaticComplexity(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (!entry.kind.isCallable()) continue;
+        const body = bodyOf(module, entry.index) orelse continue;
+        if (module.kindOf(body) != .block) continue;
+
+        const complexity = 1 + pathsIn(module, body);
+        if (complexity <= cyclomatic_limit) continue;
+
+        const message = try std.fmt.allocPrint(context.allocator, root.max_cyclomatic_complexity, .{complexity});
+        defer context.allocator.free(message);
+        try context.report(module.spanOf(entry.index).line, .resilience, message, .warn);
+    }
+}
+
+/// the decisions in a subtree: each branch or short circuit is one more path
+fn pathsIn(module: *const ir.Module, index: ir.NodeIndex) usize {
+    var paths: usize = 0;
+    if (isBranch(module, index)) paths += 1;
+    if (module.kindOf(index) == .binary and isShortCircuit(module.nodeOf(index).operator)) paths += 1;
+
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        paths += pathsIn(module, current);
+    }
+    return paths;
+}
+
+/// whether a node is one of the decisions a reader counts
+fn isBranch(module: *const ir.Module, index: ir.NodeIndex) bool {
+    return switch (module.kindOf(index)) {
+        .if_stmt, .conditional, .catch_clause, .for_stmt, .while_stmt => true,
+        // `default` is not a decision, and the front-end models `case` and
+        // `default` as one kind: a clause that carries a case value is a `case`
+        .case_clause => if (module.firstChildOf(index)) |first| !module.kindOf(first).isStatement() else false,
+        else => false,
+    };
+}
+
+/// `a && b`, `a || b` and `a ?? b` are each two paths through one expression
+fn isShortCircuit(operator: []const u8) bool {
+    return std.mem.eql(u8, operator, "&&") or
+        std.mem.eql(u8, operator, "||") or
+        std.mem.eql(u8, operator, "??");
+}
+
 /// the most lines a module may hold before it has almost certainly grown a
 /// second responsibility
 const file_line_limit = 500;
@@ -423,6 +480,81 @@ test "a method counts, and the brackets inside a default value do not" {
         "2: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
         "7: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
     });
+}
+
+test "the complexity limit is the fifteenth decision" {
+    const a = std.testing.allocator;
+
+    const at_limit = try sourceWithBranches(a, 14);
+    defer a.free(at_limit);
+    try probe.expect(.resilience, "probe.ts", at_limit, &.{});
+
+    const past_limit = try sourceWithBranches(a, 15);
+    defer a.free(past_limit);
+    try probe.expect(.resilience, "probe.ts", past_limit, &.{
+        "1: This function has a cyclomatic complexity of 16. Extract each decision into a named predicate or a lookup.",
+    });
+}
+
+test "a nested function's branches count into the one that declares it" {
+    const a = std.testing.allocator;
+    const source = try sourceWithNestedBranches(a, 14);
+    defer a.free(source);
+
+    // 1 + 14 + 1: an arrow's branches belong to the body that holds it, and the
+    // arrow alone would be two paths, so the two readings are 16 and 15
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This function has a cyclomatic complexity of 16. Extract each decision into a named predicate or a lookup.",
+    });
+}
+
+test "a default clause is not a decision and a switch clause is" {
+    const source =
+        \\export function chooser(seed: number): number {
+        \\  switch (seed) {
+        \\    case 1:
+        \\      return 1;
+        \\    default:
+        \\      return 0;
+        \\  }
+        \\}
+        \\
+    ;
+    // the switch itself trips the shipped dispatch-table ban, which runs in the
+    // same layer, and that row is the only one this fixture should produce
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: do not use switch; use a dispatch table (Record/Map) instead",
+    });
+}
+
+/// a function whose body is `branch_count` `if` statements, so its complexity is
+/// `branch_count + 1`
+fn sourceWithBranches(allocator: std.mem.Allocator, branch_count: usize) ![]const u8 {
+    return sourceWithBranchBody(allocator, branch_count, "");
+}
+
+/// the same function with one nested arrow holding a branch of its own, so a
+/// nested function's branches tell the two readings apart
+fn sourceWithNestedBranches(allocator: std.mem.Allocator, branch_count: usize) ![]const u8 {
+    const nested =
+        \\  const pick = (other: boolean): number => {
+        \\    if (other) { return 1; }
+        \\    return 0;
+        \\  };
+        \\  void pick;
+        \\
+    ;
+    return sourceWithBranchBody(allocator, branch_count, nested);
+}
+
+fn sourceWithBranchBody(allocator: std.mem.Allocator, branch_count: usize, tail: []const u8) ![]const u8 {
+    var source: std.ArrayList(u8) = .empty;
+    errdefer source.deinit(allocator);
+    try source.appendSlice(allocator, "export function branchy(seed: number): number {\n");
+    for (0..branch_count) |_| try source.appendSlice(allocator, "  if (seed > 1) { seed = seed + 1; }\n");
+    try source.appendSlice(allocator, tail);
+    try source.appendSlice(allocator, "  return seed;\n}\n");
+    return source.toOwnedSlice(allocator);
 }
 
 test "a file past the line cap is reported, and a declaration file is not" {
