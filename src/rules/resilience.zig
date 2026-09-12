@@ -141,3 +141,53 @@ pub fn checkAsConst(context: *const root.Context) !void {
         try context.report(token.line, .resilience, root.as_const, .err);
     }
 }
+
+/// a call that passes a bare `true` or `false`, one finding per argument
+///
+/// `true` and `false` parse as literals, and a call's children are its callee
+/// followed by its arguments, so a boolean binding (`f(flag)`) and a boolean
+/// inside an argument (`f({ flag: true })`) are both left alone, which is what
+/// the rule means: the call site has to say which job it asked for
+///
+/// a constructor is not a call and its arguments are not this rule's business,
+/// so the call `new` wraps is skipped
+pub fn checkBooleanFlagArgument(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (entry.kind != .call) continue;
+        if (isConstructed(module, entry.index)) continue;
+
+        const callee = module.firstChildOf(entry.index) orelse continue;
+        var argument = module.nextSiblingOf(callee);
+        while (argument) |current| : (argument = module.nextSiblingOf(current)) {
+            if (module.kindOf(current) != .literal) continue;
+            const text = module.nodeOf(current).operator;
+            if (!std.mem.eql(u8, text, "true") and !std.mem.eql(u8, text, "false")) continue;
+            try context.report(module.spanOf(current).line, .resilience, root.boolean_flag_argument, .warn);
+        }
+    }
+}
+
+/// whether the front-end read this call as the operand of a `new`
+fn isConstructed(module: *const ir.Module, index: ir.NodeIndex) bool {
+    const parent = module.parentOf(index) orelse return false;
+    if (module.kindOf(parent) != .unary) return false;
+    return std.mem.eql(u8, module.nodeOf(parent).operator, "new");
+}
+
+const probe = @import("probe.zig");
+
+test "a bare boolean argument is reported once per argument" {
+    const source =
+        \\export const first = callWith(true, value, false);
+        \\export const constructed = new Panel(true);
+        \\export const named = callWith(flag);
+        \\export const nested = callWith({ flag: true });
+        \\export const chosen = callWith(flag ? true : false);
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.",
+        "1: This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.",
+    });
+}

@@ -135,6 +135,7 @@ pub const silent_catch = "catch block must handle or log the error, not silently
 pub const max_nesting_depth = "This block is nested {d} levels deep. Return early or extract a helper.";
 pub const max_parameters = "This function takes {d} parameters. Group them into a named readonly type, or split the function.";
 pub const lowercase_copy = "This copy starts lowercase. Capitalise the first letter of the sentence.";
+pub const boolean_flag_argument = "This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -251,6 +252,14 @@ pub const all = [_]Rule{
         .message = lowercase_copy,
         .oracle = false,
         .match = cosmetic.checkLowercaseCopy,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = boolean_flag_argument,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkBooleanFlagArgument,
     },
     .{
         .layer = .hygiene,

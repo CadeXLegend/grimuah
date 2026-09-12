@@ -10,6 +10,8 @@ src/probe/barecatch.ts:4: [behavioural] catch block must handle or log the error
 src/probe/barecatch.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
 src/probe/barecatch-ws.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/barecatch-ws.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/boolean-flag-argument.ts:5: [resilience] This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.
+src/probe/boolean-flag-argument.ts:7: [resilience] This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.
 src/probe/c-both-catch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/c-both-catch.ts:4: [hygiene] This variable e is unused.
 src/probe/c-comment-only-bound.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
