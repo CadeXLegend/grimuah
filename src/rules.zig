@@ -136,6 +136,7 @@ pub const max_nesting_depth = "This block is nested {d} levels deep. Return earl
 pub const max_parameters = "This function takes {d} parameters. Group them into a named readonly type, or split the function.";
 pub const lowercase_copy = "This copy starts lowercase. Capitalise the first letter of the sentence.";
 pub const boolean_flag_argument = "This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.";
+pub const max_function_lines = "This function body is {d} lines long. Extract each distinct job into a named function.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -260,6 +261,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkBooleanFlagArgument,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = max_function_lines,
+        .syntax = .ir,
+        .oracle = false,
+        .match = complexity.checkMaxFunctionLines,
     },
     .{
         .layer = .hygiene,

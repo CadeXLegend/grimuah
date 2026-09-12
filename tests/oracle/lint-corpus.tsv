@@ -72,6 +72,7 @@ src/probe/let-typed.ts:2: [resilience] do not use let; use const. only let at mo
 src/probe/let-var.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/lowercase-copy.config.ts:14: [cosmetic] This copy starts lowercase. Capitalise the first letter of the sentence.
 src/probe/lowercase-copy.config.ts:6: [cosmetic] This copy starts lowercase. Capitalise the first letter of the sentence.
+src/probe/max-function-lines.ts:5: [resilience] This function body is 81 lines long. Extract each distinct job into a named function.
 src/probe/max-parameters.ts:5: [resilience] This function takes 5 parameters. Group them into a named readonly type, or split the function.
 src/probe/nesting-depth.ts:7: [resilience] This block is nested 4 levels deep. Return early or extract a helper.
 src/probe/nesting-depth.ts:8: [resilience] This block is nested 5 levels deep. Return early or extract a helper.

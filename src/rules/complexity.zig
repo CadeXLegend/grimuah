@@ -160,6 +160,32 @@ fn isStatement(kind: ir.Kind) bool {
     };
 }
 
+/// the most lines a function body may run to before its length is the only thing
+/// telling a reader how many jobs it does
+const function_line_limit = 80;
+
+/// a callable whose body runs past `function_line_limit` lines
+///
+/// the extent is the body's own, first line to last, so a signature spread over
+/// several lines does not count against the function and a one-line arrow is
+/// never long however much text sits on its line. the last line comes from the
+/// token the body ends at rather than from a scan of the source, because a
+/// token already carries its line
+pub fn checkMaxFunctionLines(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (!entry.kind.isCallable()) continue;
+        const body = bodyOf(module, entry.index) orelse continue;
+        const last = lastTokenOf(module, context.tokens, body) orelse continue;
+        const lines = context.tokens[last].line - module.spanOf(body).line;
+        if (lines <= function_line_limit) continue;
+
+        const message = try std.fmt.allocPrint(context.allocator, root.max_function_lines, .{lines});
+        defer context.allocator.free(message);
+        try context.report(module.spanOf(entry.index).line, .resilience, message, .warn);
+    }
+}
+
 /// the most parameters a callable may take before every call site becomes a
 /// puzzle of positional slots
 const parameter_limit = 4;
@@ -193,12 +219,21 @@ pub fn checkMaxParameters(context: *const root.Context) !void {
 /// whether a callable has a body. a declaration without one is a signature, and
 /// every arrow has one, because the front-end appends the body last
 fn hasBody(module: *const ir.Module, index: ir.NodeIndex) bool {
-    if (module.kindOf(index) == .arrow) return module.lastChildOf(index) != null;
+    return bodyOf(module, index) != null;
+}
+
+/// the body a callable was declared with, or null for a signature
+///
+/// the front-end appends the body last, so an arrow's body is its last child
+/// whether that child is a block or an expression. a declaration or a method
+/// that declares no body at all has no block to find
+fn bodyOf(module: *const ir.Module, index: ir.NodeIndex) ?ir.NodeIndex {
+    if (module.kindOf(index) == .arrow) return module.lastChildOf(index);
     var child = module.firstChildOf(index);
     while (child) |current| : (child = module.nextSiblingOf(current)) {
-        if (module.kindOf(current) == .block) return true;
+        if (module.kindOf(current) == .block) return current;
     }
-    return false;
+    return null;
 }
 
 /// the parameter slots a callable declares, or null when it declares no list.
@@ -217,6 +252,24 @@ fn parameterCount(module: *const ir.Module, context: *const root.Context, index:
         if (std.mem.eql(u8, token.text, "=>")) return 1;
         if (std.mem.eql(u8, token.text, "{") or std.mem.eql(u8, token.text, ";")) return null;
     }
+    return null;
+}
+
+/// the token a node ends at. a span ends at a token and the stream is in source
+/// order, so a binary search finds it
+fn lastTokenOf(module: *const ir.Module, stream: []const Token, index: ir.NodeIndex) ?usize {
+    const end = module.spanOf(index).end;
+    var low: usize = 0;
+    var high: usize = stream.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        if (stream[middle].end < end) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low < stream.len and stream[low].end == end) return low;
     return null;
 }
 
@@ -349,6 +402,31 @@ test "a method counts, and the brackets inside a default value do not" {
         "2: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
         "7: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
     });
+}
+
+test "a body one line past the limit is reported, and a body at the limit is not" {
+    const a = std.testing.allocator;
+
+    const at_limit = try sourceWithBodyLines(a, 79);
+    defer a.free(at_limit);
+    try probe.expect(.resilience, "probe.ts", at_limit, &.{});
+
+    const past_limit = try sourceWithBodyLines(a, 80);
+    defer a.free(past_limit);
+    try probe.expect(.resilience, "probe.ts", past_limit, &.{
+        "1: This function body is 81 lines long. Extract each distinct job into a named function.",
+    });
+}
+
+/// `export function long(): void {`, then `filler_count` single-line statements,
+/// then the closing brace, so the body spans `filler_count + 1` lines
+fn sourceWithBodyLines(allocator: std.mem.Allocator, filler_count: usize) ![]const u8 {
+    var source: std.ArrayList(u8) = .empty;
+    errdefer source.deinit(allocator);
+    try source.appendSlice(allocator, "export function long(): void {\n");
+    for (0..filler_count) |_| try source.appendSlice(allocator, "  void 0;\n");
+    try source.appendSlice(allocator, "}\n");
+    return source.toOwnedSlice(allocator);
 }
 
 test "a body four layers deep is reported once per layer past the limit" {

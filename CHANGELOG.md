@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `max-parameters`: a function may not declare more than four parameters, counted from the signature so a destructured parameter stays one slot
 * add `require-capitalised-user-facing-copy`: user-facing copy in a `.config.ts` file must start with a capital letter
 * add `no-boolean-flag-argument`: a call may not pass a bare `true` or `false`
+* add `max-function-lines`: a function body may not run past 80 lines
 
 ### Bug Fixes
 
