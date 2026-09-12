@@ -160,6 +160,31 @@ fn isStatement(kind: ir.Kind) bool {
     };
 }
 
+/// a conditional expression whose enclosing expression is another one
+///
+/// the walk up steps over parentheses, so `(a ? b : c) ? d : e` counts as
+/// nested: the wrapping does not make the inner decision any easier to read.
+/// the inner conditional is the one reported, so a ladder of three reports
+/// twice rather than once per pair
+pub fn checkNestedTernary(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (entry.kind != .conditional) continue;
+        if (!isInsideConditional(module, entry.index)) continue;
+        try context.report(module.spanOf(entry.index).line, .resilience, root.nested_ternary, .warn);
+    }
+}
+
+/// whether the nearest enclosing expression of a conditional, ignoring
+/// parentheses, is another conditional
+fn isInsideConditional(module: *const ir.Module, index: ir.NodeIndex) bool {
+    var parent = module.parentOf(index) orelse return false;
+    while (module.kindOf(parent) == .paren) {
+        parent = module.parentOf(parent) orelse return false;
+    }
+    return module.kindOf(parent) == .conditional;
+}
+
 /// the most lines a function body may run to before its length is the only thing
 /// telling a reader how many jobs it does
 const function_line_limit = 80;
@@ -401,6 +426,19 @@ test "a method counts, and the brackets inside a default value do not" {
     try probe.expect(.resilience, "probe.ts", source, &.{
         "2: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
         "7: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
+    });
+}
+
+test "a conditional inside another is reported, and a parenthesised one still is" {
+    const source =
+        \\export const inner = flag ? (other ? "a" : "b") : "c";
+        \\export const wrapped = (flag ? "a" : "b") ? "c" : "d";
+        \\export const lone = select(flag ? "a" : "b");
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup.",
+        "2: This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup.",
     });
 }
 
