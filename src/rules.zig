@@ -138,6 +138,7 @@ pub const lowercase_copy = "This copy starts lowercase. Capitalise the first let
 pub const boolean_flag_argument = "This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.";
 pub const max_function_lines = "This function body is {d} lines long. Extract each distinct job into a named function.";
 pub const nested_ternary = "This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup.";
+pub const max_file_lines = "This file is {d} lines long. Split it along the responsibilities its sections already show.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -278,6 +279,13 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = complexity.checkNestedTernary,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = max_file_lines,
+        .oracle = false,
+        .match = complexity.checkMaxFileLines,
     },
     .{
         .layer = .hygiene,

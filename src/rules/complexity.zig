@@ -160,6 +160,29 @@ fn isStatement(kind: ir.Kind) bool {
     };
 }
 
+/// the most lines a module may hold before it has almost certainly grown a
+/// second responsibility
+const file_line_limit = 500;
+
+/// a file longer than `file_line_limit` lines
+///
+/// the count is the source's own newlines plus one, which is the line the end of
+/// the file sits on, and a declaration file is out: `.d.ts` is generated and its
+/// length is not a reader's cost
+pub fn checkMaxFileLines(context: *const root.Context) !void {
+    if (std.mem.endsWith(u8, context.path, ".d.ts")) return;
+
+    var lines: usize = 1;
+    for (context.source) |byte| {
+        if (byte == '\n') lines += 1;
+    }
+    if (lines <= file_line_limit) return;
+
+    const message = try std.fmt.allocPrint(context.allocator, root.max_file_lines, .{lines});
+    defer context.allocator.free(message);
+    try context.report(1, .resilience, message, .warn);
+}
+
 /// a conditional expression whose enclosing expression is another one
 ///
 /// the walk up steps over parentheses, so `(a ? b : c) ? d : e` counts as
@@ -427,6 +450,34 @@ test "a method counts, and the brackets inside a default value do not" {
         "2: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
         "7: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
     });
+}
+
+test "a file past the line cap is reported, and a declaration file is not" {
+    const a = std.testing.allocator;
+
+    // the count is the newlines plus one, which is the line the end of the file
+    // sits on, so 499 newlines is a 500 line file
+    const at_limit = try sourceWithNewlines(a, 499);
+    defer a.free(at_limit);
+    try probe.expect(.resilience, "probe.ts", at_limit, &.{});
+
+    const past_limit = try sourceWithNewlines(a, 500);
+    defer a.free(past_limit);
+    try probe.expect(.resilience, "probe.ts", past_limit, &.{
+        "1: This file is 501 lines long. Split it along the responsibilities its sections already show.",
+    });
+
+    const declaration = try sourceWithNewlines(a, 500);
+    defer a.free(declaration);
+    try probe.expect(.resilience, "probe.d.ts", declaration, &.{});
+}
+
+/// `newline_count` lines, each one ending in a newline
+fn sourceWithNewlines(allocator: std.mem.Allocator, newline_count: usize) ![]const u8 {
+    var source: std.ArrayList(u8) = .empty;
+    errdefer source.deinit(allocator);
+    for (0..newline_count) |_| try source.appendSlice(allocator, "export const filler = 1;\n");
+    return source.toOwnedSlice(allocator);
 }
 
 test "a conditional inside another is reported, and a parenthesised one still is" {
