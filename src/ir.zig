@@ -126,6 +126,17 @@ pub const Kind = enum {
     /// it as unsupported_node, and the front-end's tests assert it never appears on the
     /// corpus
     unknown,
+
+    /// something a caller invokes and a reader reads as a unit of behaviour: a
+    /// function declaration, a function expression, a class method or an arrow.
+    /// the front-end appends a method to its `class_decl` as one of these, so a
+    /// rule that measures callables covers methods without naming them
+    pub fn isCallable(self: Kind) bool {
+        return switch (self) {
+            .function_decl, .function_expr, .arrow => true,
+            else => false,
+        };
+    }
 };
 
 pub const Node = struct {

@@ -1,6 +1,9 @@
 const std = @import("std");
 const root = @import("../rules.zig");
 const ir = @import("../ir.zig");
+const tokens_mod = @import("tokens.zig");
+
+const Token = tokens_mod.Token;
 
 /// the complexity rules: how much a reader has to hold while reading one body,
 /// and how many paths a test has to cover
@@ -157,7 +160,196 @@ fn isStatement(kind: ir.Kind) bool {
     };
 }
 
+/// the most parameters a callable may take before every call site becomes a
+/// puzzle of positional slots
+const parameter_limit = 4;
+
+/// a callable that declares more than `parameter_limit` parameters
+///
+/// only a callable with a body counts, which is what leaves an overload
+/// signature and every function type out: `(a, b, c, d, e) => void` in a type
+/// position describes what a caller must pass and takes nothing itself
+///
+/// the count comes from the token stream rather than the tree, because the tree
+/// binds one identifier per name and a destructured parameter binds several:
+/// `({ a, b })` is one parameter to a reader and two bindings to the parser. the
+/// slots are the top-level commas in the parameter list, so a default value
+/// holding its own brackets, a rest parameter and a trailing comma all count the
+/// way the signature reads
+pub fn checkMaxParameters(context: *const root.Context) !void {
+    const module = context.module orelse return;
+    for (context.walk) |entry| {
+        if (!entry.kind.isCallable()) continue;
+        if (!hasBody(module, entry.index)) continue;
+        const slots = parameterCount(module, context, entry.index) orelse continue;
+        if (slots <= parameter_limit) continue;
+
+        const message = try std.fmt.allocPrint(context.allocator, root.max_parameters, .{slots});
+        defer context.allocator.free(message);
+        try context.report(module.spanOf(entry.index).line, .resilience, message, .warn);
+    }
+}
+
+/// whether a callable has a body. a declaration without one is a signature, and
+/// every arrow has one, because the front-end appends the body last
+fn hasBody(module: *const ir.Module, index: ir.NodeIndex) bool {
+    if (module.kindOf(index) == .arrow) return module.lastChildOf(index) != null;
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        if (module.kindOf(current) == .block) return true;
+    }
+    return false;
+}
+
+/// the parameter slots a callable declares, or null when it declares no list.
+/// only modifiers, the name and a type-parameter list can precede the `(`, so
+/// the scan stops at the first one it meets
+fn parameterCount(module: *const ir.Module, context: *const root.Context, index: ir.NodeIndex) ?usize {
+    const stream = context.tokens;
+    var i = firstTokenOf(module, stream, index) orelse return null;
+
+    while (i < stream.len) : (i += 1) {
+        const token = stream[i];
+        if (token.kind != .punct) continue;
+        if (std.mem.eql(u8, token.text, "(")) return countSlots(stream, i);
+        // `x => body` declares one parameter and has no list to scan, and a `{`
+        // or `;` before any `(` means the node carries no parameter list
+        if (std.mem.eql(u8, token.text, "=>")) return 1;
+        if (std.mem.eql(u8, token.text, "{") or std.mem.eql(u8, token.text, ";")) return null;
+    }
+    return null;
+}
+
+/// the token a node starts at. a span begins at a token and the stream is in
+/// source order, so a binary search finds it
+fn firstTokenOf(module: *const ir.Module, stream: []const Token, index: ir.NodeIndex) ?usize {
+    const start = module.spanOf(index).start;
+    var low: usize = 0;
+    var high: usize = stream.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        if (stream[middle].start < start) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low < stream.len and stream[low].start == start) return low;
+    return null;
+}
+
+/// the parameter slots between `open` and its matching `)`: the commas at the
+/// list's own depth plus one, less a trailing comma. `({ a, b })` is one slot
+/// although it binds two names, and `(a: Map<string, number>)` is one slot in
+/// spite of the comma inside its type
+///
+/// a comparison in a default value reads as an opening angle bracket and would
+/// undercount the slots after it, which is the one shape this cannot see
+fn countSlots(stream: []const Token, open: usize) usize {
+    const close = tokens_mod.matchingBracket(stream, open) orelse return 0;
+    if (close == open + 1) return 0;
+
+    var depth: usize = 0;
+    var separators: usize = 0;
+    var trailing_comma = false;
+    var i = open + 1;
+    while (i < close) : (i += 1) {
+        const token = stream[i];
+        if (token.kind != .punct) {
+            trailing_comma = false;
+            continue;
+        }
+        switch (token.text[0]) {
+            '(', '[', '{', '<' => {
+                depth += 1;
+                trailing_comma = false;
+            },
+            ')', ']', '}', '>' => {
+                if (depth > 0) depth -= 1;
+                trailing_comma = false;
+            },
+            ',' => {
+                if (depth == 0) {
+                    separators += 1;
+                    trailing_comma = true;
+                } else {
+                    trailing_comma = false;
+                }
+            },
+            else => trailing_comma = false,
+        }
+    }
+    return if (trailing_comma) separators else separators + 1;
+}
+
 const probe = @import("probe.zig");
+
+test "a callable past four parameters is reported with its count" {
+    const source =
+        \\export function five(a: string, b: string, c: string, d: string, e: string): string {
+        \\  return a + b + c + d + e;
+        \\}
+        \\
+        \\export const six = (a: string, b: string, c: string, d: string, e: string, f: string): string =>
+        \\  a + b + c + d + e + f;
+        \\
+        \\export function four(a: string, b: string, c: string, d: string): string {
+        \\  return a + b + c + d;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
+        "5: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
+    });
+}
+
+test "a function type, a signature and a destructured parameter are not extra slots" {
+    const source =
+        \\export type Wide = (a: string, b: string, c: string, d: string, e: string) => string;
+        \\
+        \\export interface Slim {
+        \\  handle(a: string, b: string, c: string, d: string, e: string): string;
+        \\}
+        \\
+        \\export function patterns(
+        \\  { left, right }: Record<string, string>,
+        \\  { up, down }: Record<string, string>,
+        \\  { near, far }: Record<string, string>,
+        \\  sizes: readonly number[] = [1, 2, 3],
+        \\): string {
+        \\  return `${left}${right}${up}${down}${near}${far}${sizes.length}`;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{});
+}
+
+test "a method counts, and the brackets inside a default value do not" {
+    const source =
+        \\export class Handlers {
+        \\  handle(a: string, b: string, c: string, d: string, e: string): string {
+        \\    return a + b + c + d + e;
+        \\  }
+        \\}
+        \\
+        \\export function defaults(
+        \\  first: string = "a",
+        \\  second: readonly number[] = [1, 2, 3],
+        \\  third: Record<string, number> = { a: 1, b: 2 },
+        \\  fourth: string = "d",
+        \\  fifth: string = "e",
+        \\  sixth: string = "f",
+        \\): string {
+        \\  return `${first}${second.length}${third.a}${fourth}${fifth}${sixth}`;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: This function takes 5 parameters. Group them into a named readonly type, or split the function.",
+        "7: This function takes 6 parameters. Group them into a named readonly type, or split the function.",
+    });
+}
 
 test "a body four layers deep is reported once per layer past the limit" {
     const source =
