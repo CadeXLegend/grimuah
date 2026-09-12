@@ -21,7 +21,7 @@ finding that was fixed from a finding that was lost
 
 | file | corpus | rows |
 |---|---|---|
-| `lint-corpus.tsv` | `tests/lint-corpus` (123 fixtures, grimuah's own rules) | 115 |
+| `lint-corpus.tsv` | `tests/lint-corpus` (124 fixtures, grimuah's own rules) | 117 |
 | `hygiene-corpus.tsv` | `tests/hygiene-corpus` (8 fixtures, the 5 rules that mirror biome's built-ins) | 20 |
 
 one row per finding, as `path:line: [layer] message`, sorted, with the pre-pass's
@@ -49,13 +49,15 @@ they see a change in every rule that reports on a corpus file, and each of the
 three ways a rule can break was proven against them: a row removed from a fixture
 fails, and so does a rule message changed in `src/rules.zig`
 
-they cannot see the structural layer
+they cannot see the pre-pass's structural rules
 the pre-pass reports nothing on `src/probe`, because the corpus sits inside one
 source root with no surfaces of its own, so a change to the import firewall, the
 suffix rules or the singleton warning leaves every row identical
-the one structural thing they do see is the missing-directory warning: the
-lint-corpus harness deletes the scaffold's three surface directories, so three
-`src/<surface>:0:` rows record that a surface whose directory is absent says so
+the structural rows they do see are the missing-directory warning, made by the
+lint-corpus harness deleting the scaffold's three surface directories, and
+the file-level rules in `src/rules/structural.zig`, which read a path and a tree
+rather than the project: `src/<surface>:0:` and
+`src/probe/config-declares-data-only.config.ts:12:` are both rows
 `test-e2e.sh` covers those cases, and no oracle ever covered them here: the
 structural rules are CLI passes, not GritQL, so biome was never their oracle
 line numbers are part of a row, so the same finding reported on a different line

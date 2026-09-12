@@ -23,6 +23,8 @@ src/probe/chained.ts:1: [resilience] chained 'as' casts bypass type safety; use 
 src/probe/c-nested-empty.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/c-nested-empty.ts:7: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/c-nested-empty.ts:7: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/config-declares-data-only.config.ts:12: [structural] This .config.ts file declares a function. Move the behaviour into the surface's own module.
+src/probe/config-declares-data-only.config.ts:16: [structural] This .config.ts file declares a function. Move the behaviour into the surface's own module.
 src/probe/c-throw-noval.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/cyclomatic-complexity.ts:5: [resilience] This function has a cyclomatic complexity of 18. Extract each decision into a named predicate or a lookup.
 src/probe/d-as-generic.ts:2: [resilience] 'as any' bypasses type safety entirely; use a proper type instead

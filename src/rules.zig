@@ -7,6 +7,7 @@ const resilience = @import("rules/resilience.zig");
 const behavioural = @import("rules/behavioural.zig");
 const complexity = @import("rules/complexity.zig");
 const hygiene = @import("rules/hygiene.zig");
+const structural = @import("rules/structural.zig");
 const scope = @import("scope.zig");
 
 /// grimuah's rules, as data plus a matcher
@@ -143,6 +144,7 @@ pub const await_in_loop = "This loop awaits inside its body, so every iteration 
 pub const max_cyclomatic_complexity = "This function has a cyclomatic complexity of {d}. Extract each decision into a named predicate or a lookup.";
 pub const unbounded_collection_read = "This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.";
 pub const for_of_accumulation = "This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.";
+pub const config_behaviour = "This .config.ts file declares a function. Move the behaviour into the surface's own module.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -322,6 +324,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkForOfAccumulation,
+    },
+    .{
+        .layer = .structural,
+        .severity = .warn,
+        .message = config_behaviour,
+        .syntax = .ir,
+        .oracle = false,
+        .match = structural.checkConfigBehaviour,
     },
     .{
         .layer = .hygiene,
