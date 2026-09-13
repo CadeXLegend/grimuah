@@ -235,6 +235,7 @@ pub const readonly_type_member = "This property is mutable. Add `readonly`, and 
 pub const scalar_failure_return = "This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.";
 pub const discarded_outcome = "This call returns an Outcome and nothing reads the result, so its failure branch is unreachable. Assign the result and narrow `succeeded`, or log the failure where the call is best effort.";
 pub const unread_scalar_result = "This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.";
+pub const enum_placement = "This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -495,6 +496,14 @@ pub const all = [_]Rule{
         .oracle = false,
         .needs_project = true,
         .match = behavioural.checkUnreadScalarResult,
+    },
+    .{
+        .layer = .structural,
+        .severity = .warn,
+        .message = enum_placement,
+        .syntax = .ir,
+        .oracle = false,
+        .match = structural.checkEnumPlacement,
     },
     .{
         .layer = .hygiene,

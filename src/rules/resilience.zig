@@ -2,6 +2,7 @@ const std = @import("std");
 const root = @import("../rules.zig");
 const tokens_mod = @import("tokens.zig");
 const ir = @import("../ir.zig");
+const naming = @import("naming.zig");
 const typemodel = @import("../lang/typemodel.zig");
 
 const Token = tokens_mod.Token;
@@ -536,8 +537,9 @@ fn isWordByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
-/// a surface module's name carries three parts: `<name>.<kind>.ts`
-const MIN_SURFACE_NAME_PARTS = 3;
+/// a surface module's stem carries two parts: `<name>.<kind>`, before the
+/// extension
+const MIN_SURFACE_STEM_PARTS = 2;
 
 /// a union of two or more string literals in a type alias, a property, a
 /// parameter or a variable annotation
@@ -552,7 +554,7 @@ const MIN_SURFACE_NAME_PARTS = 3;
 /// four above and no function's return, unlike the other three type rules
 pub fn checkLiteralUnionEnum(context: *const root.Context) !void {
     if (std.mem.endsWith(u8, context.path, ".d.ts")) return;
-    if (dotPartCount(fileNameOf(context.path)) < MIN_SURFACE_NAME_PARTS) return;
+    if (naming.stemPartCount(naming.fileNameOf(context.path)) < MIN_SURFACE_STEM_PARTS) return;
     const module = context.module orelse return;
 
     var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
@@ -568,16 +570,6 @@ pub fn checkLiteralUnionEnum(context: *const root.Context) !void {
         // positions is the type rather than the declaration that carries it
         try context.report(context.tokens[annotation.type_start].line, .resilience, message, .warn);
     }
-}
-
-/// the last `/`-separated segment of a root-relative path
-fn fileNameOf(path: []const u8) []const u8 {
-    return if (std.mem.lastIndexOfScalar(u8, path, '/')) |separator| path[separator + 1 ..] else path;
-}
-
-/// the number of `.`-separated parts of a file name
-fn dotPartCount(file_name: []const u8) usize {
-    return 1 + std.mem.count(u8, file_name, ".");
 }
 
 /// an optional property, in an interface and in a type literal

@@ -147,6 +147,7 @@ src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every expo
 src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-star.ts:3: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/require-enum-in-config-file.repo.ts:18: [structural] This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.
 src/probe/require-enum-over-literal-union.service.ts:13: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
 src/probe/require-enum-over-literal-union.service.ts:17: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
 src/probe/require-enum-over-literal-union.service.ts:20: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.

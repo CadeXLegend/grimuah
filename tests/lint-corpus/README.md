@@ -47,6 +47,19 @@ purpose: the rule reads the file's name as well as its types, so only a module
 named `<name>.<kind>.ts` is in scope, and an unsuffixed fixture would report
 nothing
 
+`require-enum-in-config-file.repo.ts` carries a suffix for the same reason, and
+the copied path supplies the other half of the rule's scope: the module lands at
+`src/probe/<name>`, which is an implementation module, while a file with no
+behaviour kind is an entry point, a file at the tree's top level is the shared
+root library, and a `.config.ts` is where the enum belongs rather than where it
+violates anything. the declarations it leaves alone are the three the detector
+decides on: an unexported enum, the enum inside a `declare module` block, and the
+enum inside a bare block. the one row it reports is the `export enum` at line 18,
+and the rule's own unit test pins the other three shapes the same declaration
+arrives in: `export declare enum`, an `export` on a line of its own, and
+`export const enum`, which the front-end models as a const declaration whose
+leading words still carry `enum`
+
 `no-optional-properties.ts` also pins the two type positions the parser does not
 model, so the fixture fails if the reader stops reaching them: an optional
 property inside an `as` assertion's type, and one inside a `declare module` block
