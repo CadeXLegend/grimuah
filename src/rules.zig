@@ -148,6 +148,7 @@ pub const for_of_accumulation = "This for..of loop builds an array by pushing in
 pub const config_behaviour = "This .config.ts file declares a function. Move the behaviour into the surface's own module.";
 pub const if_chain_dispatch = "These {d} branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.";
 pub const literal_union_enum = "This union of {d} string literals carries no runtime value. Declare a string enum and use its members as the discriminant.";
+pub const optional_property = "This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -358,6 +359,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkLiteralUnionEnum,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = optional_property,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkOptionalProperties,
     },
     .{
         .layer = .hygiene,

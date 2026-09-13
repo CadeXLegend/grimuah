@@ -580,7 +580,86 @@ fn dotPartCount(file_name: []const u8) usize {
     return 1 + std.mem.count(u8, file_name, ".");
 }
 
+/// an optional property, in an interface and in a type literal
+///
+/// the detector has no file scope at all: `detect` does not even receive the
+/// path, so a `.d.ts` declares its optionals under the same ban as any other
+/// file
+///
+/// a parameter's `?` is not a property's `?`, which is the correctness risk this
+/// reader removes by construction: the annotation carries `optional` only for a
+/// member of an object type, so `function send(name?: string)` is silent while
+/// `{ name?: string }` is not
+pub fn checkOptionalProperties(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.items) |annotation| {
+        if (annotation.position != .property_type) continue;
+        if (!annotation.optional) continue;
+        // the detector reports the property signature's own start, which is the
+        // member rather than its annotation
+        try context.report(context.tokens[annotation.report_start].line, .resilience, root.optional_property, .warn);
+    }
+}
+
 const probe = @import("probe.zig");
+
+test "an optional property is reported in an interface and a type literal, and an optional parameter is not" {
+    const source =
+        \\export interface Draft {
+        \\  readonly channel?: string;
+        \\}
+        \\
+        \\export type Options = { readonly retries?: number };
+        \\
+        \\export function fill(suffix?: string): string {
+        \\  return suffix ?? "";
+        \\}
+        \\
+        \\export class Holder {
+        \\  readonly channel?: string;
+        \\}
+        \\
+    ;
+    const rows = &.{
+        "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+        "5: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+    };
+    try probe.expect(.resilience, "probe.ts", source, rows);
+    // a declaration file is in scope, unlike the literal-union rule's
+    try probe.expect(.resilience, "probe.d.ts", source, rows);
+}
+
+test "a nested type literal is read and an optional method is not a property" {
+    const source =
+        \\export type Outer = {
+        \\  readonly inner: { readonly deep?: string };
+        \\  run?(): void;
+        \\};
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+    });
+}
+
+test "a readonly modifier does not hide an optional property" {
+    const source =
+        \\export type Options = {
+        \\  readonly first?: string;
+        \\  second?: number;
+        \\  third: boolean;
+        \\};
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+        "3: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+    });
+}
 
 test "a literal union is reported in the four positions, and a return annotation is not" {
     const source =

@@ -47,6 +47,10 @@ purpose: the rule reads the file's name as well as its types, so only a module
 named `<name>.<kind>.ts` is in scope, and an unsuffixed fixture would report
 nothing
 
+`no-optional-properties.ts` also pins the two type positions the parser does not
+model, so the fixture fails if the reader stops reaching them: an optional
+property inside an `as` assertion's type, and one inside a `declare module` block
+
 `asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
 pin the silence of `: any`: the plugin era warned on it, biome's recommended set
 owned it, and the native engine reported nothing at all for an annotation. the

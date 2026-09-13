@@ -94,6 +94,11 @@ src/probe/nested-ternary.ts:10: [resilience] This conditional expression contain
 src/probe/nested-ternary.ts:6: [resilience] This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup.
 src/probe/nesting-depth.ts:7: [resilience] This block is nested 4 levels deep. Return early or extract a helper.
 src/probe/nesting-depth.ts:8: [resilience] This block is nested 5 levels deep. Return early or extract a helper.
+src/probe/no-optional-properties.ts:11: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:16: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:17: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:25: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:30: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/null-lit.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
