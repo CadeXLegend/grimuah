@@ -123,7 +123,7 @@ pub fn runAll(
             // skip and the test is not worth the scan
             if (!rules.lintsEveryFile(cfg, hygiene) and !maybeTrigger(content)) continue;
 
-            lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], path, content, hygiene, .reclaimed) catch |err| {
+            lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], path, content, paths, hygiene, .reclaimed) catch |err| {
                 failure = err;
                 break;
             };
@@ -156,11 +156,18 @@ pub fn runSources(
     for (contributions) |*contribution| contribution.* = .{};
     errdefer for (contributions) |*contribution| contribution.deinit(shared_finding_allocator);
 
+    // the run's own paths, which the context hands to a rule whose verdict reads
+    // the whole run. this is the caller's memory, not the arena's, because the
+    // arena is reclaimed per file
+    const source_paths = try allocator.alloc([]const u8, sources.len);
+    defer allocator.free(source_paths);
+    for (sources, 0..) |source, index| source_paths[index] = source.path;
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     for (sources, 0..) |source, index| {
         _ = arena.reset(.retain_capacity);
-        try lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], source.path, source.content, hygiene, .reclaimed);
+        try lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], source.path, source.content, source_paths, hygiene, .reclaimed);
     }
 
     try mergeRun(allocator, &findings, contributions, cfg, hygiene);
@@ -263,7 +270,7 @@ fn lintWorker(batch: *Batch, arena: *std.heap.ArenaAllocator) void {
         _ = arena.reset(.retain_capacity);
 
         const content = readSource(batch.io, arena.allocator(), batch.project_root, batch.paths[index]);
-        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &batch.contributions[index], batch.paths[index], content, batch.hygiene, .reclaimed)) |_| {
+        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &batch.contributions[index], batch.paths[index], content, batch.paths, batch.hygiene, .reclaimed)) |_| {
         } else |err| {
             batch.failures[index] = err;
         }
@@ -760,6 +767,9 @@ pub fn lintContent(
     contribution: *Contribution,
     rel_path: []const u8,
     content: []const u8,
+    /// every file of the run, which `Context.paths` hands to a rule whose verdict
+    /// depends on the run rather than on the file
+    run_paths: []const []const u8,
     hygiene: bool,
     teardown: Teardown,
 ) !void {
@@ -822,6 +832,7 @@ pub fn lintContent(
         .module = if (parsed) |*module| module else null,
         .scopes = if (scopes) |*table| table else null,
         .walk = walk,
+        .paths = run_paths,
         .hygiene = hygiene,
         .project = if (project_wanted) &contribution.project else null,
     };

@@ -68,7 +68,21 @@ pub fn projectRows(
     layer: root.Layer,
     sources: []const engine.Source,
 ) ![]const []const u8 {
-    const findings = try lintSources(allocator, layer, sources);
+    const cfg = config.Config{ .surfaces = &.{}, .layers = only(layer) };
+    return rowsForConfig(allocator, &cfg, sources);
+}
+
+/// the findings a whole project produces under `cfg`, as `path:line: message` rows
+///
+/// a rule that reads the project's own configuration needs this: the probe's own run
+/// is built with no surfaces, so a rule about the edges between surfaces cannot be
+/// reached through `expectProject`
+pub fn rowsForConfig(
+    allocator: std.mem.Allocator,
+    cfg: *const config.Config,
+    sources: []const engine.Source,
+) ![]const []const u8 {
+    const findings = try engine.runSources(allocator, cfg, sources, false);
     defer engine.freeFindings(allocator, findings);
 
     var rows: std.ArrayList([]const u8) = .empty;
@@ -96,6 +110,18 @@ pub fn expect(layer: root.Layer, path: []const u8, source: []const u8, expected:
 pub fn expectProject(layer: root.Layer, sources: []const engine.Source, expected: []const []const u8) !void {
     const allocator = std.testing.allocator;
     const actual = try projectRows(allocator, layer, sources);
+    defer {
+        for (actual) |row| allocator.free(row);
+        allocator.free(actual);
+    }
+    try expectRows(actual, expected);
+}
+
+/// lint `sources` as one project under `cfg` and require exactly `expected` rows,
+/// each `path:line: message`
+pub fn expectConfigured(cfg: *const config.Config, sources: []const engine.Source, expected: []const []const u8) !void {
+    const allocator = std.testing.allocator;
+    const actual = try rowsForConfig(allocator, cfg, sources);
     defer {
         for (actual) |row| allocator.free(row);
         allocator.free(actual);

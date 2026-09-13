@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../rules.zig");
+const config = @import("../config.zig");
 const ir = @import("../ir.zig");
 const ts = @import("../lang/ts.zig");
 const naming = @import("naming.zig");
@@ -265,6 +266,142 @@ test "an exported enum in an implementation module is reported, and the excluded
         "25: This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.",
         "36: This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.",
     });
+}
+
+/// the line a whole-surface finding is anchored at. the entry is a fact about the
+/// configured surface rather than about the file the row lands on, so the row names
+/// the surface and the entry in its message instead
+const SURFACE_FINDING_LINE = 1;
+
+/// an allowedImports entry the dag already implies: the checker grants every import
+/// to a surface with a lower dagOrder before it reads that surface's own list, so an
+/// entry naming a shallower surface is never consulted
+///
+/// the report is once per surface rather than once per file, anchored at the
+/// surface's first file in byte order, because the entry is one fact about the
+/// configuration and a forty-file surface would otherwise repeat it forty times
+///
+/// the surface is the deepest one that owns the file AND carries a list. a file can
+/// belong to a nested surface whose own list is empty, and the grant that applies to
+/// it is then the enclosing surface's
+pub fn checkRedundantAllowedImport(context: *const root.Context) !void {
+    const surface = grantingSurface(context.cfg, context.path) orelse return;
+    if (!isFirstFileOfSurface(context, surface)) return;
+
+    for (surface.allowedImports) |allowed_name| {
+        const target = context.cfg.getSurface(allowed_name) orelse continue;
+        if (target.dagOrder >= surface.dagOrder) continue;
+        const message = try std.fmt.allocPrint(context.allocator, root.redundant_allowed_import, .{
+            surface.name,
+            surface.dagOrder,
+            allowed_name,
+            target.dagOrder,
+        });
+        defer context.allocator.free(message);
+        try context.report(SURFACE_FINDING_LINE, .structural, message, .warn);
+    }
+}
+
+/// the deepest declared surface that owns `path` and carries an allowedImports list,
+/// or null. `Config.owningSurface` answers the deepest owner, and this answers the
+/// one whose list the checker would read, which is the same surface unless the
+/// deepest owner's own list is empty
+fn grantingSurface(cfg: *const config.Config, path: []const u8) ?*const config.Surface {
+    var owner: ?*const config.Surface = null;
+    for (cfg.surfaces) |*surface| {
+        if (surface.allowedImports.len == 0) continue;
+        if (!config.pathIsWithin(path, surface.path)) continue;
+        if (owner == null or surface.path.len > owner.?.path.len) owner = surface;
+    }
+    return owner;
+}
+
+/// whether this file is the first of its surface in byte order, which is where the
+/// surface's own finding is reported
+///
+/// byte order rather than the locale's: the row has to be the same on any machine,
+/// and the research's runner sorts the same way
+fn isFirstFileOfSurface(context: *const root.Context, surface: *const config.Surface) bool {
+    var first: ?[]const u8 = null;
+    for (context.paths) |candidate| {
+        if (!config.pathIsWithin(candidate, surface.path)) continue;
+        if (first == null or std.mem.lessThan(u8, candidate, first.?)) first = candidate;
+    }
+    return if (first) |path| std.mem.eql(u8, path, context.path) else false;
+}
+
+/// the surfaces the redundancy tests run under: `src/commands` carries two entries,
+/// one the dag already implies and one at its own dagOrder, which the checker reads;
+/// `lib` is shallower and carries none; `src/commands/tasks` is nested inside
+/// `commands` and carries none either, so the grant that applies to a task file is
+/// the enclosing surface's
+var redundancy_surfaces = [_]config.Surface{
+    .{ .name = "lib", .path = "lib", .depth = 0, .dagOrder = 0, .suffixes = &.{".ts"} },
+    .{ .name = "services", .path = "src/services", .depth = 1, .dagOrder = 1, .suffixes = &.{".service.ts"} },
+    .{ .name = "commands", .path = "src/commands", .depth = 1, .dagOrder = 1, .suffixes = &.{".command.ts"}, .allowedImports = &.{ "lib", "services", "ghost" } },
+    .{ .name = "tasks", .path = "src/commands/tasks", .depth = 2, .dagOrder = 2, .suffixes = &.{".task.ts"} },
+};
+
+const redundancy_cfg = config.Config{
+    .surfaces = &redundancy_surfaces,
+    .layers = .{ .cosmetic = false, .structural = true, .resilience = false, .behavioural = false },
+};
+
+test "a grant the dag already implies is reported once, at the surface's first file" {
+    const source =
+        \\export const Name = "commands";
+        \\
+    ;
+    try probe.expectConfigured(&redundancy_cfg, &.{
+        // the surface's first file in byte order, which is inside a nested surface:
+        // the nested surface carries no list of its own, so the grant that applies
+        // to this file is the enclosing surface's, and the row lands here rather
+        // than on the first file of `src/commands` itself
+        .{ .path = "src/commands/aaa.task.ts", .content = source },
+        .{ .path = "src/commands/afk.command.config.ts", .content = source },
+        .{ .path = "src/commands/zeta.command.ts", .content = source },
+        // a surface whose own list is empty reports nothing
+        .{ .path = "src/services/afk.service.ts", .content = source },
+        .{ .path = "lib/thing.ts", .content = source },
+    }, &.{
+        "src/commands/aaa.task.ts:1: Surface 'commands' (dagOrder 1) grants 'lib' (dagOrder 0), which the dag already permits. Delete the entry from its allowedImports list.",
+    });
+}
+
+test "the surface's first file is the one that reports, whatever order the run read them in" {
+    const source =
+        \\export const Name = "commands";
+        \\
+    ;
+    // the same project, with the files handed over in the other order: the anchor is
+    // byte order rather than the run's, so the row does not move
+    try probe.expectConfigured(&redundancy_cfg, &.{
+        .{ .path = "src/commands/zzz.command.ts", .content = source },
+        .{ .path = "src/commands/tasks/aaa.task.ts", .content = source },
+    }, &.{
+        "src/commands/tasks/aaa.task.ts:1: Surface 'commands' (dagOrder 1) grants 'lib' (dagOrder 0), which the dag already permits. Delete the entry from its allowedImports list.",
+    });
+}
+
+test "a grant at the surface's own dagOrder is read by the checker and is not reported" {
+    const source =
+        \\export const Name = "commands";
+        \\
+    ;
+    // `services` sits at the same dagOrder as `commands`, so `canImport` reads that
+    // entry when the deeper-to-shallower shortcut does not apply. only the entry
+    // naming a shallower surface is dead configuration
+    var surfaces = [_]config.Surface{
+        .{ .name = "services", .path = "src/services", .depth = 1, .dagOrder = 1, .suffixes = &.{".service.ts"} },
+        .{ .name = "commands", .path = "src/commands", .depth = 1, .dagOrder = 1, .suffixes = &.{".command.ts"}, .allowedImports = &.{"services"} },
+    };
+    const cfg = config.Config{
+        .surfaces = &surfaces,
+        .layers = .{ .cosmetic = false, .structural = true, .resilience = false, .behavioural = false },
+    };
+    try probe.expectConfigured(&cfg, &.{
+        .{ .path = "src/commands/afk.command.ts", .content = source },
+    }, &.{});
 }
 
 /// an expected row for the import-cycle rule, built from the table's message so a

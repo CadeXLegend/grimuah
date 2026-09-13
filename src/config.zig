@@ -145,7 +145,11 @@ fn surfaceContainer(surface_path: []const u8) []const u8 {
 
 /// true when `file_path` is `dir_path` itself or sits underneath it, the
 /// boundary check keeps "src/db-extra" from matching the "src/db" surface
-fn pathIsWithin(file_path: []const u8, dir_path: []const u8) bool {
+///
+/// a rule that reads the run's places rather than its syntax needs this too: a rule
+/// that has to pick the one file a whole-surface finding is anchored at asks which
+/// files a surface owns
+pub fn pathIsWithin(file_path: []const u8, dir_path: []const u8) bool {
     if (dir_path.len == 0) return false;
     if (!std.mem.startsWith(u8, file_path, dir_path)) return false;
     if (file_path.len == dir_path.len) return true;

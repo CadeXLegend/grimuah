@@ -66,6 +66,9 @@ const corpus = [];
 for (const filePath of filePaths) {
   const text = await readFile(filePath, "utf8");
   corpus.push({
+    // `filePath` is the absolute path a detector that looks the project's own
+    // config up needs, and `relPath` is the one the rows are keyed by
+    filePath,
     relPath: relative(CORPUS_ROOT, filePath),
     text,
     sourceFile: ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true),
@@ -78,6 +81,7 @@ for (const entry of corpus) {
   const found = detector.detect({
     ts,
     sourceFile: entry.sourceFile,
+    filePath: entry.filePath,
     relPath: entry.relPath,
     text: entry.text,
     corpus,

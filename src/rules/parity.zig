@@ -66,7 +66,7 @@ test "the engine reports what the token engine reports" {
             defer candidate.deinit(a);
             // the hygiene layer is the built-in subset, which this parity test
             // does not cover: `tests/oracle/hygiene-corpus.tsv` does
-            try engine.lintContent(a, a, &cfg, &candidate, entry.path, source, false, .owned);
+            try engine.lintContent(a, a, &cfg, &candidate, entry.path, source, &.{entry.path}, false, .owned);
 
             dropUncovered(&reference);
             dropUncoveredEngine(&candidate.findings);

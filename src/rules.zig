@@ -87,6 +87,11 @@ pub const Context = struct {
     /// visits the whole tree reads this instead of chasing links, which is what
     /// seven rules and the scope pass used to do separately
     walk: []const ir.WalkEntry = &.{},
+    /// every file of the run, in walk order. a rule whose verdict depends on the run
+    /// rather than on the file in front of it reads this: a rule that has to pick the
+    /// one file a whole-surface finding is anchored at, and cannot know which file
+    /// that is from its own path
+    paths: []const []const u8 = &.{},
     /// whether the hygiene rules run. the parity test and the hygiene corpus
     /// turn them off to isolate the architecture rules
     hygiene: bool = true,
@@ -313,6 +318,7 @@ pub const discarded_outcome = "This call returns an Outcome and nothing reads th
 pub const unread_scalar_result = "This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.";
 pub const enum_placement = "This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.";
 pub const import_cycle = "This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.";
+pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -590,6 +596,13 @@ pub const all = [_]Rule{
         .oracle = false,
         .needs_import_graph = true,
         .resolve_graph = structural.resolveImportCycle,
+    },
+    .{
+        .layer = .structural,
+        .severity = .warn,
+        .message = redundant_allowed_import,
+        .oracle = false,
+        .match = structural.checkRedundantAllowedImport,
     },
     .{
         .layer = .hygiene,

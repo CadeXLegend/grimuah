@@ -178,7 +178,19 @@ achk | grep -q "grimuah check: clean" && ok "all layers disabled: clean" || fail
 jq '.layers.cosmetic = true | .layers.structural = true | .layers.resilience = true | .layers.behavioural = true' architecture.config.json > tmp.json
 mv tmp.json architecture.config.json
 
-# ── 25. frozen oracle ──
+# ── 25. a redundant allowedImports entry ──
+# the corpus cannot carry this one: its fixtures go under src/probe, which is no
+# surface, and every scaffold's own lists are empty since the generators stopped
+# writing implied entries. the check writes one instead
+cd "$P1"
+jq '.surfaces = [.surfaces[] | if .name == "components" then .allowedImports = ["utils"] else . end]' architecture.config.json > tmp.json
+mv tmp.json architecture.config.json
+achk | grep -q "grants 'utils' (dagOrder 0), which the dag already permits" && ok "check: catches a redundant allowedImports entry" || fail "check: missed a redundant allowedImports entry"
+jq '.surfaces = [.surfaces[] | if .name == "components" then .allowedImports = [] else . end]' architecture.config.json > tmp.json
+mv tmp.json architecture.config.json
+achk | grep -q "which the dag already permits" && fail "check: redundant entry survived its removal" || ok "check: clean again after the entry is removed"
+
+# ── 26. frozen oracle ──
 oracle_log="$TMPDIR/oracle.log"
 if bash "$SCRIPT_DIR/tests/oracle/check.sh" >"$oracle_log" 2>&1; then
   ok "frozen oracle: corpus findings unchanged"
