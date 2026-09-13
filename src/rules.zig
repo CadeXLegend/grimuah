@@ -205,27 +205,41 @@ pub const ExportKind = enum {
     type_alias,
     /// `export enum X { ... }`, the `const`, `declare` and bare forms alike
     @"enum",
+    /// `export const X = ...`, and the `let` and `var` forms. one per declarator,
+    /// so `export const a = 1, b = 2` contributes two
+    variable,
+    /// `export function X() { ... }`
+    function,
+    /// `export class X { ... }`
+    class,
 };
 
 /// one declaration a file exports
 ///
 /// the front-end models `interface`, `type`, `enum`, `namespace` and `declare` as
-/// one node kind with no name and no children, so the merge reads the keyword and
-/// the name off the declaration's own leading words
+/// one node kind with no name and no children, so a type or an enum declaration's name
+/// is read off its own leading words, while a function, a class and a variable
+/// statement carry theirs on the node
 pub const ExportedDeclaration = struct {
     name: []const u8,
     kind: ExportKind,
-    /// the line the declaration starts on, which is where a rule reports it
+    /// the line the declared name sits on, which is where the detector reports and
+    /// where a rule anchors its row
     line: u32,
 };
 
-/// the run's import graph, its reverse, and the declarations each file exports
+/// the run's import graph, its reverse, the declarations each file exports, and
+/// the names each file mentions
 ///
 /// a file can be reached from another file of the same dagOrder, so the surface
 /// firewall cannot see a cycle, and the run has to read every file before it can
 /// decide. the graph is the merge's, not one file's: it outlives every
 /// contribution, because the verdict for the first file needs the last file's
 /// edges
+///
+/// the mention counts are what a rule asks when the question is who else knows a
+/// name: an exported declaration whose name no other file spells promises an
+/// audience it does not have
 pub const ProjectIndex = struct {
     /// the index's own memory: every file's imports, names and labels outlive the
     /// file they were read from, because the last file's verdict needs the first
@@ -244,6 +258,11 @@ pub const ProjectIndex = struct {
     /// and `no_cycle` otherwise. two files share an id exactly when they are in
     /// one strongly connected component of two or more
     cycle_of: []const u32 = &.{},
+    /// how many distinct files of the run spell each name, whatever the name is
+    /// spelled for. a rule whose verdict is "no other file knows this name" reads
+    /// it, and the count is what lets it ask that of every export in one pass
+    /// rather than walking the run's names once per file
+    mention_files: std.StringHashMapUnmanaged(u32) = .empty,
 
     pub fn deinit(self: *ProjectIndex) void {
         self.arena.deinit();
@@ -276,6 +295,10 @@ pub const Project = struct {
     deferred: std.ArrayList(Candidate) = .empty,
     imports: std.ArrayList(ImportEdge) = .empty,
     exports: std.ArrayList(ExportedDeclaration) = .empty,
+    /// the distinct names this file's code spells, whatever it spells them for.
+    /// a name is here once however often the file writes it, because the run's
+    /// question is which files know a name rather than how often one does
+    mentions: std.StringHashMapUnmanaged(void) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -294,6 +317,9 @@ pub const Project = struct {
         self.imports.deinit(allocator);
         for (self.exports.items) |exported| allocator.free(exported.name);
         self.exports.deinit(allocator);
+        var names = self.mentions.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        self.mentions.deinit(allocator);
     }
 };
 
@@ -369,6 +395,7 @@ pub const enum_placement = "This enum is a configuration constant declared in an
 pub const import_cycle = "This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.";
 pub const shared_type_placement = "This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in {s}.types.ts instead.";
 pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
+pub const export_without_consumer = "`{s}` is exported but no other module names it. Drop the `export` keyword, or have another module name it.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -662,6 +689,15 @@ pub const all = [_]Rule{
         .oracle = false,
         .needs_project_index = true,
         .resolve_index = structural.checkSharedTypePlacement,
+    },
+    .{
+        .layer = .structural,
+        .severity = .warn,
+        .message = export_without_consumer,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_project_index = true,
+        .resolve_index = structural.checkExportWithoutConsumer,
     },
     .{
         .layer = .hygiene,

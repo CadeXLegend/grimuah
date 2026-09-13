@@ -483,13 +483,65 @@ fn collectImports(
     }
 }
 
+/// every name one file's code spells, once each
+///
+/// a rule that asks who else knows a name reads the run's count of the files that
+/// spell it, and the keywords the file is written with are not names. the map holds
+/// its own copy of each name: the token stream dies with the file, and the index
+/// that reads this outlives it
+fn collectMentions(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    mentions: *std.StringHashMapUnmanaged(void),
+) !void {
+    for (tokens) |token| {
+        if (token.kind != .word) continue;
+        if (ts.isNonReference(token.text)) continue;
+        const entry = try mentions.getOrPut(allocator, token.text);
+        // the borrowed key becomes this file's own copy. the hash was taken from the
+        // same bytes, so lookups still find it, and the copy is what survives the
+        // token stream. the guard is an allocation guard rather than a verdict one:
+        // a name a file writes fifty times costs one copy instead of fifty, and a
+        // mutation that drops it changes no row
+        if (!entry.found_existing) entry.key_ptr.* = try allocator.dupe(u8, token.text);
+    }
+}
+
+/// how many distinct files of the run spell each name
+///
+/// this is the answer to "who else knows this name": the declaring file spells its
+/// own declaration's name, so a count of one is a name nothing outside its module
+/// has ever read. the names are the index's own copies, because a file's mentions
+/// are freed as soon as its rows are reported
+fn countMentionFiles(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(u32) {
+    var counts: std.StringHashMapUnmanaged(u32) = .empty;
+    for (contributions) |contribution| {
+        var names = contribution.project.mentions.keyIterator();
+        while (names.next()) |name| {
+            const entry = try counts.getOrPut(allocator, name.*);
+            if (!entry.found_existing) {
+                // the map keeps its own copy, and this is a lifetime guard rather than a
+                // tidiness one: the merge frees a file's mentions as soon as its rows are
+                // reported, while the graph answers for every file after it
+                entry.key_ptr.* = try allocator.dupe(u8, name.*);
+                entry.value_ptr.* = 0;
+            }
+            entry.value_ptr.* += 1;
+        }
+    }
+    return counts;
+}
+
 /// every declaration this file exports that a rule can judge by where it lives
 ///
 /// the front-end models `interface`, `type`, `enum`, `namespace` and `declare` as
 /// one node kind with no name and no children, so the keyword and the name come off
 /// the declaration's own leading words. `export const enum X` is a legal enum
 /// declaration the front-end models as a const declaration, and its leading words
-/// still carry `enum`, so the child's kind decides nothing
+/// still carry `enum`, so the leading words are read before the node's own kind is
 fn collectExports(
     allocator: std.mem.Allocator,
     module: *const ir.Module,
@@ -501,22 +553,121 @@ fn collectExports(
         if (module.kindOf(current) != .export_decl) continue;
         var declaration = module.firstChildOf(current);
         while (declaration) |candidate| : (declaration = module.nextSiblingOf(candidate)) {
-            const from = typemodel.tokenAtOrAfter(tokens, module.spanOf(candidate).start);
-            const kind = exportedKind(tokens, from) orelse continue;
-            try exports.append(allocator, .{
-                .name = try allocator.dupe(u8, kind.name),
-                .kind = kind.kind,
-                .line = module.spanOf(current).line,
-            });
+            try collectDeclaredExports(allocator, module, tokens, candidate, exports);
         }
     }
 }
 
-/// the keyword and the name an exported statement leads with, when a rule can judge
-/// it by where it lives
+/// the names one exported declaration declares, one export each
+///
+/// a function or a class states its own name, so it is read off the node. a type, an
+/// enum and a `const` declaration share one node kind, and `export const enum X` and
+/// `export declare enum X` both arrive as declarations whose leading words still carry
+/// `enum`, so those are read before the node's own kind is
+///
+/// a variable statement declares one name per declarator, so `export const a = 1,
+/// b = 2` contributes two. a destructured binding contributes none: its names hang off
+/// the pattern node rather than the declaration, and the detector reads a binding
+/// pattern as no name at all
+fn collectDeclaredExports(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    declaration: ir.NodeIndex,
+    exports: *std.ArrayList(rules.ExportedDeclaration),
+) !void {
+    switch (module.kindOf(declaration)) {
+        .function_decl => return appendNamedExport(allocator, module, tokens, declaration, .function, exports),
+        .class_decl => return appendNamedExport(allocator, module, tokens, declaration, .class, exports),
+        .variable_decl, .type_decl => {},
+        else => return,
+    }
+
+    const from = typemodel.tokenAtOrAfter(tokens, module.spanOf(declaration).start);
+    if (exportedKind(tokens, from)) |keyword| {
+        return exports.append(allocator, .{
+            .name = try allocator.dupe(u8, keyword.name),
+            .kind = keyword.kind,
+            .line = keyword.line,
+        });
+    }
+
+    // a variable statement that is not an enum declares its own name per declarator
+    if (module.kindOf(declaration) == .variable_decl) {
+        try appendDeclaratorExports(allocator, module, declaration, exports);
+    }
+}
+
+/// one named declaration, when it declares a name at all: `export default function
+/// () {}` declares none and is left out, as the detector leaves it
+fn appendNamedExport(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    declaration: ir.NodeIndex,
+    kind: rules.ExportKind,
+    exports: *std.ArrayList(rules.ExportedDeclaration),
+) !void {
+    const name = module.nodeOf(declaration).name;
+    if (name.len == 0) return;
+    try exports.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .kind = kind,
+        .line = nameLineOf(module, tokens, declaration, name),
+    });
+}
+
+/// every name a variable statement declares. only a direct identifier child counts,
+/// which is what keeps a destructuring pattern out
+fn appendDeclaratorExports(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    declaration: ir.NodeIndex,
+    exports: *std.ArrayList(rules.ExportedDeclaration),
+) !void {
+    var child = module.firstChildOf(declaration);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        const node = module.nodeOf(current);
+        if (node.kind != .identifier) continue;
+        if (node.binding != .variable) continue;
+        try exports.append(allocator, .{
+            .name = try allocator.dupe(u8, node.name),
+            .kind = .variable,
+            .line = module.spanOf(current).line,
+        });
+    }
+}
+
+/// the line the declared name sits on, which is where the detector's
+/// `name.getStart()` lands. a declaration's own span starts at its first modifier or
+/// keyword, so the name is a token to be found rather than a position to be read
+fn nameLineOf(
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    declaration: ir.NodeIndex,
+    name: []const u8,
+) u32 {
+    const span = module.spanOf(declaration);
+    var index = typemodel.tokenAtOrAfter(tokens, span.start);
+    while (index < tokens.len and tokens[index].start < span.end) : (index += 1) {
+        if (tokens[index].kind != .word) continue;
+        if (std.mem.eql(u8, tokens[index].text, name)) return tokens[index].line;
+    }
+    // the name sits inside the declaration's own span for every shape the front-end
+    // produces, so this is a floor rather than a case: a declaration whose name could
+    // not be found is reported on its own first line instead of being dropped, because
+    // a dropped export is a finding the run can no longer reach
+    return span.line;
+}
+
+/// the keyword, the name and the name's line of an exported statement, when a rule
+/// can judge it by where it lives
 const ExportedKeyword = struct {
     kind: rules.ExportKind,
     name: []const u8,
+    /// the line the name sits on, which is where the detector reports. the export
+    /// keyword and the name can sit on different lines, so this is the name's own
+    line: u32,
 };
 
 /// the declaration an exported statement declares: a type alias or an enum, with the
@@ -527,8 +678,8 @@ fn exportedKind(tokens: []const ts.Token, from: usize) ?ExportedKeyword {
         // the name follows the keyword, so a keyword with no name after it declares
         // nothing: `export const type = 1` reads `type` as a name, not as a keyword
         if (index + 1 >= leading.len) return null;
-        if (word.isWord("type")) return .{ .kind = .type_alias, .name = leading[index + 1].text };
-        if (word.isWord("enum")) return .{ .kind = .@"enum", .name = leading[index + 1].text };
+        if (word.isWord("type")) return .{ .kind = .type_alias, .name = leading[index + 1].text, .line = leading[index + 1].line };
+        if (word.isWord("enum")) return .{ .kind = .@"enum", .name = leading[index + 1].text, .line = leading[index + 1].line };
     }
     return null;
 }
@@ -568,6 +719,7 @@ fn buildProjectIndex(allocator: std.mem.Allocator, contributions: []const Contri
     // the buffers a later field allocated, so `deinit` would free only the first
     const cycle_of = try findCycles(graph_allocator, imports, contributions.len);
     const importers = try buildImporters(graph_allocator, imports);
+    const mention_files = try countMentionFiles(graph_allocator, contributions);
     return .{
         .arena = arena,
         .paths = paths,
@@ -575,6 +727,7 @@ fn buildProjectIndex(allocator: std.mem.Allocator, contributions: []const Contri
         .importers = importers,
         .exports = exports,
         .cycle_of = cycle_of,
+        .mention_files = mention_files,
     };
 }
 
@@ -945,14 +1098,20 @@ pub fn lintContent(
     }
 
     // what this file contributes to the run's project index: the imports a rule that
-    // judges a file by what it links to needs, and the declarations a rule that judges
-    // where a declaration lives needs. the merge resolves both once every file has
-    // been read, because neither question can be answered from one file
+    // judges a file by what it links to needs, the declarations a rule that judges
+    // where a declaration lives needs, and the names a rule that asks who else knows
+    // one reads. the merge resolves all three once every file has been read, because
+    // none of the questions can be answered from one file
     if (rules.needsProjectIndex(cfg, hygiene)) {
         if (parsed) |*module| {
             try collectImports(finding_allocator, module, &contribution.project.imports);
             try collectExports(finding_allocator, module, tokens, &contribution.project.exports);
         }
+        // the names come from the token stream rather than the tree, because a name
+        // is spelled the same wherever it stands: a type annotation, a JSX tag and a
+        // member access all name something, and only the tree's expression positions
+        // reach the tree as nodes
+        try collectMentions(finding_allocator, tokens, &contribution.project.mentions);
     }
 
     var context = rules.Context{

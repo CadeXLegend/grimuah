@@ -89,6 +89,16 @@ both before either can be judged. each one's row lands on its own import stateme
 and the pair is the only place the corpus reaches the project pass from a fixture
 rather than from a single file
 
+`no-export-without-consumer.repo.ts` carries a suffix for the corpus's own reason:
+the rule reads the suffixed-module convention, `<name>.<kind>.ts`, rather than a
+directory, so only a suffixed fixture is judged at all. its two rows land on the
+declared names rather than on the `export` keyword, and the run is the whole
+directory, so a name any sibling fixture spells counts as a consumer. fourteen more
+rows come from suffixed fixtures that pin another rule and hold an unfollowed export
+incidentally: `config-declares-data-only.config.ts`, `lowercase-copy.config.ts`,
+`require-enum-in-config-file.repo.ts`, `require-enum-over-literal-union.service.ts`
+and `consumer/uses-shared-type.util.ts`
+
 `asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
 pin the silence of `: any`: the plugin era warned on it, biome's recommended set
 owned it, and the native engine reported nothing at all for an annotation. the

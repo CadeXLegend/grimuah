@@ -2440,7 +2440,10 @@ fn isModifier(text: []const u8) bool {
     return contains(&member_modifiers, text);
 }
 
-fn isNonReference(text: []const u8) bool {
+/// whether a word token is a keyword rather than a name. the parser asks this to
+/// tell a reference from a modifier, and the project pass asks it to tell the
+/// names a file mentions from the keywords it is written with
+pub fn isNonReference(text: []const u8) bool {
     return non_reference_lookup.has(text);
 }
 

@@ -38,8 +38,14 @@ src/probe/chained.ts:1: [resilience] chained 'as' casts bypass type safety; use 
 src/probe/c-nested-empty.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/c-nested-empty.ts:7: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/c-nested-empty.ts:7: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/config-declares-data-only.config.ts:10: [structural] `Key` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/config-declares-data-only.config.ts:12: [structural] `buildKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/config-declares-data-only.config.ts:12: [structural] This .config.ts file declares a function. Move the behaviour into the surface's own module.
+src/probe/config-declares-data-only.config.ts:16: [structural] `currentDateKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/config-declares-data-only.config.ts:16: [structural] This .config.ts file declares a function. Move the behaviour into the surface's own module.
+src/probe/config-declares-data-only.config.ts:20: [structural] `LocalKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/config-declares-data-only.config.ts:6: [structural] `Message` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/consumer/uses-shared-type.util.ts:8: [structural] `balanceOf` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/c-throw-noval.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/cyclomatic-complexity.ts:5: [resilience] This function has a cyclomatic complexity of 18. Extract each decision into a named predicate or a lookup.
 src/probe/d-as-generic.ts:2: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
@@ -103,7 +109,10 @@ src/probe/let-noinit.ts:2: [resilience] do not use let; use const. only let at m
 src/probe/let-typed.ts:2: [hygiene] This let declares a variable that is only assigned once.
 src/probe/let-typed.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/let-var.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/lowercase-copy.config.ts:12: [structural] `HiddenLabel` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/lowercase-copy.config.ts:14: [cosmetic] This copy starts lowercase. Capitalise the first letter of the sentence.
+src/probe/lowercase-copy.config.ts:14: [structural] `WholeLabel` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/lowercase-copy.config.ts:5: [structural] `LowercaseMessage` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/lowercase-copy.config.ts:6: [cosmetic] This copy starts lowercase. Capitalise the first letter of the sentence.
 src/probe/max-file-lines.ts:1: [resilience] This file is 501 lines long. Split it along the responsibilities its sections already show.
 src/probe/max-function-lines.ts:5: [resilience] This function body is 81 lines long. Extract each distinct job into a named function.
@@ -118,6 +127,8 @@ src/probe/no-async-scalar-failure-return.ts:11: [resilience] This async operatio
 src/probe/no-async-scalar-failure-return.ts:15: [resilience] This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.
 src/probe/no-async-scalar-failure-return.ts:17: [resilience] This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.
 src/probe/no-discarded-outcome.ts:21: [behavioural] This call returns an Outcome and nothing reads the result, so its failure branch is unreachable. Assign the result and narrow `succeeded`, or log the failure where the call is best effort.
+src/probe/no-export-without-consumer.repo.ts:14: [structural] `OrphanedOutcome` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/no-export-without-consumer.repo.ts:16: [structural] `orphanedKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/no-import-cycles-a.repo.ts:8: [structural] This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.
 src/probe/no-import-cycles-b.repo.ts:6: [structural] This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.
 src/probe/no-optional-properties.ts:11: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
@@ -149,12 +160,17 @@ src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every expo
 src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-star.ts:3: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/require-enum-in-config-file.repo.ts:18: [structural] `AccountFailureReason` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/require-enum-in-config-file.repo.ts:18: [structural] This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.
+src/probe/require-enum-over-literal-union.service.ts:12: [structural] `Wave` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/require-enum-over-literal-union.service.ts:13: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
 src/probe/require-enum-over-literal-union.service.ts:17: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
 src/probe/require-enum-over-literal-union.service.ts:20: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:20: [structural] `Heading` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/require-enum-over-literal-union.service.ts:22: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:22: [structural] `limit` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/require-enum-over-literal-union.service.ts:24: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:24: [structural] `steer` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/shared-type-placement.repo.ts:8: [structural] This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in shared-type-placement.types.ts instead.
 src/probe/sheet.js:1: [resilience] use === instead of == to avoid type coercion bugs
 src/probe/silent-catch-bound.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
