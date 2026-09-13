@@ -32,7 +32,8 @@ pub fn stemLastOf(file_name: []const u8) []const u8 {
     return stem[dot + 1 ..];
 }
 
-/// the parts a declaration module is named with rather than a behaviour kind.
+/// the parts a declaration module is named with rather than a behaviour kind
+///
 /// `d` is the `*.d.ts` case, so a rule reads no separate extension test for it:
 /// the last stem part of a declaration file is `d` exactly when the name ends in
 /// `.d.ts`

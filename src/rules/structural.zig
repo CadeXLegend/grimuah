@@ -418,8 +418,7 @@ pub fn checkSharedTypePlacement(
     rule: *const root.Rule,
     findings: *std.ArrayList(root.Finding),
 ) std.mem.Allocator.Error!void {
-    _ = path;
-    if (!naming.isImplementationModule(naming.fileNameOf(index.paths[file]))) return;
+    if (!naming.isImplementationModule(naming.fileNameOf(path))) return;
 
     for (index.exports[file]) |exported| {
         if (exported.kind != .type_alias) continue;
@@ -430,11 +429,11 @@ pub fn checkSharedTypePlacement(
         const message = try std.fmt.allocPrint(
             allocator,
             root.shared_type_placement,
-            .{naming.stemParentOf(naming.fileNameOf(index.paths[file]))},
+            .{naming.stemParentOf(naming.fileNameOf(path))},
         );
         defer allocator.free(message);
         try findings.append(allocator, .{
-            .path = try allocator.dupe(u8, index.paths[file]),
+            .path = try allocator.dupe(u8, path),
             .line = exported.line,
             .message = try allocator.dupe(u8, message),
             .layer = rule.layer.name(),
@@ -682,54 +681,54 @@ test "a one-way import is not a cycle, and neither is one that only points into 
 
 test "a second cycle does not answer for the first, so a file reports its own closing import" {
     const allocator = std.testing.allocator;
-    const x = try cycleRow(allocator, "src/db/x.repo.ts", 3);
-    defer allocator.free(x);
-    const m = try cycleRow(allocator, "src/db/m.repo.ts", 1);
-    defer allocator.free(m);
-    const n = try cycleRow(allocator, "src/db/n.repo.ts", 1);
-    defer allocator.free(n);
-    const y = try cycleRow(allocator, "src/db/y.repo.ts", 1);
-    defer allocator.free(y);
+    const own_cycle_first = try cycleRow(allocator, "src/db/own-a.repo.ts", 3);
+    defer allocator.free(own_cycle_first);
+    const own_cycle_second = try cycleRow(allocator, "src/db/own-b.repo.ts", 1);
+    defer allocator.free(own_cycle_second);
+    const other_cycle_first = try cycleRow(allocator, "src/db/other-a.repo.ts", 1);
+    defer allocator.free(other_cycle_first);
+    const other_cycle_second = try cycleRow(allocator, "src/db/other-b.repo.ts", 1);
+    defer allocator.free(other_cycle_second);
 
-    // x imports a cycle it is not in before it imports the one it is, so its row
-    // is the second import: the graph labels components rather than asking whether
-    // a target sits on some cycle
+    // the first file imports a cycle it is not in before it imports the one it is, so
+    // its row is the second import: the graph labels components rather than asking
+    // whether a target sits on some cycle
     try probe.expectProject(.structural, &.{
-        .{ .path = "src/db/x.repo.ts", .content =
-        \\import { fromM } from "./m.repo.ts";
+        .{ .path = "src/db/own-a.repo.ts", .content =
+        \\import { fromOtherA } from "./other-a.repo.ts";
         \\
-        \\import { fromY } from "./y.repo.ts";
+        \\import { fromOwnB } from "./own-b.repo.ts";
         \\
-        \\export function fromX(): string {
-        \\  return fromM() + fromY();
+        \\export function fromOwnA(): string {
+        \\  return fromOtherA() + fromOwnB();
         \\}
         \\
         },
-        .{ .path = "src/db/m.repo.ts", .content =
-        \\import { fromN } from "./n.repo.ts";
+        .{ .path = "src/db/own-b.repo.ts", .content =
+        \\import { fromOwnA } from "./own-a.repo.ts";
         \\
-        \\export function fromM(): string {
-        \\  return fromN();
+        \\export function fromOwnB(): string {
+        \\  return fromOwnA();
         \\}
         \\
         },
-        .{ .path = "src/db/n.repo.ts", .content =
-        \\import { fromM } from "./m.repo.ts";
+        .{ .path = "src/db/other-a.repo.ts", .content =
+        \\import { fromOtherB } from "./other-b.repo.ts";
         \\
-        \\export function fromN(): string {
-        \\  return fromM();
+        \\export function fromOtherA(): string {
+        \\  return fromOtherB();
         \\}
         \\
         },
-        .{ .path = "src/db/y.repo.ts", .content =
-        \\import { fromX } from "./x.repo.ts";
+        .{ .path = "src/db/other-b.repo.ts", .content =
+        \\import { fromOtherA } from "./other-a.repo.ts";
         \\
-        \\export function fromY(): string {
-        \\  return fromX();
+        \\export function fromOtherB(): string {
+        \\  return fromOtherA();
         \\}
         \\
         },
-    }, &.{ x, m, n, y });
+    }, &.{ own_cycle_first, own_cycle_second, other_cycle_first, other_cycle_second });
 }
 
 test "a package, an unresolvable path, a self-import, a re-export and a dynamic import are no edges" {

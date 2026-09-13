@@ -512,9 +512,16 @@ fn collectExports(
     }
 }
 
-/// the declaration an exported statement declares, when a rule judges it by where it
-/// lives: a type alias or an enum, with the name each one declares
-fn exportedKind(tokens: []const ts.Token, from: usize) ?struct { kind: rules.ExportKind, name: []const u8 } {
+/// the keyword and the name an exported statement leads with, when a rule can judge
+/// it by where it lives
+const ExportedKeyword = struct {
+    kind: rules.ExportKind,
+    name: []const u8,
+};
+
+/// the declaration an exported statement declares: a type alias or an enum, with the
+/// name each one declares
+fn exportedKind(tokens: []const ts.Token, from: usize) ?ExportedKeyword {
     const leading = typemodel.leadingWords(tokens, from);
     for (leading, 0..) |word, index| {
         // the name follows the keyword, so a keyword with no name after it declares
