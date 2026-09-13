@@ -842,7 +842,10 @@ const TypeStop = enum { brace_starts_object, brace_starts_body };
 /// `>>`, three for `>>>`, nothing for `>=`, `>>=`, `>>>=` and every other token.
 /// a hand-rolled length test got `>>=` wrong once, so this is one function that
 /// spells all six forms out
-fn angleClosers(text: []const u8) usize {
+///
+/// `src/lang/typemodel.zig` reads a type's members from an extent the same way,
+/// and shares this rather than spelling the six forms out a second time
+pub fn angleClosers(text: []const u8) usize {
     return switch (text.len) {
         1 => @intFromBool(text[0] == '>'),
         2 => if (text[0] == '>' and text[1] == '>') 2 else 0,

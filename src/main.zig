@@ -28,6 +28,7 @@ test {
     _ = @import("scope.zig");
     _ = @import("ir.zig");
     _ = @import("lang/ts.zig");
+    _ = @import("lang/typemodel.zig");
     _ = @import("lint.zig");
     _ = @import("prepass.zig");
     _ = @import("presets.zig");
