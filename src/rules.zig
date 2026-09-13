@@ -168,42 +168,84 @@ pub const ImportEdge = struct {
     specifier: []const u8,
     /// the line the statement starts on
     line: u32,
+    /// the local names a named clause binds: `{ a, b as c }` gives `a` and `c`.
+    /// the default and namespace forms bind a name of their own shape and
+    /// contribute none, because a rule that reads imported names reads the ones a
+    /// clause lists
+    names: []const []const u8 = &.{},
 };
 
-/// the cycle a file belongs to, in `ImportGraph.cycle_of`, when it belongs to none
+/// the cycle a file belongs to, in `ProjectIndex.cycle_of`, when it belongs to none
 pub const no_cycle: u32 = std.math.maxInt(u32);
 
 /// one import statement of one file, with the file it turned out to name
 ///
 /// the merge resolves every specifier against the files of the run before an edge
 /// exists, so a target is always a file index and the graph holds no dangling one
-pub const ResolvedEdge = struct {
-    /// the index of the file this edge points at in the run
+pub const ResolvedImport = struct {
+    /// the index of the file this import points at in the run
     target: u32,
     /// the line the statement starts on, which is the line a cycle reports on
     line: u32,
+    /// the local names a named clause binds, as `ImportEdge.names`
+    names: []const []const u8 = &.{},
 };
 
-/// the run's import graph: every file's outgoing imports, and the cycle each file
-/// sits in
+/// who imports one file of the run, and under which local names
+pub const Importer = struct {
+    /// the index of the file that imports
+    file: u32,
+    /// the names that file bound from a named clause
+    names: []const []const u8 = &.{},
+};
+
+/// the kinds of declaration a rule can judge by where they live
+pub const ExportKind = enum {
+    /// `export type X = ...`
+    type_alias,
+    /// `export enum X { ... }`, the `const`, `declare` and bare forms alike
+    @"enum",
+};
+
+/// one declaration a file exports
+///
+/// the front-end models `interface`, `type`, `enum`, `namespace` and `declare` as
+/// one node kind with no name and no children, so the merge reads the keyword and
+/// the name off the declaration's own leading words
+pub const ExportedDeclaration = struct {
+    name: []const u8,
+    kind: ExportKind,
+    /// the line the declaration starts on, which is where a rule reports it
+    line: u32,
+};
+
+/// the run's import graph, its reverse, and the declarations each file exports
 ///
 /// a file can be reached from another file of the same dagOrder, so the surface
 /// firewall cannot see a cycle, and the run has to read every file before it can
 /// decide. the graph is the merge's, not one file's: it outlives every
 /// contribution, because the verdict for the first file needs the last file's
 /// edges
-pub const ImportGraph = struct {
-    /// the graph's own memory: every file's edges and the labels outlive the file
-    /// they were read from, because the last file's verdict needs the first file's
+pub const ProjectIndex = struct {
+    /// the index's own memory: every file's imports, names and labels outlive the
+    /// file they were read from, because the last file's verdict needs the first
+    /// file's
     arena: std.heap.ArenaAllocator,
-    /// every file's own edges, in statement order, indexed by file
-    edges: []const []const ResolvedEdge = &.{},
+    /// every file of the run, in walk order. a rule that has to sort the run, or ask
+    /// whether two files sit in one directory, reads this
+    paths: []const []const u8 = &.{},
+    /// every file's own imports, in statement order, indexed by file
+    imports: []const []const ResolvedImport = &.{},
+    /// the reverse of `imports`: who imports each file, and under which names
+    importers: []const []const Importer = &.{},
+    /// the declarations each file exports, indexed by file
+    exports: []const []const ExportedDeclaration = &.{},
     /// the component a file sits in, when that component holds two files or more,
     /// and `no_cycle` otherwise. two files share an id exactly when they are in
     /// one strongly connected component of two or more
     cycle_of: []const u32 = &.{},
 
-    pub fn deinit(self: *ImportGraph) void {
+    pub fn deinit(self: *ProjectIndex) void {
         self.arena.deinit();
     }
 };
@@ -214,9 +256,9 @@ pub const ImportGraph = struct {
 /// a rule decides only what the file's own row is. it reports through the table
 /// entry it is handed, which is where the layer, the severity and the message
 /// stay stated once
-pub const GraphVerdict = *const fn (
+pub const IndexVerdict = *const fn (
     allocator: std.mem.Allocator,
-    graph: *const ImportGraph,
+    graph: *const ProjectIndex,
     file: usize,
     path: []const u8,
     rule: *const Rule,
@@ -233,6 +275,7 @@ pub const Project = struct {
     declared_returns: std.ArrayList(typemodel.DeclaredReturn) = .empty,
     deferred: std.ArrayList(Candidate) = .empty,
     imports: std.ArrayList(ImportEdge) = .empty,
+    exports: std.ArrayList(ExportedDeclaration) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -243,8 +286,14 @@ pub const Project = struct {
         self.declared_returns.deinit(allocator);
         for (self.deferred.items) |candidate| allocator.free(candidate.name);
         self.deferred.deinit(allocator);
-        for (self.imports.items) |edge| allocator.free(edge.specifier);
+        for (self.imports.items) |import| {
+            allocator.free(import.specifier);
+            for (import.names) |name| allocator.free(name);
+            if (import.names.len > 0) allocator.free(import.names);
+        }
         self.imports.deinit(allocator);
+        for (self.exports.items) |exported| allocator.free(exported.name);
+        self.exports.deinit(allocator);
     }
 };
 
@@ -267,11 +316,11 @@ pub const Rule = struct {
     /// this rule reads the run's import graph, so the merge resolves every file's
     /// imports and runs the component pass before any verdict. the pass is over the
     /// whole project, so a config that enables no graph rule must not pay for it
-    needs_import_graph: bool = false,
+    needs_project_index: bool = false,
     /// the verdict this rule reaches over the import graph. a rule that declared
-    /// `needs_import_graph` must have one, or it would drive the pass and report
+    /// `needs_project_index` must have one, or it would drive the pass and report
     /// nothing
-    resolve_graph: ?GraphVerdict = null,
+    resolve_index: ?IndexVerdict = null,
     /// the per-file matcher. a rule whose only verdict is the import graph has
     /// none, because that verdict needs every file of the run rather than the one
     /// in front of it
@@ -318,6 +367,7 @@ pub const discarded_outcome = "This call returns an Outcome and nothing reads th
 pub const unread_scalar_result = "This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.";
 pub const enum_placement = "This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.";
 pub const import_cycle = "This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.";
+pub const shared_type_placement = "This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in {s}.types.ts instead.";
 pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
@@ -594,8 +644,8 @@ pub const all = [_]Rule{
         .message = import_cycle,
         .syntax = .ir,
         .oracle = false,
-        .needs_import_graph = true,
-        .resolve_graph = structural.resolveImportCycle,
+        .needs_project_index = true,
+        .resolve_index = structural.resolveImportCycle,
     },
     .{
         .layer = .structural,
@@ -603,6 +653,15 @@ pub const all = [_]Rule{
         .message = redundant_allowed_import,
         .oracle = false,
         .match = structural.checkRedundantAllowedImport,
+    },
+    .{
+        .layer = .structural,
+        .severity = .warn,
+        .message = shared_type_placement,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_project_index = true,
+        .resolve_index = structural.checkSharedTypePlacement,
     },
     .{
         .layer = .hygiene,
@@ -677,9 +736,9 @@ pub fn needsProject(cfg: *const config.Config, with_hygiene: bool) bool {
 /// the pass reads the whole project and costs a walk of every file's imports plus
 /// a component pass over the graph, so a project that enables no graph rule must
 /// not pay it
-pub fn needsImportGraph(cfg: *const config.Config, with_hygiene: bool) bool {
+pub fn needsProjectIndex(cfg: *const config.Config, with_hygiene: bool) bool {
     for (all) |rule| {
-        if (!rule.needs_import_graph) continue;
+        if (!rule.needs_project_index) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
         if (enabled(cfg, rule.layer)) return true;
     }
@@ -691,9 +750,9 @@ pub fn needsImportGraph(cfg: *const config.Config, with_hygiene: bool) bool {
 /// the merge builds the graph once and calls this as it walks the files, so a
 /// rule's own resolver decides only what that file's row is, and the layer, the
 /// severity and the message come off the table entry the resolver is handed
-pub fn resolveGraph(
+pub fn resolveIndex(
     allocator: std.mem.Allocator,
-    graph: *const ImportGraph,
+    graph: *const ProjectIndex,
     file: usize,
     path: []const u8,
     cfg: *const config.Config,
@@ -701,8 +760,8 @@ pub fn resolveGraph(
     findings: *std.ArrayList(Finding),
 ) std.mem.Allocator.Error!void {
     for (&all) |*rule| {
-        if (!rule.needs_import_graph) continue;
-        const verdict = rule.resolve_graph orelse continue;
+        if (!rule.needs_project_index) continue;
+        const verdict = rule.resolve_index orelse continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
         if (!enabled(cfg, rule.layer)) continue;
         try verdict(allocator, graph, file, path, rule, findings);
@@ -748,8 +807,8 @@ const testing = std.testing;
 // a graph
 test "every rule has a verdict, and the graph flag and the graph verdict agree" {
     for (all) |rule| {
-        try testing.expect(rule.match != null or rule.resolve_graph != null);
-        try testing.expect(rule.needs_import_graph == (rule.resolve_graph != null));
+        try testing.expect(rule.match != null or rule.resolve_index != null);
+        try testing.expect(rule.needs_project_index == (rule.resolve_index != null));
     }
 }
 
@@ -764,13 +823,28 @@ test "a graph verdict is reached only for a rule whose layer is on, and reports 
     var arena = std.heap.ArenaAllocator.init(allocator);
     const graph_allocator = arena.allocator();
     // every allocation through the arena happens before the literal copies it
-    const own_edges = try graph_allocator.alloc(ResolvedEdge, 1);
-    own_edges[0] = .{ .target = 0, .line = 7 };
-    const edges = try graph_allocator.alloc([]const ResolvedEdge, 1);
-    edges[0] = own_edges;
+    // every slot the index holds has one entry, because every rule that reads the
+    // index reads the slot of the file it was handed
+    const paths = try graph_allocator.alloc([]const u8, 1);
+    paths[0] = "src/db/a.repo.ts";
+    const own_imports = try graph_allocator.alloc(ResolvedImport, 1);
+    own_imports[0] = .{ .target = 0, .line = 7 };
+    const imports = try graph_allocator.alloc([]const ResolvedImport, 1);
+    imports[0] = own_imports;
+    const importers = try graph_allocator.alloc([]const Importer, 1);
+    importers[0] = &.{};
+    const exports = try graph_allocator.alloc([]const ExportedDeclaration, 1);
+    exports[0] = &.{};
     const cycle_of = try graph_allocator.alloc(u32, 1);
     cycle_of[0] = 0;
-    var graph = ImportGraph{ .arena = arena, .edges = edges, .cycle_of = cycle_of };
+    var graph = ProjectIndex{
+        .arena = arena,
+        .paths = paths,
+        .imports = imports,
+        .importers = importers,
+        .exports = exports,
+        .cycle_of = cycle_of,
+    };
     defer graph.deinit();
 
     var findings: std.ArrayList(Finding) = .empty;
@@ -783,11 +857,11 @@ test "a graph verdict is reached only for a rule whose layer is on, and reports 
     }
 
     const graph_layer_off = config.Config{ .surfaces = &.{}, .layers = .{ .cosmetic = true, .structural = false, .resilience = true, .behavioural = true } };
-    try resolveGraph(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_off, false, &findings);
+    try resolveIndex(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_off, false, &findings);
     try testing.expectEqual(@as(usize, 0), findings.items.len);
 
     const graph_layer_on = config.Config{ .surfaces = &.{}, .layers = .{ .cosmetic = true, .structural = true, .resilience = false, .behavioural = false } };
-    try resolveGraph(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_on, false, &findings);
+    try resolveIndex(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_on, false, &findings);
     try testing.expectEqual(@as(usize, 1), findings.items.len);
     try testing.expectEqual(@as(u32, 7), findings.items[0].line);
     try testing.expectEqualStrings("structural", findings.items[0].layer);

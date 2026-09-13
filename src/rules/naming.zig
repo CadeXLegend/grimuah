@@ -54,6 +54,29 @@ pub fn isDeclarationModule(file_name: []const u8) bool {
     return false;
 }
 
+/// the last part of the stem dropped: `accounts` for `accounts.repo.ts`, which is
+/// the name the file's sibling declaration modules are named with, so the type file
+/// of a surface module is `accounts.types.ts`
+pub fn stemParentOf(file_name: []const u8) []const u8 {
+    const stem = stemOf(file_name);
+    const dot = std.mem.lastIndexOfScalar(u8, stem, '.') orelse return stem;
+    return stem[0..dot];
+}
+
+/// a module named for a behaviour kind: `<name>.<kind>.ts`, where the kind is not
+/// one a declaration module is named with
+///
+/// the name alone decides. whether a module at the top of the tree is in scope is
+/// each rule's own question: `require-enum-in-config-file` leaves the shared root
+/// library alone, and `require-shared-type-placement` reads it
+const IMPLEMENTATION_MODULE_MIN_STEM_PARTS = 2;
+
+pub fn isImplementationModule(file_name: []const u8) bool {
+    if (!std.mem.endsWith(u8, file_name, ".ts")) return false;
+    if (stemPartCount(file_name) < IMPLEMENTATION_MODULE_MIN_STEM_PARTS) return false;
+    return !isDeclarationModule(file_name);
+}
+
 /// a module in the tree's top-level directory, or in the root itself, which is
 /// the shared root library or a process entry point rather than a surface's own
 /// module. `src/db/accounts.repo.ts` is two directories deep and out of this

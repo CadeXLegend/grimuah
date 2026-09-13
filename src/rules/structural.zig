@@ -60,10 +60,6 @@ fn report(module: *const ir.Module, context: *const root.Context, index: ir.Node
     try context.report(module.spanOf(index).line, .structural, root.config_behaviour, .warn);
 }
 
-/// an implementation module names itself `<name>.<kind>.ts`, so its stem carries
-/// a surface name and a behaviour kind before the extension
-const IMPLEMENTATION_MODULE_MIN_STEM_PARTS = 2;
-
 /// an exported enum declared in an implementation module
 ///
 /// an enum is a configuration constant, and grimuah gives configuration its own
@@ -82,7 +78,7 @@ const IMPLEMENTATION_MODULE_MIN_STEM_PARTS = 2;
 /// same reason the detector's top-level statement walk leaves it: `declare
 /// module { ... }` parses as one node with no children
 pub fn checkEnumPlacement(context: *const root.Context) !void {
-    if (!isImplementationModule(context.path)) return;
+    if (!isEnumPlacementModule(context.path)) return;
     const module = context.module orelse return;
 
     var child = module.firstChildOf(module.root);
@@ -96,14 +92,11 @@ pub fn checkEnumPlacement(context: *const root.Context) !void {
     }
 }
 
-/// whether the module is named for a behaviour kind rather than for a
-/// declaration, and is not the tree's own top level
-fn isImplementationModule(path: []const u8) bool {
-    const file_name = naming.fileNameOf(path);
-    if (!std.mem.endsWith(u8, file_name, ".ts")) return false;
-    if (naming.stemPartCount(file_name) < IMPLEMENTATION_MODULE_MIN_STEM_PARTS) return false;
-    if (naming.isDeclarationModule(file_name)) return false;
-    return !naming.isRootModule(path);
+/// whether the module is named for a behaviour kind rather than for a declaration,
+/// and is not the tree's own top level. a module at the top of the tree is the shared
+/// root library or an entry point, and its enums belong to it
+fn isEnumPlacementModule(path: []const u8) bool {
+    return naming.isImplementationModule(naming.fileNameOf(path)) and !naming.isRootModule(path);
 }
 
 /// whether an exported statement declares an enum. the front-end models
@@ -132,10 +125,8 @@ fn exportedDeclaresEnum(module: *const ir.Module, tokens: []const ts.Token, stat
 /// the first token that is not a word, which is the name's end, the `=` of an
 /// alias or the `{` of a body
 fn leadsWithEnum(tokens: []const ts.Token, from: usize) bool {
-    var index = from;
-    while (index < tokens.len) : (index += 1) {
-        if (tokens[index].kind != .word) return false;
-        if (tokens[index].isWord("enum")) return true;
+    for (typemodel.leadingWords(tokens, from)) |word| {
+        if (word.isWord("enum")) return true;
     }
     return false;
 }
@@ -152,7 +143,7 @@ fn leadsWithEnum(tokens: []const ts.Token, from: usize) bool {
 /// asking whether a target sits on some cycle
 pub fn resolveImportCycle(
     allocator: std.mem.Allocator,
-    graph: *const root.ImportGraph,
+    graph: *const root.ProjectIndex,
     file: usize,
     path: []const u8,
     rule: *const root.Rule,
@@ -161,11 +152,11 @@ pub fn resolveImportCycle(
     const cycle = graph.cycle_of[file];
     if (cycle == root.no_cycle) return;
 
-    for (graph.edges[file]) |edge| {
-        if (graph.cycle_of[edge.target] != cycle) continue;
+    for (graph.imports[file]) |import| {
+        if (graph.cycle_of[import.target] != cycle) continue;
         try findings.append(allocator, .{
             .path = try allocator.dupe(u8, path),
-            .line = edge.line,
+            .line = import.line,
             .message = try allocator.dupe(u8, rule.message),
             .layer = rule.layer.name(),
             .severity = rule.severity,
@@ -402,6 +393,220 @@ test "a grant at the surface's own dagOrder is read by the checker and is not re
     try probe.expectConfigured(&cfg, &.{
         .{ .path = "src/commands/afk.command.ts", .content = source },
     }, &.{});
+}
+
+/// a type alias an implementation module exports and another directory consumes
+///
+/// when the shared type sits inside the module that also implements behaviour, every
+/// consumer of the type imports the implementation, the edge the import firewall
+/// reasons about is no longer the one a reader sees, and the type and the behaviour
+/// can no longer change independently. the detector leaves enums to
+/// `require-enum-in-config-file`, so the two never offer the same fix twice
+///
+/// the file scope is the name alone: an implementation module is in scope wherever it
+/// sits, including the tree's top level, which is where this rule and the enum rule
+/// part company
+///
+/// a consumer has to sit in another directory, and it has to name the type in a named
+/// import clause. an import bound under another name does not count, because the
+/// detector reads the binding's local name and the declaration is keyed by its own
+pub fn checkSharedTypePlacement(
+    allocator: std.mem.Allocator,
+    index: *const root.ProjectIndex,
+    file: usize,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    _ = path;
+    if (!naming.isImplementationModule(naming.fileNameOf(index.paths[file]))) return;
+
+    for (index.exports[file]) |exported| {
+        if (exported.kind != .type_alias) continue;
+        if (!consumedFromAnotherDirectory(index, file, exported.name)) continue;
+        // the message carries the declaration file's name, so it is formatted rather
+        // than taken from the table as a finished string. the table names the same
+        // constant this reads, so the wording still has one source
+        const message = try std.fmt.allocPrint(
+            allocator,
+            root.shared_type_placement,
+            .{naming.stemParentOf(naming.fileNameOf(index.paths[file]))},
+        );
+        defer allocator.free(message);
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, index.paths[file]),
+            .line = exported.line,
+            .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
+}
+
+/// whether some file in another directory imports this name from this file
+fn consumedFromAnotherDirectory(index: *const root.ProjectIndex, file: usize, name: []const u8) bool {
+    for (index.importers[file]) |importer| {
+        if (sameDirectory(index.paths[importer.file], index.paths[file])) continue;
+        for (importer.names) |bound| {
+            if (std.mem.eql(u8, bound, name)) return true;
+        }
+    }
+    return false;
+}
+
+/// whether two paths sit in one directory, which is the detector's own test: the
+/// directories compared as text
+fn sameDirectory(left: []const u8, right: []const u8) bool {
+    return std.mem.eql(u8, directoryOf(left), directoryOf(right));
+}
+
+fn directoryOf(path: []const u8) []const u8 {
+    const separator = std.mem.lastIndexOfScalar(u8, path, '/') orelse return "";
+    return path[0..separator];
+}
+
+/// the declaration a placement test's rows are anchored on, so the expected row is
+/// built from the table's message and a wording change is one edit
+fn placementRow(allocator: std.mem.Allocator, path: []const u8, line: u32, declaration: []const u8) ![]const u8 {
+    const message = try std.fmt.allocPrint(allocator, root.shared_type_placement, .{declaration});
+    defer allocator.free(message);
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, message });
+}
+
+test "a type an implementation module exports and another directory imports is reported" {
+    const allocator = std.testing.allocator;
+    const consumed = try placementRow(allocator, "src/db/accounts.repo.ts", 3, "accounts");
+    defer allocator.free(consumed);
+
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/accounts.repo.ts", .content =
+        \\export const Row = "account";
+        \\
+        \\export type Account = { readonly id: string };
+        \\
+
+        },
+        .{ .path = "src/services/billing.service.ts", .content =
+        \\import { Account } from "../db/accounts.repo";
+
+        \\export function charge(account: Account): string {
+        \\  return account.id;
+        \\}
+        \\
+        },
+    }, &.{consumed});
+}
+
+test "the placement rule reads the directory the consumer sits in, and the name it binds" {
+    const allocator = std.testing.allocator;
+    const consumed = try placementRow(allocator, "src/db/accounts.repo.ts", 1, "accounts");
+    defer allocator.free(consumed);
+
+    // the declaration module's own name is a declaration module's, so a type there is
+    // already placed; the sibling in the same directory is not another directory; the
+    // consumer that names it is in one, so exactly one row
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/accounts.repo.ts", .content =
+        \\export type Account = { readonly id: string };
+        \\
+        \\export type Pending = { readonly id: string };
+        \\
+
+        },
+        // the same directory: `src/db`, so this consumes nothing
+        .{ .path = "src/db/rows.repo.ts", .content =
+        \\import { Pending } from "./accounts.repo";
+
+        \\export function rows(pending: Pending): string {
+        \\  return pending.id;
+        \\}
+        \\
+        },
+        .{ .path = "src/services/billing.service.ts", .content =
+        \\import { Account } from "../db/accounts.repo";
+
+        \\export function charge(account: Account): string {
+        \\  return account.id;
+        \\}
+        \\
+        },
+    }, &.{consumed});
+}
+
+test "an enum, an unimported alias and a renamed import are all out of scope" {
+    // the enum sits in the root library, which the enum rule leaves alone, so the
+    // only question this test asks is the placement rule's: an enum is that rule's
+    // own case and is never reported here. `Local` is imported from its own
+    // directory and `Unread` from nowhere. the consumer binds `Renamed` under a name
+    // of its own, and the detector reads the binding's local name, so a renamed
+    // import does not make a type shared either
+    try probe.expectProject(.structural, &.{
+        .{ .path = "lib/reasons.repo.ts", .content =
+        \\export enum Reason {
+        \\  Ready = "ready",
+        \\}
+        \\
+        },
+        .{ .path = "src/db/accounts.repo.ts", .content =
+        \\export type Local = { readonly id: string };
+        \\
+        \\export type Unread = { readonly id: string };
+        \\
+        \\export type Renamed = { readonly id: string };
+        \\
+        },
+        .{ .path = "src/db/rows.repo.ts", .content =
+        \\import { Local } from "./accounts.repo";
+
+        \\export function rows(local: Local): string {
+        \\  return local.id;
+        \\}
+        \\
+        },
+        .{ .path = "src/services/billing.service.ts", .content =
+        \\import { Renamed as Chargeable } from "../db/accounts.repo";
+        \\import { Reason } from "../../lib/reasons.repo";
+
+        \\export function charge(chargeable: Chargeable, reason: Reason): string {
+        \\  return chargeable.id + reason;
+        \\}
+        \\
+        },
+    }, &.{});
+}
+
+test "a declaration module and a module with no behaviour kind export nothing the rule reads" {
+    // the file scope is the name: `accounts.types.ts` is a declaration module and
+    // `accounts.ts` carries no behaviour kind, so neither is judged. the root library
+    // is not excluded here, which is where this rule and the enum rule part company
+    const allocator = std.testing.allocator;
+    const consumed = try placementRow(allocator, "lib/shared.repo.ts", 1, "shared");
+    defer allocator.free(consumed);
+
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/accounts.types.ts", .content =
+        \\export type Account = { readonly id: string };
+        \\
+        },
+        .{ .path = "src/db/accounts.ts", .content =
+        \\export type Account = { readonly id: string };
+        \\
+        },
+        .{ .path = "lib/shared.repo.ts", .content =
+        \\export type Shared = { readonly id: string };
+        \\
+        },
+        .{ .path = "src/services/billing.service.ts", .content =
+        \\import { Account } from "../db/accounts.types";
+        \\import { Account as Other } from "../db/accounts";
+        \\import { Shared } from "../../lib/shared.repo";
+
+        \\export function charge(account: Account, other: Other, shared: Shared): string {
+        \\  return account.id + other.id + shared.id;
+        \\}
+        \\
+        },
+    }, &.{consumed});
 }
 
 /// an expected row for the import-cycle rule, built from the table's message so a

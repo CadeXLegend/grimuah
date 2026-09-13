@@ -77,6 +77,12 @@ detector walks `TypeLiteral` nodes only. seven more rows come from fixtures that
 pin another rule and hold a mutable type literal incidentally, in a cast or a
 parameter
 
+`shared-type-placement.repo.ts` and `consumer/uses-shared-type.util.ts` are the only
+fixtures in two directories, which is what a rule about a declaration consumed from
+another directory needs: the consumer sits under `src/probe/consumer`, so its import
+of the declaration crosses a boundary. the declaration module is the one judged, and
+its row names `shared-type-placement.types.ts`, the file name minus its kind
+
 `no-import-cycles-a.repo.ts` and `no-import-cycles-b.repo.ts` are the corpus's only
 pair: a cycle needs two files, and the two import each other so the run has to read
 both before either can be judged. each one's row lands on its own import statement,

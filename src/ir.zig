@@ -70,6 +70,11 @@ pub const BindingKind = enum {
     parameter,
     /// a name an `import` clause introduces
     import_binding,
+    /// a name a named import clause introduces: `import { a, b as c }` binds `a` and
+    /// `c`. the default and namespace forms introduce a binding of their own shape,
+    /// which a rule that reads the module's imports has to tell apart: only a named
+    /// clause lists names, and `import Default from` and `import * as ns from` do not
+    named_import_binding,
 };
 
 pub const Kind = enum {

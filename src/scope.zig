@@ -97,7 +97,10 @@ pub fn analyze(
                 .kind = switch (node.binding) {
                     .variable => .variable,
                     .parameter => .parameter,
-                    .import_binding => .import_binding,
+                    // the scope's own kinds stay coarse: a rule about unused bindings
+                    // reads every import the same way, and the named clause is only
+                    // the front-end's distinction
+                    .import_binding, .named_import_binding => .import_binding,
                     .none => unreachable,
                 },
                 .decl_kind = declarationKind(module, declaration),

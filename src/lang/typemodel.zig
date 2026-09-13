@@ -743,6 +743,20 @@ fn isCloser(text: []const u8) bool {
     return text[0] == ')' or text[0] == ']' or text[0] == '}';
 }
 
+/// the words a declaration leads with, from the token at `from` up to the first
+/// token that is not a word: the declaration's keywords and, when one follows, the
+/// name it declares
+///
+/// a token extent is all the front-end keeps for `interface`, `type`, `enum`,
+/// `namespace` and `declare`, so this is how a rule reads their keyword and their
+/// name. a token extent is not a node, so the words are what there is
+pub fn leadingWords(tokens: []const Token, from: usize) []const Token {
+    if (from >= tokens.len) return &.{};
+    var end = from;
+    while (end < tokens.len and tokens[end].kind == .word) end += 1;
+    return tokens[from..end];
+}
+
 /// the first token that starts at or after `offset`, or the token count
 ///
 /// it is also how a rule turns a node's byte span into the token extent the

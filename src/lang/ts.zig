@@ -1053,7 +1053,7 @@ const Parser = struct {
                         if (clause.kind == .word and !clause.isWord("as") and expect_binding and !aliased) {
                             const binding = try self.addNode(.identifier, self.begin());
                             self.module.nodes.items[binding].name = clause.text;
-                            self.module.nodes.items[binding].binding = .import_binding;
+                            self.module.nodes.items[binding].binding = .named_import_binding;
                             self.module.appendChild(node, binding);
                         }
                         if (clause.isWord("as")) expect_binding = true else expect_binding = false;
