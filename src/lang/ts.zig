@@ -2664,13 +2664,13 @@ test "parse models ternaries, spreads and generic calls" {
 }
 
 test "parse models a type argument that holds a multi-member type literal" {
-    const a = testing.allocator;
+    const allocator = testing.allocator;
     const source =
         \\const widest = list.reduce<{ readonly url: string; readonly width: number } | undefined>((w, c) => w, undefined);
         \\const grouped = new Map<{ channel: string; tag: string }, number>();
         \\
     ;
-    var module = try parse(a, source);
+    var module = try parse(allocator, source);
     defer module.deinit();
 
     try testing.expectEqual(@as(usize, 0), module.unknownCount());
@@ -2685,20 +2685,20 @@ test "parse models a type argument that holds a multi-member type literal" {
 
     // the walk visits every node exactly once, which an unmatched angle broke:
     // the assert inside `walkOrder` is what the regression reported
-    const order = try module.walkOrder(a);
-    defer a.free(order);
+    const order = try module.walkOrder(allocator);
+    defer allocator.free(order);
     try testing.expect(order.len > 0);
 }
 
 test "parse models a type argument in a class heritage clause" {
-    const a = testing.allocator;
+    const allocator = testing.allocator;
     const source =
         \\class First extends Base<{ readonly url: string; readonly width: number } | undefined> {}
         \\class Second extends Base<string, number> {}
         \\const Third = class extends Base<{ a: string; b: number }> {};
         \\
     ;
-    var module = try parse(a, source);
+    var module = try parse(allocator, source);
     defer module.deinit();
 
     try testing.expectEqual(@as(usize, 0), module.unknownCount());
@@ -2711,8 +2711,8 @@ test "parse models a type argument in a class heritage clause" {
     try testing.expectEqual(@as(usize, 3), classes);
 
     // the walk visits every node exactly once, which an unmatched angle broke
-    const order = try module.walkOrder(a);
-    defer a.free(order);
+    const order = try module.walkOrder(allocator);
+    defer allocator.free(order);
     try testing.expect(order.len > 0);
 }
 

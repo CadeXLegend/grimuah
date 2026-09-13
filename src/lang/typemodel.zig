@@ -154,6 +154,9 @@ pub fn stringLiteralUnionCount(tokens: []const Token, start: usize, end: usize) 
 /// is a tuple, `undefined | Track[]` is a union, `() => Track[]` is a function
 /// type, `keyof Track[]` is an operator over an array, and `globalThis.Array<T>`
 /// is not the reference named `Array`
+/// `X[]` needs three tokens at least: the element type, then `[`, then `]`
+const ARRAY_TYPE_MIN_TOKENS = 3;
+
 pub fn isMutableArrayType(tokens: []const Token, start: usize, end: usize) bool {
     if (start >= end) return false;
     // `readonly T[]`, `keyof T[]` and `typeof t[]` are operators over an array
@@ -169,7 +172,7 @@ pub fn isMutableArrayType(tokens: []const Token, start: usize, end: usize) bool 
 
     // an array type's brackets are empty and follow an element type, which is
     // how an indexed access and a tuple are told apart from it
-    if (end - start >= 3 and isPunct(tokens[end - 2], "[") and isPunct(tokens[end - 1], "]")) return true;
+    if (end - start >= ARRAY_TYPE_MIN_TOKENS and isPunct(tokens[end - 2], "[") and isPunct(tokens[end - 1], "]")) return true;
 
     const first = tokens[start];
     if (first.kind != .word or !first.isWord("Array")) return false;
@@ -657,25 +660,6 @@ fn matchingCloser(tokens: []const Token, open: usize, limit: usize) ?usize {
         }
         if (!isCloser(text)) continue;
         if (depth == 0) return null;
-        depth -= 1;
-        if (depth == 0) return i;
-    }
-    return null;
-}
-
-/// the index of the opener matching the closer at `close`, searching down to `limit`
-fn matchingOpener(tokens: []const Token, close: usize, limit: usize) ?usize {
-    var depth: usize = 0;
-    var i = close + 1;
-    while (i > limit) {
-        i -= 1;
-        if (tokens[i].kind != .punct) continue;
-        const text = tokens[i].text;
-        if (isCloser(text)) {
-            depth += 1;
-            continue;
-        }
-        if (!isOpener(text)) continue;
         depth -= 1;
         if (depth == 0) return i;
     }
