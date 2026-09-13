@@ -2138,7 +2138,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
     /// nested generics tokenise
     fn matchingAngle(self: *const Parser, open_index: usize) ?usize {
         const type_argument_punctuation = [_][]const u8{
-            ",", ".", "?.", "[", "]", "(", ")", "{", "}", "?", ":", "|", "&", "=>", "...",
+            // `;` separates the members of a type literal, which a type argument
+            // may hold: `f<{ a: string; b: number }>()` matches its angle, and
+            // without it the `<` is read as a comparison and the tree grows a
+            // node the walk order cannot account for
+            ",", ";", ".", "?.", "[", "]", "(", ")", "{", "}", "?", ":", "|", "&", "=>", "...",
         };
         var depth: usize = 0;
         var index = open_index;
@@ -2638,6 +2642,33 @@ test "parse models ternaries, spreads and generic calls" {
         if (module.kindOf(index) != .conditional) continue;
         try testing.expectEqual(@as(usize, 3), module.childCount(index));
     }
+}
+
+test "parse models a type argument that holds a multi-member type literal" {
+    const a = testing.allocator;
+    const source =
+        \\const widest = list.reduce<{ readonly url: string; readonly width: number } | undefined>((w, c) => w, undefined);
+        \\const grouped = new Map<{ channel: string; tag: string }, number>();
+        \\
+    ;
+    var module = try parse(a, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    var calls: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) == .call) calls += 1;
+    }
+    // one call each, so the `<` opened type arguments rather than a comparison
+    try testing.expectEqual(@as(usize, 2), calls);
+
+    // the walk visits every node exactly once, which an unmatched angle broke:
+    // the assert inside `walkOrder` is what the regression reported
+    const order = try module.walkOrder(a);
+    defer a.free(order);
+    try testing.expect(order.len > 0);
 }
 
 test "parse models async arrows and a default-exported object literal" {
