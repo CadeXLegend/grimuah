@@ -93,6 +93,10 @@ pub const Context = struct {
     /// the project-wide pass this file takes part in. null unless an enabled rule
     /// declared `needs_project`
     project: ?*Project = null,
+    /// the rule `run` is dispatching to, so a rule that defers a call site does not
+    /// restate the layer, the severity and the message its table entry already
+    /// carries
+    rule: ?*const Rule = null,
 
     pub fn report(self: *const Context, line: u32, layer: Layer, message: []const u8, severity: Severity) !void {
         try self.findings.append(self.allocator, .{
@@ -105,23 +109,26 @@ pub const Context = struct {
     }
 
     /// record a call site whose verdict needs the whole project, for the engine to
-    /// report once every file has been read
+    /// report once every file has been read, with the layer, the severity and the
+    /// message of the rule that deferred it
     ///
     /// a rule that forgets `needs_project` finds no project here, defers nothing,
     /// and reports nothing: the rule's own test is what catches that, rather than a
     /// verdict the run could not have reached
     ///
-    /// the candidate is copied, because its name points into this file's own
-    /// memory and the file is gone by the time the run resolves it
-    pub fn deferToProject(self: *const Context, candidate: Candidate) !void {
+    /// the name is copied, because it points into this file's own memory and the
+    /// file is gone by the time the run resolves the call site
+    pub fn deferToProject(self: *const Context, name: []const u8, line: u32, passes: *const fn (declared_return: []const u8) bool) !void {
         const project = self.project orelse return;
+        const rule = self.rule orelse return;
+
         try project.deferred.append(self.allocator, .{
-            .name = try self.allocator.dupe(u8, candidate.name),
-            .line = candidate.line,
-            .passes = candidate.passes,
-            .layer = candidate.layer,
-            .severity = candidate.severity,
-            .message = candidate.message,
+            .name = try self.allocator.dupe(u8, name),
+            .line = line,
+            .passes = passes,
+            .layer = rule.layer,
+            .severity = rule.severity,
+            .message = rule.message,
         });
     }
 };
@@ -143,6 +150,8 @@ pub const Candidate = struct {
     /// returning an outcome and one a boolean, say nothing about the call in
     /// front of them, so only a name every declaration agrees on is reported
     passes: *const fn (declared_return: []const u8) bool,
+    /// the deferring rule's own table entry, so a finding this produces carries
+    /// the same layer, severity and message as one the rule reports inline
     layer: Layer,
     severity: Severity,
     message: []const u8,
@@ -565,11 +574,18 @@ pub fn enabled(cfg: *const config.Config, layer: Layer) bool {
 }
 
 /// run every enabled rule over one file, in table order
+///
+/// the context is copied per rule so the rule's own table entry travels with the
+/// dispatch: `Context.deferToProject` reads the layer, the severity and the
+/// message from it rather than from the rule's own restatement of them
 pub fn run(context: *const Context) !void {
-    for (all) |rule| {
+    for (&all) |*rule| {
         if (rule.layer == .hygiene and !context.hygiene) continue;
         if (!enabled(context.cfg, rule.layer)) continue;
         if (rule.syntax == .ir and context.module == null) continue;
-        try rule.match(context);
+
+        var dispatched = context.*;
+        dispatched.rule = rule;
+        try rule.match(&dispatched);
     }
 }

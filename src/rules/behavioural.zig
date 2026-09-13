@@ -157,7 +157,7 @@ fn holdsAwait(module: *const ir.Module, index: ir.NodeIndex) bool {
 /// expression that wraps the call. the front-end records no node for a postfix
 /// `!`, so a bare call a `!` was appended to reads as a bare call
 pub fn checkDiscardedOutcome(context: *const root.Context) !void {
-    try deferBareCalls(context, .await_only, declaresOutcome, .warn, root.discarded_outcome);
+    try deferBareCalls(context, .await_only, declaresOutcome);
 }
 
 /// a call whose declared result is a bare boolean or number, where nothing reads
@@ -169,7 +169,7 @@ pub fn checkDiscardedOutcome(context: *const root.Context) !void {
 /// dropped result, so the detector reads it as the same defect stated on purpose
 /// rather than a different one
 pub fn checkUnreadScalarResult(context: *const root.Context) !void {
-    try deferBareCalls(context, .await_or_void, declaresScalarSettled, .warn, root.unread_scalar_result);
+    try deferBareCalls(context, .await_or_void, declaresScalarSettled);
 }
 
 /// the operands a call site may carry that a detector reads through
@@ -193,8 +193,6 @@ fn deferBareCalls(
     context: *const root.Context,
     prefix: CallPrefix,
     passes: *const fn (declared_return: []const u8) bool,
-    severity: root.Severity,
-    message: []const u8,
 ) !void {
     const module = context.module orelse return;
 
@@ -204,14 +202,7 @@ fn deferBareCalls(
         const call = callOf(module, entry.index, prefix) orelse continue;
         const name = calleeName(module, call) orelse continue;
 
-        try context.deferToProject(.{
-            .name = name,
-            .line = module.spanOf(entry.index).line,
-            .passes = passes,
-            .layer = .behavioural,
-            .severity = severity,
-            .message = message,
-        });
+        try context.deferToProject(name, module.spanOf(entry.index).line, passes);
     }
 }
 

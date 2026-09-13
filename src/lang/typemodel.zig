@@ -136,7 +136,7 @@ pub fn analyze(
 /// declaration instead needs the one annotation that declaration carries, and
 /// this is that read made shareable: `readCallable` builds its annotation from
 /// here, so the two cannot drift
-pub fn returnTypeOf(tokens: []const Token, start: usize, end: usize) ?Extent {
+fn returnTypeOf(tokens: []const Token, start: usize, end: usize) ?Extent {
     const open = findParameterList(tokens, start, end) orelse return null;
     const close = matchingCloser(tokens, open, end) orelse return null;
     if (close + 1 >= end or !isPunct(tokens[close + 1], ":")) return null;
@@ -1223,23 +1223,23 @@ test "every module-level declaration with a return type is read under its name" 
     var module = try ts.parseTokens(allocator, source, tokens);
     defer module.deinit();
 
-    var declared: std.ArrayList(DeclaredReturn) = .empty;
+    var declared_returns: std.ArrayList(DeclaredReturn) = .empty;
     defer {
-        for (declared.items) |one| {
-            allocator.free(one.name);
-            allocator.free(one.type_text);
+        for (declared_returns.items) |declared_return| {
+            allocator.free(declared_return.name);
+            allocator.free(declared_return.type_text);
         }
-        declared.deinit(allocator);
+        declared_returns.deinit(allocator);
     }
-    try declaredReturns(allocator, tokens, &module, source, &declared);
+    try declaredReturns(allocator, tokens, &module, source, &declared_returns);
 
     var rows: std.ArrayList([]const u8) = .empty;
     defer {
         for (rows.items) |row| allocator.free(row);
         rows.deinit(allocator);
     }
-    for (declared.items) |one| {
-        try rows.append(allocator, try std.fmt.allocPrint(allocator, "{s} {s}", .{ one.name, one.type_text }));
+    for (declared_returns.items) |declared_return| {
+        try rows.append(allocator, try std.fmt.allocPrint(allocator, "{s} {s}", .{ declared_return.name, declared_return.type_text }));
     }
 
     // `inline` annotates its binding rather than its arrow, `counter` declares no

@@ -33,7 +33,8 @@ pub const Source = struct {
 /// and the merge needs no lock. `project` stays empty unless an enabled rule
 /// declared `needs_project`
 pub const Contribution = struct {
-    /// the file this came from, borrowed from the run's own path list
+    /// the file this came from, borrowed from the run's own path list. it is empty
+    /// only for a file the run skipped before reading, which contributes nothing
     path: []const u8 = "",
     findings: std.ArrayList(Finding) = .empty,
     project: rules.Project = .{},
@@ -394,7 +395,7 @@ const DeclaredReturns = struct {
         errdefer index.deinit();
 
         for (contributions) |contribution| {
-            for (contribution.project.declared_returns.items) |declared| try index.add(declared);
+            for (contribution.project.declared_returns.items) |declared_return| try index.add(declared_return);
         }
         return index;
     }
@@ -403,14 +404,14 @@ const DeclaredReturns = struct {
         self.arena.deinit();
     }
 
-    fn add(self: *DeclaredReturns, declared: typemodel.DeclaredReturn) !void {
+    fn add(self: *DeclaredReturns, declared_return: typemodel.DeclaredReturn) !void {
         const arena = self.arena.allocator();
         // a repeated name leaks the second key into the arena, which the run frees
         // as a whole. narrowing that would need a lookup before the insert, and the
         // arena makes it not worth one
-        const entry = try self.by_name.getOrPut(arena, try arena.dupe(u8, declared.name));
+        const entry = try self.by_name.getOrPut(arena, try arena.dupe(u8, declared_return.name));
         if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(arena, try arena.dupe(u8, declared.type_text));
+        try entry.value_ptr.append(arena, try arena.dupe(u8, declared_return.type_text));
     }
 
     /// the declared return types of one name, or null when no file declares it
