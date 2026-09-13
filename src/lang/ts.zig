@@ -886,6 +886,9 @@ const Parser = struct {
     module: *ir.Module,
     source: []const u8,
     pos: usize = 0,
+    /// a class heritage clause is a type reference, so a `<` inside it opens a
+    /// type argument list and is never the comparison operator
+    in_heritage: bool = false,
 
     inline fn peek(self: *const Parser) ?Token {
         if (self.pos >= self.tokens.len) return null;
@@ -1345,7 +1348,13 @@ const Parser = struct {
         const node = try self.addNode(.class_decl, from);
         if (self.atWord("class")) {
             self.pos += 1;
-            if (!self.atEnd() and (self.peek().?).kind == .word) {
+            // a class expression may have no name at all, so `extends` and
+            // `implements` are not one: `const K = class extends Base<T> {}`
+            // would otherwise record `extends` as the class's own name and
+            // leave the heritage to be parsed as whatever comes next
+            if (!self.atEnd() and (self.peek().?).kind == .word and
+                !self.atWord("extends") and !self.atWord("implements"))
+            {
                 self.module.nodes.items[node].name = (self.peek().?).text;
                 self.pos += 1;
             }
@@ -1353,6 +1362,14 @@ const Parser = struct {
         if (self.atPunct("<")) self.skipType(.brace_starts_object);
         if (self.atWord("extends")) {
             self.pos += 1;
+            // the base is a type reference (`Base`, `ns.Base`) or a call that
+            // returns one (`mixin(Base)`), and its `<` opens type arguments.
+            // without that known, `class K extends Base<{ a: string; b: number }>
+            // {}` reads the `<` as a comparison and corrupts the tree
+            const was_in_heritage = self.in_heritage;
+            self.in_heritage = true;
+            defer self.in_heritage = was_in_heritage;
+
             const base = try self.parseExpression();
             self.module.appendChild(node, base);
         }
@@ -1856,12 +1873,14 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             }
 
             // `f<T>(x)` generic call and `new Map<string, T>()`: the type
-            // arguments are not part of the value
+            // arguments are not part of the value. a heritage clause is a type
+            // reference, so its `<` owns type arguments whatever follows them
             if (token.isPunct("<")) {
                 if (self.matchingAngle(self.pos)) |close_index| {
                     const after = if (close_index + 1 < self.tokens.len) self.tokens[close_index + 1] else null;
-                    const is_type_arguments = after != null and
-                        (after.?.isPunct("(") or after.?.isPunct(".") or after.?.isPunct("?.") or after.?.isPunct("["));
+                    const is_type_arguments = self.in_heritage or
+                        (after != null and
+                            (after.?.isPunct("(") or after.?.isPunct(".") or after.?.isPunct("?.") or after.?.isPunct("[")));
                     if (is_type_arguments) {
                         self.pos = close_index + 1;
                         continue;
@@ -2666,6 +2685,32 @@ test "parse models a type argument that holds a multi-member type literal" {
 
     // the walk visits every node exactly once, which an unmatched angle broke:
     // the assert inside `walkOrder` is what the regression reported
+    const order = try module.walkOrder(a);
+    defer a.free(order);
+    try testing.expect(order.len > 0);
+}
+
+test "parse models a type argument in a class heritage clause" {
+    const a = testing.allocator;
+    const source =
+        \\class First extends Base<{ readonly url: string; readonly width: number } | undefined> {}
+        \\class Second extends Base<string, number> {}
+        \\const Third = class extends Base<{ a: string; b: number }> {};
+        \\
+    ;
+    var module = try parse(a, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    var classes: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) == .class_decl) classes += 1;
+    }
+    try testing.expectEqual(@as(usize, 3), classes);
+
+    // the walk visits every node exactly once, which an unmatched angle broke
     const order = try module.walkOrder(a);
     defer a.free(order);
     try testing.expect(order.len > 0);
