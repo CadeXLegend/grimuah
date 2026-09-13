@@ -148,26 +148,42 @@ pub fn stringLiteralUnionCount(tokens: []const Token, start: usize, end: usize) 
 
 /// `T[]` or `Array<T>` with no `readonly` operator wrapping it
 ///
-/// a detector reads `readonly T[]` as a type operator over an array rather than
-/// an array, so the `readonly` prefix makes it immutable and out of scope, and
-/// `ReadonlyArray<T>` fails the exact-name test. the reference has to cover the
-/// whole extent: `Array<T> | U` is a union to the detector, not a reference
+/// a token extent is not a node, so the two shapes have to be told from the
+/// types that merely end in the same punctuation or start with the same word:
+/// `ControlCommand["command"]` ends in `]` and is an indexed access, `[Track]`
+/// is a tuple, `undefined | Track[]` is a union, `() => Track[]` is a function
+/// type, `keyof Track[]` is an operator over an array, and `globalThis.Array<T>`
+/// is not the reference named `Array`
 pub fn isMutableArrayType(tokens: []const Token, start: usize, end: usize) bool {
     if (start >= end) return false;
+    // `readonly T[]`, `keyof T[]` and `typeof t[]` are operators over an array
+    // rather than arrays, and the detector reads each as its own node kind
+    if (tokens[start].kind == .word and isTypeOperator(tokens[start].text)) return false;
+    if (hasTopLevelPunct(tokens, start, end, "|")) return false;
+    if (hasTopLevelPunct(tokens, start, end, "&")) return false;
+    if (hasTopLevelPunct(tokens, start, end, "=>")) return false;
+    // `T extends U ? X : T[]` is a conditional type and `value is T[]` is a type
+    // predicate, and the detector reads each as its own node kind
+    if (hasTopLevelPunct(tokens, start, end, "?")) return false;
+    if (hasTopLevelWord(tokens, start, end, "is")) return false;
+
+    // an array type's brackets are empty and follow an element type, which is
+    // how an indexed access and a tuple are told apart from it
+    if (end - start >= 3 and isPunct(tokens[end - 2], "[") and isPunct(tokens[end - 1], "]")) return true;
+
     const first = tokens[start];
-    if (first.kind == .word and first.isWord("readonly")) return false;
+    if (first.kind != .word or !first.isWord("Array")) return false;
+    if (start + 1 == end) return true;
+    if (!isPunct(tokens[start + 1], "<")) return false;
+    const close = matchingAngleClose(tokens, start + 1, end) orelse return false;
+    return close + 1 == end;
+}
 
-    if (isPunct(tokens[end - 1], "]")) {
-        const open = matchingOpener(tokens, end - 1, start) orelse return false;
-        if (open > start) return true;
-    }
-
-    if (first.kind == .word and first.isWord("Array")) {
-        if (start + 1 == end) return true;
-        if (isPunct(tokens[start + 1], "<")) {
-            const close = matchingAngleClose(tokens, start + 1, end) orelse return false;
-            return close + 1 == end;
-        }
+/// a word that takes a type operand and is not itself a type, so a type that
+/// starts with one is an operator node to the detector rather than an array
+fn isTypeOperator(word: []const u8) bool {
+    for ([_][]const u8{ "readonly", "keyof", "typeof", "unique", "infer" }) |operator| {
+        if (std.mem.eql(u8, word, operator)) return true;
     }
     return false;
 }
@@ -1004,6 +1020,39 @@ test "a mutable array is an array type or an Array reference, and a readonly one
     try expectMutableArray("A.B[]", true);
 }
 
+test "a type that only looks like an array is not one" {
+    try expectMutableArray("T[][]", true);
+    try expectMutableArray("(T)[]", true);
+    try expectMutableArray("{ a: 1 }[]", true);
+    try expectMutableArray("T[\"length\"][]", true);
+    try expectMutableArray("readonly (T)[]", false);
+    try expectMutableArray("keyof T[]", false);
+    try expectMutableArray("typeof value", false);
+    try expectMutableArray("T[\"length\"]", false);
+    try expectMutableArray("[]", false);
+    try expectMutableArray("[T]", false);
+    try expectMutableArray("[T, U]", false);
+    try expectMutableArray("undefined | T[]", false);
+    try expectMutableArray("T[] & Branded", false);
+    try expectMutableArray("() => T[]", false);
+    try expectMutableArray("(a: string) => T[]", false);
+    try expectMutableArray("new () => T[]", false);
+    try expectMutableArray("A | B[]", false);
+    try expectMutableArray("Array<T[]>", true);
+    try expectMutableArray("value is T[]", false);
+    try expectMutableArray("asserts value is T[]", false);
+    try expectMutableArray("T extends U ? T[] : string", false);
+    try expectMutableArray("T extends U ? string : T[]", false);
+    try expectMutableArray("string & {}[]", false);
+    try expectMutableArray("A & T[]", false);
+    try expectMutableArray("A.B.C[]", true);
+    try expectMutableArray("import(\"x\").T[]", true);
+    try expectMutableArray("Array<Array<T>>", true);
+    try expectMutableArray("readonly Array<T>", false);
+    try expectMutableArray("{ readonly a: string }[]", true);
+    try expectMutableArray("(T | string)[]", true);
+}
+
 fn expectMutableArray(type_text: []const u8, expected: bool) !void {
     const allocator = std.testing.allocator;
     const source = try std.fmt.allocPrint(allocator, "let value: {s};\n", .{type_text});
@@ -1018,9 +1067,18 @@ fn expectMutableArray(type_text: []const u8, expected: bool) !void {
     var table = try analyze(allocator, tokens, &module, walk);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), table.items.len);
+    if (table.items.len == 0) {
+        std.debug.print("no annotation for '{s}'\n", .{type_text});
+        return error.TestUnexpectedResult;
+    }
+    // the first annotation is the declaration's own type, and a type literal
+    // inside it contributes its members after it in source order
     const annotation = table.items[0];
-    try std.testing.expectEqual(expected, isMutableArrayType(tokens, annotation.type_start, annotation.type_end));
+    const actual = isMutableArrayType(tokens, annotation.type_start, annotation.type_end);
+    if (actual != expected) {
+        std.debug.print("mutable array '{s}': want {}, got {}\n", .{ type_text, expected, actual });
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "an optional property is a member, an optional parameter is not" {

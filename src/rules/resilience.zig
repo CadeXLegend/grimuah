@@ -605,7 +605,119 @@ pub fn checkOptionalProperties(context: *const root.Context) !void {
     }
 }
 
+/// a mutable array in a parameter, a function's return type or an object type's
+/// property
+///
+/// a type alias and a local binding are out of scope on purpose: a separate rule,
+/// `require-readonly-type-alias`, covers that form. a class field is out of scope
+/// for the opposite reason, because a mutable field is state the class owns
+/// rather than a value it was handed, and the reader never reads a field's
+/// annotation, so that exclusion comes for free
+pub fn checkReadonlyCollectionSignatures(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.items) |annotation| {
+        const report_token = switch (annotation.position) {
+            // a return annotation is reported at the type itself, while a
+            // parameter and a property are reported at the declaration that
+            // carries them
+            .return_type => annotation.type_start,
+            .parameter_type, .property_type => annotation.report_start,
+            .alias_type, .variable_type => continue,
+        };
+        if (!typemodel.isMutableArrayType(context.tokens, annotation.type_start, annotation.type_end)) continue;
+        try context.report(context.tokens[report_token].line, .resilience, root.readonly_collection_signature, .warn);
+    }
+}
+
 const probe = @import("probe.zig");
+
+test "a mutable array in a parameter, a return and a property is reported" {
+    const message = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
+    const source =
+        \\export type Tracks = {
+        \\  readonly queue: Track[];
+        \\  readonly done: Array<Track>;
+        \\};
+        \\
+        \\export interface Player {
+        \\  readonly history: Track[];
+        \\}
+        \\
+        \\export type Handoff = (rows: Track[]) => Track[];
+        \\
+        \\export function order(queue: Track[]): Track[] {
+        \\  return queue;
+        \\}
+        \\
+        \\export function gather(entries: Array<Track>): Array<Track> {
+        \\  return entries;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: " ++ message,
+        "3: " ++ message,
+        "7: " ++ message,
+        "10: " ++ message,
+        "10: " ++ message,
+        "12: " ++ message,
+        "12: " ++ message,
+        "16: " ++ message,
+        "16: " ++ message,
+    });
+}
+
+test "a readonly array, a readonly reference, a union and a qualified name are not reported" {
+    const message = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
+    const source =
+        \\export type Held = {
+        \\  readonly frozen: readonly Track[];
+        \\  readonly ref: ReadonlyArray<Track>;
+        \\  readonly either: Track[] | undefined;
+        \\  readonly qualified: globalThis.Array<Track>;
+        \\  readonly element: Track[][];
+        \\};
+        \\
+        \\export function keep(queue: readonly Track[], done: ReadonlyArray<Track>): readonly Track[] {
+        \\  return queue;
+        \\}
+        \\
+        \\export type Predicate = {
+        \\  readonly maybe: Track extends string ? string : Track[];
+        \\  readonly spread:
+        \\    Track[];
+        \\  readonly guarded: string & {}[];
+        \\  readonly make: () => Track[];
+        \\};
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        // an array of arrays is still an array, so that one member reports
+        "6: " ++ message,
+        // a property is reported where it starts, not where its type starts
+        "15: " ++ message,
+        // the property's own type is a function, so the one report here is the
+        // function's return type, and the guard keeps it from being counted twice
+        "18: " ++ message,
+    });
+}
+
+test "a class field, a type alias and a local binding are out of scope" {
+    const source =
+        \\export type Buffer = Track[];
+        \\export const shared: Track[] = [];
+        \\
+        \\export class Holder {
+        \\  private readonly queue: Track[] = [];
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{});
+}
 
 test "an optional property is reported in an interface and a type literal, and an optional parameter is not" {
     const source =
@@ -731,7 +843,7 @@ test "one literal, a mixed union and a parenthesised literal are not reported" {
 
 test "a for..of that pushes into an array is reported, and the neighbouring shapes are not" {
     const source =
-        \\export function collect(records: readonly string[]): string[] {
+        \\export function collect(records: readonly string[]): readonly string[] {
         \\  const names: string[] = [];
         \\  for (const record of records) {
         \\    names.push(record);
@@ -910,5 +1022,9 @@ test "any in type position is reported, and a name spelled any is not" {
         "1: This `any` type bypasses type safety. Write the type you mean instead.",
         "5: This `any` type bypasses type safety. Write the type you mean instead.",
         "7: This `any` type bypasses type safety. Write the type you mean instead.",
+        // the two `any` types above are also arrays, so the collection rule
+        // reports the parameter and the return separately
+        "1: This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.",
+        "1: This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.",
     });
 }

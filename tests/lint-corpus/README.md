@@ -51,6 +51,13 @@ nothing
 model, so the fixture fails if the reader stops reaching them: an optional
 property inside an `as` assertion's type, and one inside a `declare module` block
 
+`readonly-collection-signatures.ts` pins the array shapes the rule must tell
+apart, which a token extent does not distinguish on its own: an array, an
+indexed access, a tuple, a union that names one, a function type that returns
+one, a conditional type and a type predicate. fourteen rows in the oracle come
+from fixtures that pin another rule and hold a mutable array incidentally, in a
+parameter or a return type
+
 `asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
 pin the silence of `: any`: the plugin era warned on it, biome's recommended set
 owned it, and the native engine reported nothing at all for an annotation. the

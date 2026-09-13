@@ -605,7 +605,7 @@ fn sourceWithBodyLines(allocator: std.mem.Allocator, filler_count: usize) ![]con
 
 test "a body four layers deep is reported once per layer past the limit" {
     const source =
-        \\function deep(xs: number[]): void {
+        \\function deep(xs: readonly number[]): void {
         \\  for (const x of xs) {
         \\    if (x > 0) {
         \\      while (x > 1) {
@@ -628,7 +628,7 @@ test "a body four layers deep is reported once per layer past the limit" {
 
 test "three layers are the limit" {
     const source =
-        \\function ok(xs: number[]): void {
+        \\function ok(xs: readonly number[]): void {
         \\  for (const x of xs) {
         \\    if (x > 0) {
         \\      while (x > 1) {
@@ -644,7 +644,7 @@ test "three layers are the limit" {
 
 test "a function body starts at zero and a block that stands alone is a layer" {
     const source =
-        \\const shallow = (xs: number[]): void => {
+        \\const shallow = (xs: readonly number[]): void => {
         \\  {
         \\    {
         \\      {
@@ -699,7 +699,7 @@ test "an else if ladder and a switch body stay flat" {
 
 test "a nested function starts its own count" {
     const source =
-        \\function outer(xs: number[]): void {
+        \\function outer(xs: readonly number[]): void {
         \\  for (const x of xs) {
         \\    const inner = (): void => {
         \\      for (const y of xs) {
