@@ -47,7 +47,9 @@ src/probe/d-as-generic.ts:2: [resilience] chained 'as' casts bypass type safety;
 src/probe/d-as-newline.ts:2: [hygiene] This variable b is unused.
 src/probe/d-as-newline.ts:3: [resilience] chained 'as' casts bypass type safety; use a single cast only
 src/probe/d-as-object-type.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-as-object-type.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-as-union.ts:1: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
+src/probe/d-destructure-asconst.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-destructure-asconst.ts:2: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
 src/probe/d-export-brace-multiline.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/d-export-brace-nested.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
@@ -58,8 +60,11 @@ src/probe/d-for-nested.ts:3: [resilience] do not use imperative for loops; use m
 src/probe/d-for-nested.ts:3: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/d-for-parens.ts:2: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
 src/probe/d-for-parens.ts:3: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-parens.ts:3: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-for-parens.ts:4: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-parens.ts:4: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-for-parens.ts:5: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/d-for-parens.ts:5: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-multiline-asconst.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
 src/probe/d-null-arrow.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
@@ -88,6 +93,7 @@ src/probe/handled-comment.ts:4: [behavioural] catch block must handle or log the
 src/probe/handled-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
 src/probe/handled-throw.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/if-chain-dispatch.ts:6: [resilience] These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.
+src/probe/let-destructure.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/let-destructure.ts:2: [hygiene] This let declares a variable that is only assigned once.
 src/probe/let-destructure.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/let-init.ts:2: [hygiene] This let declares a variable that is only assigned once.
@@ -119,6 +125,7 @@ src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null on
 src/probe/null-prop.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/null-prop.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/null-type.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-type.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/readonly-collection-signatures.ts:11: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:12: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:20: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
@@ -126,6 +133,8 @@ src/probe/readonly-collection-signatures.ts:23: [resilience] This signature hand
 src/probe/readonly-collection-signatures.ts:23: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:27: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:27: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
+src/probe/readonly-type-members.ts:10: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
+src/probe/readonly-type-members.ts:12: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/reexport-empty.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it

@@ -150,6 +150,7 @@ pub const if_chain_dispatch = "These {d} branches dispatch on one subject. Decla
 pub const literal_union_enum = "This union of {d} string literals carries no runtime value. Declare a string enum and use its members as the discriminant.";
 pub const optional_property = "This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.";
 pub const readonly_collection_signature = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
+pub const readonly_type_member = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -376,6 +377,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkReadonlyCollectionSignatures,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = readonly_type_member,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkReadonlyTypeMembers,
     },
     .{
         .layer = .hygiene,

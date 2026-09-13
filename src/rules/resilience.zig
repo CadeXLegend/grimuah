@@ -633,7 +633,87 @@ pub fn checkReadonlyCollectionSignatures(context: *const root.Context) !void {
     }
 }
 
+/// a mutable property of a type literal
+///
+/// the detector walks `TypeLiteral` nodes only, so a property of an interface is
+/// never reported. that is its own narrowing rather than an oversight, and the
+/// reader keeps it as written: the annotation records which object type the
+/// member belongs to, and only a type literal's members are read here
+pub fn checkReadonlyTypeMembers(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.items) |annotation| {
+        // only a property of a type literal carries the object kind, so the test
+        // on it also decides the position
+        if (annotation.object != .type_literal) continue;
+        if (annotation.readonly) continue;
+        try context.report(context.tokens[annotation.report_start].line, .resilience, root.readonly_type_member, .warn);
+    }
+}
+
 const probe = @import("probe.zig");
+
+test "a mutable property of a type literal is reported, and an interface's is not" {
+    const message = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
+    const source =
+        \\export type Options = {
+        \\  readonly kept: string;
+        \\  changed: number;
+        \\  spread:
+        \\    boolean;
+        \\};
+        \\
+        \\export interface Draft {
+        \\  changed: string;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "3: " ++ message,
+        // a property is reported where it starts, not where its type starts
+        "4: " ++ message,
+    });
+}
+
+test "a nested type literal is read and a method or index signature is not a property" {
+    const message = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
+    const source =
+        \\export type Nested = {
+        \\  readonly inner: {
+        \\    changed: string;
+        \\  };
+        \\  read(key: string): string;
+        \\  [key: string]: string;
+        \\};
+        \\
+        \\export class Holder {
+        \\  changed = "x";
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "3: " ++ message,
+    });
+}
+
+test "a readonly member, a signature and a declared class field are out of scope" {
+    const source =
+        \\export type Guarded = {
+        \\  readonly first: string;
+        \\  readonly second: number;
+        \\  readonly third: readonly string[];
+        \\};
+        \\
+        \\export class Holder {
+        \\  private changed: string = "x";
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{});
+}
 
 test "a mutable array in a parameter, a return and a property is reported" {
     const message = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
@@ -770,6 +850,9 @@ test "a readonly modifier does not hide an optional property" {
     try probe.expect(.resilience, "probe.ts", source, &.{
         "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
         "3: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+        // the two members without `readonly` are the readonly rule's business
+        "3: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
+        "4: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
     });
 }
 
@@ -1026,5 +1109,9 @@ test "any in type position is reported, and a name spelled any is not" {
         // reports the parameter and the return separately
         "1: This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.",
         "1: This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.",
+        // `Loose` is a type literal, so its member belongs to the readonly rule
+        "7: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
+        // and so is the object literal this function returns
+        "13: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
     });
 }
