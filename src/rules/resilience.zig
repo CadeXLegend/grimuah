@@ -654,6 +654,126 @@ pub fn checkReadonlyTypeMembers(context: *const root.Context) !void {
     }
 }
 
+/// an exported async operation whose declared result is a bare boolean or number
+///
+/// a scalar result carries no failure channel, so a caller cannot tell the
+/// operation's real answer from its error case and the reason the operation
+/// already holds is dropped at the boundary that had it. an operation the file
+/// does not export is out of scope: the detector requires the `export` modifier,
+/// so a module-private helper's failure is read by the file that declares it
+///
+/// the detector walks function declarations and variable statements, which is
+/// three shapes here: an exported `async function`, an exported declarator whose
+/// initializer is an async arrow, and the same with a function expression
+pub fn checkScalarFailureReturn(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    for (context.walk) |entry| {
+        switch (entry.kind) {
+            .function_decl => try checkScalarDeclaration(context, module, entry.index),
+            .variable_decl => try checkScalarDeclarator(context, module, entry.index),
+            else => {},
+        }
+    }
+}
+
+/// `export async function f(): Promise<boolean>`
+///
+/// the reported line is the declaration's own `getStart()` in the detector, and
+/// its modifiers are part of that node, so an `export` on a line of its own is
+/// where the finding lands
+fn checkScalarDeclaration(context: *const root.Context, module: *const ir.Module, index: ir.NodeIndex) !void {
+    // an anonymous `export default async function (): Promise<boolean>` declares
+    // no name, and the detector requires one
+    if (module.nodeOf(index).name.len == 0) return;
+
+    // the detector's export test is the modifier on the declaration itself. a
+    // class method and an object literal's method reach this tree as callables
+    // too, and neither is exported, so this keeps them out as well
+    const wrapper = module.parentOf(index) orelse return;
+    if (module.kindOf(wrapper) != .export_decl) return;
+    if (!declaresScalarPromise(context, module, index)) return;
+
+    try context.report(module.spanOf(wrapper).line, .resilience, root.scalar_failure_return, .warn);
+}
+
+/// `export const f = async (): Promise<boolean> => ...`
+///
+/// the reported node is the declarator, which the detector reads as a
+/// `VariableDeclaration`: the modifiers belong to the statement around it, so the
+/// finding lands on the name rather than on the `const`. a destructured
+/// declarator names no identifier and is skipped, the same way the detector's own
+/// `isIdentifier` test skips it
+fn checkScalarDeclarator(context: *const root.Context, module: *const ir.Module, index: ir.NodeIndex) !void {
+    const wrapper = module.parentOf(index) orelse return;
+    if (module.kindOf(wrapper) != .export_decl) return;
+
+    // the parser appends a declarator's initializer as the child straight after
+    // that declarator's name, so the name's next sibling is its own value
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        if (module.kindOf(current) != .identifier) continue;
+        if (module.nodeOf(current).binding != .variable) continue;
+
+        const initializer = module.nextSiblingOf(current) orelse continue;
+        if (!module.kindOf(initializer).isCallable()) continue;
+        if (!declaresScalarPromise(context, module, initializer)) continue;
+
+        try context.report(module.spanOf(current).line, .resilience, root.scalar_failure_return, .warn);
+    }
+}
+
+/// whether a callable is async and declares a `Promise<boolean>` or
+/// `Promise<number>`, which is the pair the detector reports on
+fn declaresScalarPromise(context: *const root.Context, module: *const ir.Module, index: ir.NodeIndex) bool {
+    const span = module.spanOf(index);
+    const callable_start = typemodel.tokenAtOrAfter(context.tokens, span.start);
+    const callable_end = typemodel.tokenAtOrAfter(context.tokens, span.end);
+    if (!isAsyncCallable(context.tokens, callable_start)) return false;
+
+    const declared = typemodel.returnTypeOf(context.tokens, callable_start, callable_end) orelse return false;
+    return isScalarPromise(context.tokens, declared);
+}
+
+/// whether a callable carries the `async` modifier
+///
+/// the statement parser consumes `async` before it hands an `async function`
+/// declaration to the function parser, so a declaration's span begins at its own
+/// keyword while an arrow or a function expression begins at `async` itself. the
+/// scan covers the token before the span as well as the span's first token, which
+/// answers both shapes without asking which one it is, and the two are the whole
+/// window: only `abstract` can stand between an `async` modifier and the keyword
+/// in a statement position
+fn isAsyncCallable(tokens: []const Token, callable_start: usize) bool {
+    const from = if (callable_start == 0) 0 else callable_start - 1;
+    for (tokens[from..@min(callable_start + 1, tokens.len)]) |token| {
+        if (token.isWord("async")) return true;
+    }
+    return false;
+}
+
+/// `Promise`, `<`, the settled type, `>`: four tokens and no more, so
+/// `Promise<boolean[]>` and `Promise<boolean | undefined>` are other results
+const PROMISE_SCALAR_TOKENS = 4;
+
+/// whether a return type is a reference named `Promise` over a bare `boolean` or
+/// `number`
+///
+/// the detector reads the settled type as its own source text and compares that
+/// with the two scalars, so the scalar has to be the whole of it and the
+/// reference has to be named `Promise` exactly: `globalThis.Promise<boolean>` is
+/// a different name, and `Promise<Array<boolean>>` a different result
+fn isScalarPromise(tokens: []const Token, declared: typemodel.Extent) bool {
+    if (declared.end - declared.start != PROMISE_SCALAR_TOKENS) return false;
+
+    const name = tokens[declared.start];
+    const settled = tokens[declared.start + 2];
+    if (!name.isWord("Promise")) return false;
+    if (!tokens[declared.start + 1].isPunct("<")) return false;
+    if (!settled.isWord("boolean") and !settled.isWord("number")) return false;
+    return tokens[declared.start + 3].isPunct(">");
+}
+
 const probe = @import("probe.zig");
 
 test "a mutable property of a type literal is reported, and an interface's is not" {
@@ -1113,5 +1233,65 @@ test "any in type position is reported, and a name spelled any is not" {
         "7: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
         // and so is the object literal this function returns
         "13: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.",
+    });
+}
+
+test "an exported async scalar result is reported, and the shapes around it are not" {
+    const source =
+        \\export
+        \\async function load(): Promise<boolean> {
+        \\  return true;
+        \\}
+        \\
+        \\export const retry =
+        \\  async (attempts: number): Promise<number> => attempts;
+        \\
+        \\export const shifted: () => Promise<boolean> = async () => true;
+        \\
+        \\async function hidden(): Promise<boolean> {
+        \\  return false;
+        \\}
+        \\
+        \\export function plain(): Promise<boolean> {
+        \\  return true;
+        \\}
+        \\
+        \\export async function quiet(): Promise<void> {}
+        \\
+        \\export async function nested(): Promise<Array<boolean>> {
+        \\  return [];
+        \\}
+        \\
+        \\export async function unioned(): Promise<boolean | undefined> {
+        \\  return undefined;
+        \\}
+        \\
+        \\export default async function (): Promise<boolean> {
+        \\  return true;
+        \\}
+        \\
+        \\export class Worker {
+        \\  async run(): Promise<boolean> {
+        \\    return true;
+        \\  }
+        \\}
+        \\
+        \\export const named = async function (attempts: number): Promise<number> {
+        \\  return attempts;
+        \\};
+        \\
+        \\export async function aliased(): Settled<boolean> {
+        \\  return true;
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        // the declaration's modifiers are its own node's start, so the `export`
+        // on a line of its own is where the finding lands
+        "1: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.",
+        // a declarator is reported at its name, not at the `const`, and its
+        // arrow sits on the next line
+        "6: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.",
+        "39: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.",
     });
 }

@@ -151,6 +151,7 @@ pub const literal_union_enum = "This union of {d} string literals carries no run
 pub const optional_property = "This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.";
 pub const readonly_collection_signature = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
 pub const readonly_type_member = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
+pub const scalar_failure_return = "This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -385,6 +386,14 @@ pub const all = [_]Rule{
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkReadonlyTypeMembers,
+    },
+    .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = scalar_failure_return,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkScalarFailureReturn,
     },
     .{
         .layer = .hygiene,

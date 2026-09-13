@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file. See [commit
 
 ### Features
 
+* add `no-async-scalar-failure-return`: an exported async operation must not report its failure as a bare boolean or number, so a result declared `Promise<boolean>` or `Promise<number>` is what it reports on. a function declaration, an arrow and a function expression are all read, and an unexported operation, a non-async one and a result of any other type are out of scope
 * enforce every rule in-process and freeze the findings biome validated in `tests/oracle/`, so the corpus check runs without biome
 * add `require-enum-over-literal-union`: a union of two or more string literals must be a string enum. a type alias, a property, a parameter and a variable annotation are read, and a return annotation is not. the module has to be named `<name>.<kind>.ts`, because a process entry script cannot use an enum at runtime
 * add `no-optional-properties`: an object type may not declare an optional property. an interface, a type literal, an `as` assertion's type and a `declare module` block are read, and an optional parameter, a class field and an optional method are not

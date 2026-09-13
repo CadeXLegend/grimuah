@@ -4,6 +4,12 @@ const ir = @import("../ir.zig");
 
 pub const Token = ts.Token;
 
+/// a type's token extent: its first token, and one past its last
+pub const Extent = struct {
+    start: usize,
+    end: usize,
+};
+
 /// a type's structure, read from the token stream
 ///
 /// the front-end models a type only as an extent: `skipType` walks one and
@@ -120,6 +126,31 @@ pub fn analyze(
     std.mem.sort(Annotation, list.items, {}, annotationBefore);
     table.items = try arena.dupe(Annotation, list.items);
     return table;
+}
+
+/// the return type a callable declares, for a rule that has the callable rather
+/// than its annotations
+///
+/// `analyze` reads a callable's return as one annotation among many, which is
+/// what the rules that walk every annotation want. a rule that starts from a
+/// declaration instead needs the one annotation that declaration carries, and
+/// this is that read made shareable: `readCallable` builds its annotation from
+/// here, so the two cannot drift
+pub fn returnTypeOf(tokens: []const Token, start: usize, end: usize) ?Extent {
+    const open = findParameterList(tokens, start, end) orelse return null;
+    const close = matchingCloser(tokens, open, end) orelse return null;
+    if (close + 1 >= end or !isPunct(tokens[close + 1], ":")) return null;
+
+    const type_start = close + 2;
+    if (type_start >= end) return null;
+    // the front-end's own return-type walk stops at a `{`, so a function whose
+    // return type is an object literal parses its type as a body. this reader
+    // does not inherit that gap: it tells the two apart by what precedes the
+    // brace, and a type operator before it means the type continues
+    const type_end = trimEnd(tokens, type_start, endOfType(tokens, type_start, end));
+    if (type_start >= type_end) return null;
+
+    return .{ .start = type_start, .end = type_end };
 }
 
 /// the number of members of a union type whose every member is a string
@@ -356,24 +387,14 @@ const Reader = struct {
         const close = matchingCloser(tokens, open, end) orelse return;
         try self.readParameters(open + 1, close);
 
-        if (close + 1 >= end or !isPunct(tokens[close + 1], ":")) return;
-        const type_start = close + 2;
-        if (type_start >= end) return;
-        // the front-end's own return-type walk stops at a `{`, so a function
-        // whose return type is an object literal parses its type as a body. this
-        // reader does not inherit that gap: it tells the two apart by what
-        // precedes the brace, and a type operator before it means the type
-        // continues
-        const type_end = trimEnd(tokens, type_start, endOfType(tokens, type_start, end));
-        if (type_start >= type_end) return;
-
+        const extent = returnTypeOf(tokens, bounds.start, end) orelse return;
         try self.add(.{
             .position = .return_type,
-            .type_start = type_start,
-            .type_end = type_end,
-            .report_start = type_start,
+            .type_start = extent.start,
+            .type_end = extent.end,
+            .report_start = extent.start,
         });
-        try self.readTypeExtent(type_start, type_end);
+        try self.readTypeExtent(extent.start, extent.end);
     }
 
     /// the annotation an `as` assertion carries on its right-hand side
@@ -623,7 +644,11 @@ fn isCloser(text: []const u8) bool {
 }
 
 /// the first token that starts at or after `offset`, or the token count
-fn tokenAtOrAfter(tokens: []const Token, offset: u32) usize {
+///
+/// it is also how a rule turns a node's byte span into the token extent the
+/// readers take, so it is public: `Bounds.around` is the same conversion for the
+/// reader's own use
+pub fn tokenAtOrAfter(tokens: []const Token, offset: u32) usize {
     var low: usize = 0;
     var high: usize = tokens.len;
     while (low < high) {
@@ -1035,6 +1060,43 @@ test "a type that only looks like an array is not one" {
     try expectMutableArray("readonly Array<T>", false);
     try expectMutableArray("{ readonly a: string }[]", true);
     try expectMutableArray("(T | string)[]", true);
+}
+
+test "a callable's declared return type is read from the callable itself" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\export async function run(): Promise<boolean> {
+        \\  return true;
+        \\}
+        \\function build(): {
+        \\  ok: boolean;
+        \\} {
+        \\  return { ok: true };
+        \\}
+        \\const stopped = (count: number) => count;
+        \\
+    ;
+    var line: u32 = 1;
+    const tokens = try ts.tokenize(allocator, source, &line);
+    defer allocator.free(tokens);
+    var module = try ts.parseTokens(allocator, source, tokens);
+    defer module.deinit();
+
+    var declared: std.ArrayList([]const u8) = .empty;
+    defer declared.deinit(allocator);
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (!module.kindOf(index).isCallable()) continue;
+        const bounds = Bounds.around(tokens, module.spanOf(index).start, module.spanOf(index).end);
+        const extent = returnTypeOf(tokens, bounds.start, bounds.end) orelse continue;
+        try declared.append(allocator, source[tokens[extent.start].start..tokens[extent.end - 1].end]);
+    }
+
+    // the arrow declares none, the object-literal return is not cut at its brace,
+    // and the text is the source verbatim, which is what a substring test needs
+    try std.testing.expectEqual(@as(usize, 2), declared.items.len);
+    try std.testing.expectEqualStrings("Promise<boolean>", declared.items[0]);
+    try std.testing.expectEqualStrings("{\n  ok: boolean;\n}", declared.items[1]);
 }
 
 fn expectMutableArray(type_text: []const u8, expected: bool) !void {

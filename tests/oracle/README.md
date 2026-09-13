@@ -21,7 +21,7 @@ finding that was fixed from a finding that was lost
 
 | file | corpus | rows |
 |---|---|---|
-| `lint-corpus.tsv` | `tests/lint-corpus` (130 fixtures, grimuah's own rules) | 166 |
+| `lint-corpus.tsv` | `tests/lint-corpus` (131 fixtures, grimuah's own rules) | 169 |
 | `hygiene-corpus.tsv` | `tests/hygiene-corpus` (8 fixtures, the 5 rules that mirror biome's built-ins) | 20 |
 
 one row per finding, as `path:line: [layer] message`, sorted, with the pre-pass's

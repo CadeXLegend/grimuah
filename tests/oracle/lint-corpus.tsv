@@ -114,6 +114,9 @@ src/probe/nesting-depth.ts:19: [resilience] This signature hands over a mutable 
 src/probe/nesting-depth.ts:3: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/nesting-depth.ts:7: [resilience] This block is nested 4 levels deep. Return early or extract a helper.
 src/probe/nesting-depth.ts:8: [resilience] This block is nested 5 levels deep. Return early or extract a helper.
+src/probe/no-async-scalar-failure-return.ts:11: [resilience] This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.
+src/probe/no-async-scalar-failure-return.ts:15: [resilience] This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.
+src/probe/no-async-scalar-failure-return.ts:17: [resilience] This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.
 src/probe/no-optional-properties.ts:11: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:16: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:17: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
