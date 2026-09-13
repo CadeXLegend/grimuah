@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file. See [commit
 ### Features
 
 * enforce every rule in-process and freeze the findings biome validated in `tests/oracle/`, so the corpus check runs without biome
+* add `require-enum-over-literal-union`: a union of two or more string literals must be a string enum. a type alias, a property, a parameter and a variable annotation are read, and a return annotation is not. the module has to be named `<name>.<kind>.ts`, because a process entry script cannot use an enum at runtime
 * add `any-type`: `any` used as a type is an error, wherever it stands: `: any`, `any[]`, `Array<any>` and a return annotation. `o.any` and `{ any: 1 }` are names rather than types, and the `as any` cast keeps its own message
 * add `max-nesting-depth-three`: a statement container may not nest more than three layers deep inside one function, method or class body
 * add `max-parameters`: a function may not declare more than four parameters, counted from the signature so a destructured parameter stays one slot

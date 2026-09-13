@@ -105,6 +105,11 @@ src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every expo
 src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-star.ts:3: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/require-enum-over-literal-union.service.ts:13: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:17: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:20: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:22: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
+src/probe/require-enum-over-literal-union.service.ts:24: [resilience] This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.
 src/probe/sheet.js:1: [resilience] use === instead of == to avoid type coercion bugs
 src/probe/silent-catch-bound.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/silent-catch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it

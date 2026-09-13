@@ -131,8 +131,13 @@ pub fn stringLiteralUnionCount(tokens: []const Token, start: usize, end: usize) 
     var cursor = start;
     while (cursor < end) {
         const separator = findAtTop(tokens, cursor, end, "|") orelse end;
-        if (!isStringLiteralExtent(tokens, cursor, separator)) return 0;
-        count += 1;
+        // a union may open with a `|`, which the detector's member list does not
+        // count: `| "a" | "b"` is a two-member union, and it is how a union
+        // broken over several lines is written
+        if (cursor < separator) {
+            if (!isStringLiteralExtent(tokens, cursor, separator)) return 0;
+            count += 1;
+        }
         cursor = separator + 1;
     }
     return if (count >= 2) count else 0;
@@ -833,6 +838,10 @@ test "a union of literals is counted, a mixed union is not" {
     try expectUnionCount("(\"a\") | \"b\"", 0);
     try expectUnionCount("`a` | `b`", 2);
     try expectUnionCount("A | \"b\"", 0);
+    try expectUnionCount("| \"a\" | \"b\"", 2);
+    try expectUnionCount("\n  | \"a\"\n  | \"b\"\n", 2);
+    try expectUnionCount("| \"a\" | string", 0);
+    try expectUnionCount("| string", 0);
 }
 
 fn expectUnionCount(type_text: []const u8, expected: usize) !void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const root = @import("../rules.zig");
 const tokens_mod = @import("tokens.zig");
 const ir = @import("../ir.zig");
+const typemodel = @import("../lang/typemodel.zig");
 
 const Token = tokens_mod.Token;
 
@@ -535,7 +536,119 @@ fn isWordByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
+/// a surface module's name carries three parts: `<name>.<kind>.ts`
+const MIN_SURFACE_NAME_PARTS = 3;
+
+/// a union of two or more string literals in a type alias, a property, a
+/// parameter or a variable annotation
+///
+/// the file scope is the suffixed-module convention: a surface module is named
+/// `<name>.<kind>.ts`, so an unsuffixed module is the root library or a process
+/// entry script, and an entry script cannot use an enum at runtime, which is why
+/// the corpus duplicates its string tables there. a `.d.ts` declares a type it
+/// does not own, so it is out of scope too
+///
+/// a return annotation is the one position not read: this detector reports the
+/// four above and no function's return, unlike the other three type rules
+pub fn checkLiteralUnionEnum(context: *const root.Context) !void {
+    if (std.mem.endsWith(u8, context.path, ".d.ts")) return;
+    if (dotPartCount(fileNameOf(context.path)) < MIN_SURFACE_NAME_PARTS) return;
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.items) |annotation| {
+        if (annotation.position == .return_type) continue;
+        const member_count = typemodel.stringLiteralUnionCount(context.tokens, annotation.type_start, annotation.type_end);
+        if (member_count == 0) continue;
+        const message = try std.fmt.allocPrint(context.allocator, root.literal_union_enum, .{member_count});
+        defer context.allocator.free(message);
+        // the detector reports the type node's own start, which for each of these
+        // positions is the type rather than the declaration that carries it
+        try context.report(context.tokens[annotation.type_start].line, .resilience, message, .warn);
+    }
+}
+
+/// the last `/`-separated segment of a root-relative path
+fn fileNameOf(path: []const u8) []const u8 {
+    return if (std.mem.lastIndexOfScalar(u8, path, '/')) |separator| path[separator + 1 ..] else path;
+}
+
+/// the number of `.`-separated parts of a file name
+fn dotPartCount(file_name: []const u8) usize {
+    return 1 + std.mem.count(u8, file_name, ".");
+}
+
 const probe = @import("probe.zig");
+
+test "a literal union is reported in the four positions, and a return annotation is not" {
+    const source =
+        \\export type Wave = "left" | "right";
+        \\
+        \\export interface Bearing {
+        \\  readonly side: "port" | "starboard";
+        \\}
+        \\
+        \\export const limit: "low" | "high" = "low";
+        \\
+        \\export function steer(direction: "up" | "down"): "forward" | "back" {
+        \\  return "forward";
+        \\}
+        \\
+    ;
+    try probe.expect(.resilience, "probe.service.ts", source, &.{
+        "1: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+        "4: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+        "7: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+        "9: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+    });
+}
+
+test "a union written across lines with a leading bar is reported at the bar" {
+    const source =
+        \\export type Wave =
+        \\  | "left"
+        \\  | "right";
+        \\
+    ;
+    try probe.expect(.resilience, "probe.service.ts", source, &.{
+        "2: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+    });
+}
+
+test "a union inside a type literal is reported and the alias that holds it is not" {
+    const source =
+        \\export type Heading = { readonly turn: "near" | "far" };
+        \\
+    ;
+    try probe.expect(.resilience, "probe.service.ts", source, &.{
+        "1: This union of 2 string literals carries no runtime value. Declare a string enum and use its members as the discriminant.",
+    });
+}
+
+test "an unsuffixed module and a declaration file are out of scope" {
+    const source =
+        \\export type Wave = "left" | "right";
+        \\
+        \\export const limit: "low" | "high" = "low";
+        \\
+    ;
+    try probe.expect(.resilience, "probe.ts", source, &.{});
+    try probe.expect(.resilience, "probe.d.ts", source, &.{});
+    try probe.expect(.resilience, "probe/service.ts", source, &.{});
+}
+
+test "one literal, a mixed union and a parenthesised literal are not reported" {
+    const source =
+        \\export type Single = "left";
+        \\export type Mixed = "left" | "right" | number;
+        \\export type Wrapped = ("left") | "right";
+        \\export type Named = Left | Right;
+        \\
+    ;
+    try probe.expect(.resilience, "probe.service.ts", source, &.{});
+}
 
 test "a for..of that pushes into an array is reported, and the neighbouring shapes are not" {
     const source =

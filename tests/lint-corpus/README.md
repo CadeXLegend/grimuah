@@ -42,6 +42,11 @@ too: `await-in-loop.ts`, `boolean-flag-argument.ts`,
 each one trips its rule and pins the shapes that rule must leave alone, and the
 two named `.config.ts` are the pair whose rules read the file's own name
 
+`require-enum-over-literal-union.service.ts` carries a suffix in its own name on
+purpose: the rule reads the file's name as well as its types, so only a module
+named `<name>.<kind>.ts` is in scope, and an unsuffixed fixture would report
+nothing
+
 `asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
 pin the silence of `: any`: the plugin era warned on it, biome's recommended set
 owned it, and the native engine reported nothing at all for an annotation. the
