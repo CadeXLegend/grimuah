@@ -36,14 +36,10 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8, r
     // "lib" is 0, "src/db" is 1
     const new_depth: u32 = @intCast(std.mem.count(u8, surface_path, "/"));
 
-    // collect allowedImports: surfaces with lower dagOrder
-    var allowed: std.ArrayList([]const u8) = .empty;
-    defer allowed.deinit(allocator);
-    for (cfg.surfaces) |surface| {
-        if (surface.dagOrder < new_dag_order) {
-            try allowed.append(allocator, surface.name);
-        }
-    }
+    // a new surface carries no allowedImports: the DAG already grants every
+    // import to a surface with a lower dagOrder, so listing them would be an
+    // entry the checker implies and never reads. only a same-dagOrder or a
+    // shallow-to-deep grant has to be written down, and that is the user's call
 
     // determine legal suffixes based on surface name convention
     const suffixes = try suffixesForSurface(allocator, surface_name);
@@ -62,7 +58,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, surface_name: []const u8, r
     try templates.writeFile(io, example_path, "// TODO: implement\n");
 
     // regenerate architecture.config.json with new surface
-    try rewriteConfig(io, allocator, &cfg, surface_name, surface_path, new_depth, new_dag_order, suffixes, &innateMembers, allowed.items);
+    try rewriteConfig(io, allocator, &cfg, surface_name, surface_path, new_depth, new_dag_order, suffixes, &innateMembers);
 
     std.debug.print("added surface '{s}' at {s} (dagOrder {d})\n", .{ surface_name, surface_path, new_dag_order });
 }
@@ -103,7 +99,6 @@ fn rewriteConfig(
     dagOrder: u32,
     suffixes: []const []const u8,
     innateMembers: []const []const u8,
-    allowedImports: [][]const u8,
 ) !void {
     var json_buf: std.ArrayList(u8) = .empty;
     defer json_buf.deinit(allocator);
@@ -142,13 +137,7 @@ fn rewriteConfig(
         if (j < innateMembers.len - 1) try json_buf.appendSlice(allocator, ", ");
     }
 
-    try json_buf.appendSlice(allocator, "],\n      \"allowedImports\": [");
-    for (allowedImports, 0..) |imp, j| {
-        try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{imp}));
-        if (j < allowedImports.len - 1) try json_buf.appendSlice(allocator, ", ");
-    }
-
-    try json_buf.appendSlice(allocator, "]\n    }\n  ],\n");
+    try json_buf.appendSlice(allocator, "],\n      \"allowedImports\": []\n    }\n  ],\n");
 
     // write layers
     try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,

@@ -35,6 +35,7 @@ All notable changes to this project will be documented in this file. See [commit
 
 ### Bug Fixes
 
+* stop scaffolding dead config: the presets and the `add` and `init` generators no longer write an `allowedImports` entry that the DAG already implies. a grant to a surface with a lower dagOrder comes from the graph itself, so all 42 entries in the shipped presets were entries `canImport` never read, and every config those presets generated carried them too. a same-dagOrder or a shallow-to-deep grant is still written down
 * read JSX files again: a self-closing element consumed every byte after it, and a binding referenced only by a tag looked unreferenced, so `noUnusedImports` and `noUnusedVariables` now work on `.tsx` and `.jsx`
 * report the escapes from two shipped bans: `as any[]` (and `as any | T`) is a `as any` cast, and `export * from` is a proxy re-export
 * warn when a configured surface's directory is absent, where a typo in `architecture.config.json` used to disable the whole surface in silence

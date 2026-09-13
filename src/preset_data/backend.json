@@ -17,7 +17,7 @@
       "dagOrder": 1,
       "suffixes": [".repo.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts", "schema.ts"],
-      "allowedImports": ["lib"]
+      "allowedImports": []
     },
     {
       "name": "middleware",
@@ -31,7 +31,7 @@
         ".spec.ts",
         ".regex-patterns.ts"
       ],
-      "allowedImports": ["lib", "db"]
+      "allowedImports": []
     },
     {
       "name": "services",
@@ -40,7 +40,7 @@
       "dagOrder": 3,
       "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "db", "middleware"]
+      "allowedImports": []
     }
   ],
   "layers": {

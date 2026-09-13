@@ -106,6 +106,27 @@ test "parseFromSlice succeeds on bot preset" {
     try testing.expect(parsed.value.rootLib.enabled == true);
 }
 
+// every shipped preset is scaffolded into a project, and the checker grants an
+// import to any surface with a lower dagOrder before it reads a surface's own
+// list, so an entry naming one of those is dead config. a scaffold must not
+// hand a project a config its own checker would call redundant
+test "no preset surface lists an import the DAG already implies" {
+    const allocator = testing.allocator;
+
+    inline for (std.meta.fields(Preset)) |field| {
+        const preset: Preset = @enumFromInt(field.value);
+        const parsed = try loadPreset(allocator, preset);
+        defer parsed.deinit();
+
+        for (parsed.value.surfaces) |surface| {
+            for (surface.allowedImports) |allowed_name| {
+                const target = parsed.value.getSurface(allowed_name) orelse continue;
+                try testing.expect(target.dagOrder >= surface.dagOrder);
+            }
+        }
+    }
+}
+
 test "parseFromSlice ignores unknown fields when disabled" {
     const allocator = testing.allocator;
     const raw =

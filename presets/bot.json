@@ -16,7 +16,7 @@
       "dagOrder": 1,
       "suffixes": [".repo.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts", "schema.ts"],
-      "allowedImports": ["lib"]
+      "allowedImports": []
     },
     {
       "name": "services",
@@ -25,7 +25,7 @@
       "dagOrder": 2,
       "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "db"]
+      "allowedImports": []
     },
     {
       "name": "middleware",
@@ -39,7 +39,7 @@
         ".spec.ts",
         ".regex-patterns.ts"
       ],
-      "allowedImports": ["lib", "db", "services"]
+      "allowedImports": []
     },
     {
       "name": "components",
@@ -48,7 +48,7 @@
       "dagOrder": 4,
       "suffixes": [".component.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "services"]
+      "allowedImports": []
     },
     {
       "name": "commands",
@@ -62,7 +62,7 @@
         ".spec.ts",
         ".regex-patterns.ts"
       ],
-      "allowedImports": ["lib", "db", "services", "middleware", "components"]
+      "allowedImports": []
     },
     {
       "name": "tasks",
@@ -71,7 +71,7 @@
       "dagOrder": 6,
       "suffixes": [".task.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["db", "services"]
+      "allowedImports": []
     },
     {
       "name": "handlers",
@@ -80,7 +80,7 @@
       "dagOrder": 7,
       "suffixes": [".handler.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["db", "services"]
+      "allowedImports": []
     }
   ],
   "layers": {

@@ -21,7 +21,7 @@
         ".spec.ts",
         ".regex-patterns.ts"
       ],
-      "allowedImports": ["lib"]
+      "allowedImports": []
     },
     {
       "name": "services",
@@ -30,7 +30,7 @@
       "dagOrder": 2,
       "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "utils"]
+      "allowedImports": []
     },
     {
       "name": "components",
@@ -39,7 +39,7 @@
       "dagOrder": 3,
       "suffixes": [".component.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "utils", "services"]
+      "allowedImports": []
     },
     {
       "name": "pages",
@@ -48,7 +48,7 @@
       "dagOrder": 4,
       "suffixes": [".page.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["lib", "utils", "services", "components"]
+      "allowedImports": []
     }
   ],
   "layers": {

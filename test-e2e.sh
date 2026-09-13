@@ -140,6 +140,7 @@ cd "$P1" && "$GRIMUAH" add validators 2>/dev/null || true
 test -d "$P1/src/validators" && ok "add: creates dir" || fail "add: no dir"
 test -f "$P1/src/validators/example.validator.ts" && ok "add: example.validator.ts" || fail "add: no example"
 jq -e '.surfaces[] | select(.name=="validators")' "$P1/architecture.config.json" >/dev/null && ok "add: surface in config" || fail "add: missing from config"
+test "$(jq -c '.surfaces[] | select(.name=="validators") | .allowedImports' "$P1/architecture.config.json")" = "[]" && ok "add: no imports the DAG already implies" || fail "add: wrote a redundant allowedImports entry"
 
 # ── 18. add suffix heuristics ──
 cd "$P1" && "$GRIMUAH" add guards 2>/dev/null || true

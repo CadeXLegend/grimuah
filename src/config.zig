@@ -377,10 +377,6 @@ test "validate passes for valid config" {
     surfaces[0].allowedImports = utils_allowed_imports;
     surfaces[1] = try testSurface(allocator, "services", "src/services", 1, 1, &.{".service.ts"});
     surfaces[2] = try testSurface(allocator, "components", "src/components", 1, 2, &.{".component.ts"});
-    var components_allowed = try allocator.alloc([]const u8, 2);
-    components_allowed[0] = try allocator.dupe(u8, "utils");
-    components_allowed[1] = try allocator.dupe(u8, "services");
-    surfaces[2].allowedImports = components_allowed;
 
     const cfg = Config{ .surfaces = surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     defer cfg.deinit(allocator);

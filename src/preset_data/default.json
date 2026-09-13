@@ -22,7 +22,7 @@
       "dagOrder": 1,
       "suffixes": [".service.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["utils"]
+      "allowedImports": []
     },
     {
       "name": "components",
@@ -31,7 +31,7 @@
       "dagOrder": 2,
       "suffixes": [".component.ts"],
       "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["utils", "services"]
+      "allowedImports": []
     }
   ],
   "layers": {

@@ -201,45 +201,42 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 
     // add lib at depth 0 (root-level), dagOrder = next
     if (answers.lib and !presence.has_lib) {
-        new_surfaces[insert_idx] = createSurface(allocator, "lib", "lib", 0, next_dag_order, &.{".ts"}, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{});
+        new_surfaces[insert_idx] = createSurface(allocator, "lib", "lib", 0, next_dag_order, &.{".ts"}, &.{ ".types.ts", ".config.ts", ".spec.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add db under src/, depth 1
     if (answers.db and !presence.has_db) {
-        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, next_dag_order, &.{ ".repo.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" }, &.{"lib"});
+        new_surfaces[insert_idx] = createSurface(allocator, "db", "src/db", 1, next_dag_order, &.{ ".repo.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", "schema.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add middleware under src/, depth 1
     if (answers.middleware and !presence.has_middleware) {
-        const mid_allowed: []const []const u8 = if (answers.lib and !presence.has_lib) (if (answers.db and !presence.has_db) &.{ "lib", "db", "services" } else &.{"lib"}) else &.{"services"};
-        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", 1, next_dag_order, &.{ ".middleware.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, mid_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "middleware", "src/middleware", 1, next_dag_order, &.{ ".middleware.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add pages under src/, depth 1
     if (answers.pages and !presence.has_pages) {
-        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", 1, next_dag_order, &.{ ".page.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, &.{ "lib", "utils", "services", "components" });
+        new_surfaces[insert_idx] = createSurface(allocator, "pages", "src/pages", 1, next_dag_order, &.{ ".page.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add commands under src/, depth 1
     if (answers.commands and !presence.has_commands) {
-        const cmd_allowed: []const []const u8 = if (answers.db and !presence.has_db) &.{ "lib", "utils", "db", "services" } else &.{ "lib", "utils", "services" };
-        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", 1, next_dag_order, &.{ ".command.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" }, cmd_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "commands", "src/commands", 1, next_dag_order, &.{ ".command.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
 
     // add tasks under src/, depth 1
     if (answers.tasks and !presence.has_tasks) {
-        const tasks_allowed: []const []const u8 = if (answers.middleware and !presence.has_middleware) &.{ "lib", "db", "middleware", "services" } else &.{ "lib", "db", "services" };
-        new_surfaces[insert_idx] = createSurface(allocator, "tasks", "src/tasks", 1, next_dag_order, &.{ ".task.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" }, tasks_allowed);
+        new_surfaces[insert_idx] = createSurface(allocator, "tasks", "src/tasks", 1, next_dag_order, &.{ ".task.ts" }, &.{ ".types.ts", ".config.ts", ".spec.ts" });
         insert_idx += 1;
         next_dag_order += 1;
     }
@@ -254,7 +251,12 @@ fn applyPatches(allocator: std.mem.Allocator, cfg: *config.Config, answers: Inte
 }
 
 /// create a heap-allocated Surface with all fields
-fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, dagOrder: u32, suffixes: []const []const u8, innateMembers: []const []const u8, allowedImports: []const []const u8) config.Surface {
+///
+/// allowedImports is left empty: the DAG already grants every import to a
+/// surface with a lower dagOrder, so an entry naming one of those is implied by
+/// the graph and never read. only a same-dagOrder or a shallow-to-deep grant has
+/// to be written down, and a scaffold has no reason to write one
+fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u8, depth: u32, dagOrder: u32, suffixes: []const []const u8, innateMembers: []const []const u8) config.Surface {
     const name_copy = allocator.dupe(u8, name) catch @panic("OOM");
     const path_copy = allocator.dupe(u8, path) catch @panic("OOM");
 
@@ -264,9 +266,6 @@ fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u
     const innate_copy = allocator.alloc([]const u8, innateMembers.len) catch @panic("OOM");
     for (innateMembers, 0..) |s, i| innate_copy[i] = allocator.dupe(u8, s) catch @panic("OOM");
 
-    const imports_copy = allocator.alloc([]const u8, allowedImports.len) catch @panic("OOM");
-    for (allowedImports, 0..) |s, i| imports_copy[i] = allocator.dupe(u8, s) catch @panic("OOM");
-
     return .{
         .name = name_copy,
         .path = path_copy,
@@ -274,7 +273,6 @@ fn createSurface(allocator: std.mem.Allocator, name: []const u8, path: []const u
         .dagOrder = dagOrder,
         .suffixes = suffixes_copy,
         .innateMembers = innate_copy,
-        .allowedImports = imports_copy,
     };
 }
 
