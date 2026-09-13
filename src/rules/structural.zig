@@ -139,6 +139,40 @@ fn leadsWithEnum(tokens: []const ts.Token, from: usize) bool {
     return false;
 }
 
+/// one file's import cycle, from the graph the merge built
+///
+/// the rule has no per-file matcher: whether a file sits in a cycle is a property
+/// of the whole run, so the merge reads every file's imports first and calls this
+/// as it walks them
+///
+/// the row is the file's first import that points back into its own component, in
+/// statement order. an earlier import that points at a cycle *of another component*
+/// is not the closing edge, which is why the graph labels components rather than
+/// asking whether a target sits on some cycle
+pub fn resolveImportCycle(
+    allocator: std.mem.Allocator,
+    graph: *const root.ImportGraph,
+    file: usize,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    const cycle = graph.cycle_of[file];
+    if (cycle == root.no_cycle) return;
+
+    for (graph.edges[file]) |edge| {
+        if (graph.cycle_of[edge.target] != cycle) continue;
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = edge.line,
+            .message = try allocator.dupe(u8, rule.message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+        return;
+    }
+}
+
 const probe = @import("probe.zig");
 
 test "a function exported from a config file is reported, and the data-only shapes are not" {
@@ -231,6 +265,175 @@ test "an exported enum in an implementation module is reported, and the excluded
         "25: This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.",
         "36: This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.",
     });
+}
+
+/// an expected row for the import-cycle rule, built from the table's message so a
+/// wording change is one edit and the test stays readable
+fn cycleRow(allocator: std.mem.Allocator, path: []const u8, line: u32) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, root.import_cycle });
+}
+
+test "two files that import each other report at each file's own closing import" {
+    const allocator = std.testing.allocator;
+    const accounts = try cycleRow(allocator, "src/db/accounts.repo.ts", 1);
+    defer allocator.free(accounts);
+    const rows = try cycleRow(allocator, "src/db/rows.repo.ts", 1);
+    defer allocator.free(rows);
+
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/accounts.repo.ts", .content =
+        \\import { readRow } from "./rows.repo.ts";
+        \\
+        \\export function readAccount(): string {
+        \\  return readRow();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/rows.repo.ts", .content =
+        \\import { readAccount } from "./accounts.repo.ts";
+        \\
+        \\export function readRow(): string {
+        \\  return readAccount();
+        \\}
+        \\
+        },
+    }, &.{ accounts, rows });
+}
+
+test "a one-way import is not a cycle, and neither is one that only points into one" {
+    const allocator = std.testing.allocator;
+    const first = try cycleRow(allocator, "src/db/a.repo.ts", 1);
+    defer allocator.free(first);
+    const second = try cycleRow(allocator, "src/db/b.repo.ts", 1);
+    defer allocator.free(second);
+
+    // a is reached by both b and c, and imports back into neither, so only the
+    // pair that closes the cycle reports. c points into the cycle from outside it
+    // and is not part of it
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/a.repo.ts", .content =
+        \\import { fromB } from "./b.repo.ts";
+        \\
+        \\export function fromA(): string {
+        \\  return fromB();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/b.repo.ts", .content =
+        \\import { fromA } from "./a.repo.ts";
+        \\
+        \\export function fromB(): string {
+        \\  return fromA();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/c.repo.ts", .content =
+        \\import { fromA } from "./a.repo.ts";
+        \\
+        \\export function fromC(): string {
+        \\  return fromA();
+        \\}
+        \\
+        },
+    }, &.{ first, second });
+}
+
+test "a second cycle does not answer for the first, so a file reports its own closing import" {
+    const allocator = std.testing.allocator;
+    const x = try cycleRow(allocator, "src/db/x.repo.ts", 3);
+    defer allocator.free(x);
+    const m = try cycleRow(allocator, "src/db/m.repo.ts", 1);
+    defer allocator.free(m);
+    const n = try cycleRow(allocator, "src/db/n.repo.ts", 1);
+    defer allocator.free(n);
+    const y = try cycleRow(allocator, "src/db/y.repo.ts", 1);
+    defer allocator.free(y);
+
+    // x imports a cycle it is not in before it imports the one it is, so its row
+    // is the second import: the graph labels components rather than asking whether
+    // a target sits on some cycle
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/x.repo.ts", .content =
+        \\import { fromM } from "./m.repo.ts";
+        \\
+        \\import { fromY } from "./y.repo.ts";
+        \\
+        \\export function fromX(): string {
+        \\  return fromM() + fromY();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/m.repo.ts", .content =
+        \\import { fromN } from "./n.repo.ts";
+        \\
+        \\export function fromM(): string {
+        \\  return fromN();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/n.repo.ts", .content =
+        \\import { fromM } from "./m.repo.ts";
+        \\
+        \\export function fromN(): string {
+        \\  return fromM();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/y.repo.ts", .content =
+        \\import { fromX } from "./x.repo.ts";
+        \\
+        \\export function fromY(): string {
+        \\  return fromX();
+        \\}
+        \\
+        },
+    }, &.{ x, m, n, y });
+}
+
+test "a package, an unresolvable path, a self-import, a re-export and a dynamic import are no edges" {
+    // b imports a from a bare specifier, from a path the run never read, from
+    // itself, and through `export ... from`, which is a re-export rather than an
+    // import declaration. `a` reaches b by a dynamic import, which is an
+    // expression rather than a declaration. none of those is a dependency the
+    // module graph has an edge for, so no pair here is a cycle
+    try probe.expectProject(.structural, &.{
+        .{ .path = "src/db/a.repo.ts", .content =
+        \\export async function fromA(): Promise<string> {
+        \\  const loaded = await import("./b.repo.ts");
+        \\  return loaded.fromB();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/b.repo.ts", .content =
+        \\import { fromA } from "./a.repo.ts";
+        \\import { helper } from "@lib/helper";
+        \\import { gone } from "./missing.repo.ts";
+        \\import { itself } from "./b.repo.ts";
+        \\import { deep } from "../../../outside/deep.repo.ts";
+        \\
+        \\export { fromA } from "./a.repo.ts";
+        \\
+        \\export function fromB(): string {
+        \\  return fromA() + helper() + gone() + itself() + deep();
+        \\}
+        \\
+        },
+        // d imports e and e re-exports d, which is the other half of the round trip
+        // a reader might mistake for a cycle: a re-export is not a dependency the
+        // module graph has an edge for, so nothing here closes
+        .{ .path = "src/db/d.repo.ts", .content =
+        \\import { fromE } from "./e.repo.ts";
+        \\
+        \\export function fromD(): string {
+        \\  return fromE();
+        \\}
+        \\
+        },
+        .{ .path = "src/db/e.repo.ts", .content =
+        \\export { fromD } from "./d.repo.ts";
+        \\
+        },
+    }, &.{});
 }
 
 test "the enum rule reads the module's name, so a declaration module and a module at the top of the tree are both out of scope" {

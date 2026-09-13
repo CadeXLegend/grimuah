@@ -157,14 +157,77 @@ pub const Candidate = struct {
     message: []const u8,
 };
 
-/// the project-wide pass, as one file sees it: the return types this file declares
-/// and the call sites this file's rules defer
+/// one static import statement of one file, as the project pass collects it
+pub const ImportEdge = struct {
+    /// the module specifier as the statement writes it, e.g. `../db/accounts.repo`
+    specifier: []const u8,
+    /// the line the statement starts on
+    line: u32,
+};
+
+/// the cycle a file belongs to, in `ImportGraph.cycle_of`, when it belongs to none
+pub const no_cycle: u32 = std.math.maxInt(u32);
+
+/// one import statement of one file, with the file it turned out to name
+///
+/// the merge resolves every specifier against the files of the run before an edge
+/// exists, so a target is always a file index and the graph holds no dangling one
+pub const ResolvedEdge = struct {
+    /// the index of the file this edge points at in the run
+    target: u32,
+    /// the line the statement starts on, which is the line a cycle reports on
+    line: u32,
+};
+
+/// the run's import graph: every file's outgoing imports, and the cycle each file
+/// sits in
+///
+/// a file can be reached from another file of the same dagOrder, so the surface
+/// firewall cannot see a cycle, and the run has to read every file before it can
+/// decide. the graph is the merge's, not one file's: it outlives every
+/// contribution, because the verdict for the first file needs the last file's
+/// edges
+pub const ImportGraph = struct {
+    /// the graph's own memory: every file's edges and the labels outlive the file
+    /// they were read from, because the last file's verdict needs the first file's
+    arena: std.heap.ArenaAllocator,
+    /// every file's own edges, in statement order, indexed by file
+    edges: []const []const ResolvedEdge = &.{},
+    /// the component a file sits in, when that component holds two files or more,
+    /// and `no_cycle` otherwise. two files share an id exactly when they are in
+    /// one strongly connected component of two or more
+    cycle_of: []const u32 = &.{},
+
+    pub fn deinit(self: *ImportGraph) void {
+        self.arena.deinit();
+    }
+};
+
+/// one file's import cycle, as the table's rule declares it
+///
+/// the merge builds the graph and calls every enabled rule's verdict per file, so
+/// a rule decides only what the file's own row is. it reports through the table
+/// entry it is handed, which is where the layer, the severity and the message
+/// stay stated once
+pub const GraphVerdict = *const fn (
+    allocator: std.mem.Allocator,
+    graph: *const ImportGraph,
+    file: usize,
+    path: []const u8,
+    rule: *const Rule,
+    findings: *std.ArrayList(Finding),
+) std.mem.Allocator.Error!void;
+
+/// the project-wide pass, as one file sees it: the return types this file declares,
+/// the call sites this file's rules defer, and the imports the merge resolves into
+/// the run's graph
 ///
 /// the engine keeps one per file, in path order, so a worker writes only its own
 /// and the run resolves them in walk order once every file has been read
 pub const Project = struct {
     declared_returns: std.ArrayList(typemodel.DeclaredReturn) = .empty,
     deferred: std.ArrayList(Candidate) = .empty,
+    imports: std.ArrayList(ImportEdge) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -175,6 +238,8 @@ pub const Project = struct {
         self.declared_returns.deinit(allocator);
         for (self.deferred.items) |candidate| allocator.free(candidate.name);
         self.deferred.deinit(allocator);
+        for (self.imports.items) |edge| allocator.free(edge.specifier);
+        self.imports.deinit(allocator);
     }
 };
 
@@ -194,7 +259,18 @@ pub const Rule = struct {
     /// engine collects every file's declared return types as it reads them and
     /// resolves the rule's call sites once the scan is done
     needs_project: bool = false,
-    match: *const fn (*const Context) anyerror!void,
+    /// this rule reads the run's import graph, so the merge resolves every file's
+    /// imports and runs the component pass before any verdict. the pass is over the
+    /// whole project, so a config that enables no graph rule must not pay for it
+    needs_import_graph: bool = false,
+    /// the verdict this rule reaches over the import graph. a rule that declared
+    /// `needs_import_graph` must have one, or it would drive the pass and report
+    /// nothing
+    resolve_graph: ?GraphVerdict = null,
+    /// the per-file matcher. a rule whose only verdict is the import graph has
+    /// none, because that verdict needs every file of the run rather than the one
+    /// in front of it
+    match: ?*const fn (*const Context) anyerror!void = null,
 };
 
 pub const em_dash = "do not use em-dashes; use commas, colons, or sentence breaks instead";
@@ -236,6 +312,7 @@ pub const scalar_failure_return = "This async operation reports its failure as a
 pub const discarded_outcome = "This call returns an Outcome and nothing reads the result, so its failure branch is unreachable. Assign the result and narrow `succeeded`, or log the failure where the call is best effort.";
 pub const unread_scalar_result = "This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.";
 pub const enum_placement = "This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.";
+pub const import_cycle = "This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -506,6 +583,15 @@ pub const all = [_]Rule{
         .match = structural.checkEnumPlacement,
     },
     .{
+        .layer = .structural,
+        .severity = .err,
+        .message = import_cycle,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_import_graph = true,
+        .resolve_graph = structural.resolveImportCycle,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -572,6 +658,44 @@ pub fn needsProject(cfg: *const config.Config, with_hygiene: bool) bool {
     return false;
 }
 
+/// whether an enabled rule reads the run's import graph, so the merge knows to
+/// collect every file's imports, resolve them and run the component pass
+///
+/// the pass reads the whole project and costs a walk of every file's imports plus
+/// a component pass over the graph, so a project that enables no graph rule must
+/// not pay it
+pub fn needsImportGraph(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_import_graph) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
+/// reach every enabled graph rule's verdict for one file of the run
+///
+/// the merge builds the graph once and calls this as it walks the files, so a
+/// rule's own resolver decides only what that file's row is, and the layer, the
+/// severity and the message come off the table entry the resolver is handed
+pub fn resolveGraph(
+    allocator: std.mem.Allocator,
+    graph: *const ImportGraph,
+    file: usize,
+    path: []const u8,
+    cfg: *const config.Config,
+    with_hygiene: bool,
+    findings: *std.ArrayList(Finding),
+) std.mem.Allocator.Error!void {
+    for (&all) |*rule| {
+        if (!rule.needs_import_graph) continue;
+        const verdict = rule.resolve_graph orelse continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (!enabled(cfg, rule.layer)) continue;
+        try verdict(allocator, graph, file, path, rule, findings);
+    }
+}
+
 pub fn enabled(cfg: *const config.Config, layer: Layer) bool {
     return switch (layer) {
         .cosmetic => cfg.layers.cosmetic,
@@ -592,9 +716,68 @@ pub fn run(context: *const Context) !void {
         if (rule.layer == .hygiene and !context.hygiene) continue;
         if (!enabled(context.cfg, rule.layer)) continue;
         if (rule.syntax == .ir and context.module == null) continue;
+        const matcher = rule.match orelse continue;
 
         var dispatched = context.*;
         dispatched.rule = rule;
-        try rule.match(&dispatched);
+        try matcher(&dispatched);
     }
+}
+
+// ── tests ────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+// the two flags a rule can reach its verdict through are not independent, and the
+// table is where a mistake in them is silent: a rule with neither reports nothing
+// for the whole run, a rule that drives the graph pass without a verdict pays for
+// the pass and reports nothing, and a rule with a verdict but no flag never reads
+// a graph
+test "every rule has a verdict, and the graph flag and the graph verdict agree" {
+    for (all) |rule| {
+        try testing.expect(rule.match != null or rule.resolve_graph != null);
+        try testing.expect(rule.needs_import_graph == (rule.resolve_graph != null));
+    }
+}
+
+// the graph dispatch reaches a rule only when its own layer is on, and the row it
+// appends carries the layer, the severity and the message of the table entry it was
+// handed rather than a restatement at the call site. a graph rule has no per-file
+// matcher to report through, so this is the only path its rows take
+
+test "a graph verdict is reached only for a rule whose layer is on, and reports through the table" {
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    const graph_allocator = arena.allocator();
+    // every allocation through the arena happens before the literal copies it
+    const own_edges = try graph_allocator.alloc(ResolvedEdge, 1);
+    own_edges[0] = .{ .target = 0, .line = 7 };
+    const edges = try graph_allocator.alloc([]const ResolvedEdge, 1);
+    edges[0] = own_edges;
+    const cycle_of = try graph_allocator.alloc(u32, 1);
+    cycle_of[0] = 0;
+    var graph = ImportGraph{ .arena = arena, .edges = edges, .cycle_of = cycle_of };
+    defer graph.deinit();
+
+    var findings: std.ArrayList(Finding) = .empty;
+    defer {
+        for (findings.items) |finding| {
+            allocator.free(finding.path);
+            allocator.free(finding.message);
+        }
+        findings.deinit(allocator);
+    }
+
+    const graph_layer_off = config.Config{ .surfaces = &.{}, .layers = .{ .cosmetic = true, .structural = false, .resilience = true, .behavioural = true } };
+    try resolveGraph(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_off, false, &findings);
+    try testing.expectEqual(@as(usize, 0), findings.items.len);
+
+    const graph_layer_on = config.Config{ .surfaces = &.{}, .layers = .{ .cosmetic = true, .structural = true, .resilience = false, .behavioural = false } };
+    try resolveGraph(allocator, &graph, 0, "src/db/a.repo.ts", &graph_layer_on, false, &findings);
+    try testing.expectEqual(@as(usize, 1), findings.items.len);
+    try testing.expectEqual(@as(u32, 7), findings.items[0].line);
+    try testing.expectEqualStrings("structural", findings.items[0].layer);
+    try testing.expectEqual(Severity.err, findings.items[0].severity);
+    try testing.expectEqualStrings(import_cycle, findings.items[0].message);
 }

@@ -1,6 +1,9 @@
 const std = @import("std");
 const config = @import("config.zig");
 const ir = @import("ir.zig");
+// `paths_mod` rather than `paths`, which four functions in this file use for a
+// local name
+const paths_mod = @import("paths.zig");
 const ts = @import("lang/ts.zig");
 const typemodel = @import("lang/typemodel.zig");
 const rules = @import("rules.zig");
@@ -129,7 +132,7 @@ pub fn runAll(
         failure = try lintInParallel(io, cfg, contributions, paths, project_root, hygiene, worker_count);
     }
 
-    try mergeRun(allocator, &findings, contributions);
+    try mergeRun(allocator, &findings, contributions, cfg, hygiene);
     if (failure) |err| return err;
     return findings.toOwnedSlice(allocator);
 }
@@ -160,7 +163,7 @@ pub fn runSources(
         try lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], source.path, source.content, hygiene, .reclaimed);
     }
 
-    try mergeRun(allocator, &findings, contributions);
+    try mergeRun(allocator, &findings, contributions, cfg, hygiene);
     return findings.toOwnedSlice(allocator);
 }
 
@@ -321,15 +324,27 @@ fn lintInParallel(
 /// reports a file's rows in one place. the rule table puts the project rules last,
 /// which is the order those rows would have had if the rule could have decided on
 /// its own
+///
+/// the project's own indexes are built first, because a project rule's verdict
+/// needs every file read: the declared return types a call-site rule tests against,
+/// and the import graph a graph rule reads. a graph rule's own row is reached in
+/// this walk, from the graph the merge built, so it lands beside the file's other
+/// rows
 fn mergeRun(
     allocator: std.mem.Allocator,
     findings: *std.ArrayList(Finding),
     contributions: []Contribution,
+    cfg: *const config.Config,
+    hygiene: bool,
 ) !void {
     var index = try DeclaredReturns.init(allocator, contributions);
     defer index.deinit();
 
-    for (contributions) |*contribution| {
+    var graph: ?rules.ImportGraph = null;
+    if (rules.needsImportGraph(cfg, hygiene)) graph = try buildImportGraph(allocator, contributions);
+    defer if (graph) |*built| built.deinit();
+
+    for (contributions, 0..) |*contribution, file| {
         for (contribution.findings.items) |finding| {
             try findings.append(allocator, .{
                 .path = try allocator.dupe(u8, finding.path),
@@ -341,6 +356,9 @@ fn mergeRun(
         }
 
         try resolveDeferred(allocator, &index, contribution, findings);
+        if (graph) |*built| {
+            try rules.resolveGraph(allocator, built, file, contribution.path, cfg, hygiene, findings);
+        }
         contribution.deinit(shared_finding_allocator);
     }
 }
@@ -420,6 +438,219 @@ const DeclaredReturns = struct {
         return declared.items;
     }
 };
+
+/// every static import statement one file makes, in statement order
+///
+/// a specifier can name a package, a file outside every source root, or a path the
+/// run never read, and only the merge can tell which: the file itself knows only
+/// what it wrote, and the run's own path set is not assembled until every file has
+/// been read
+fn collectImports(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    imports: *std.ArrayList(rules.ImportEdge),
+) !void {
+    var child = module.firstChildOf(module.root);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        if (module.kindOf(current) != .import_decl) continue;
+        // the specifier points into the file's own memory, which the worker reuses
+        // for the next file, so the run keeps its own copy. a statement that wrote no
+        // specifier is left out where the specifiers are read, not here
+        try imports.append(allocator, .{
+            .specifier = try allocator.dupe(u8, module.nodeOf(current).name),
+            .line = module.spanOf(current).line,
+        });
+    }
+}
+
+/// the run's import graph: every file's imports resolved against the files of the
+/// run, and the strongly connected components of two or more, which are the cycles
+///
+/// a file can only be reached by a file of its own dagOrder, so the surface
+/// firewall cannot see a cycle and the graph has to
+///
+/// resolution is the run's path set and nothing else, which is what makes an import
+/// to a package or to a file outside every source root no edge at all. the three
+/// candidates are the specifier itself, the specifier with `.ts`, and its `index.ts`
+fn buildImportGraph(allocator: std.mem.Allocator, contributions: []const Contribution) !rules.ImportGraph {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const graph_allocator = arena.allocator();
+
+    var by_path: std.StringHashMapUnmanaged(u32) = .empty;
+    for (contributions, 0..) |contribution, file| {
+        const key = try graph_allocator.dupe(u8, contribution.path);
+        try by_path.put(graph_allocator, key, @intCast(file));
+    }
+    defer by_path.deinit(graph_allocator);
+
+    const edges = try graph_allocator.alloc([]const rules.ResolvedEdge, contributions.len);
+    for (contributions, 0..) |contribution, file| {
+        edges[file] = try resolveEdges(graph_allocator, &by_path, contribution.path, contribution.project.imports.items);
+    }
+
+    // every allocation through the arena has to happen before the struct literal
+    // copies it: the arena's state is a value, and a copy taken mid-literal misses
+    // the buffers a later field allocated, so `deinit` would free only the first
+    const cycle_of = try findCycles(graph_allocator, edges, contributions.len);
+    return .{ .arena = arena, .edges = edges, .cycle_of = cycle_of };
+}
+
+/// every edge of one file that points at a file of the run
+///
+/// a specifier that names no file of the run, or that names the importing file
+/// itself, is not an edge: a module cannot depend on itself, and a package or a
+/// path outside the lint scope has nothing to point at
+fn resolveEdges(
+    allocator: std.mem.Allocator,
+    by_path: *const std.StringHashMapUnmanaged(u32),
+    from_path: []const u8,
+    imports: []const rules.ImportEdge,
+) ![]const rules.ResolvedEdge {
+    var edges: std.ArrayList(rules.ResolvedEdge) = .empty;
+    errdefer edges.deinit(allocator);
+
+    for (imports) |import| {
+        // only a relative specifier is read: a bare one names a package
+        if (!std.mem.startsWith(u8, import.specifier, ".")) continue;
+        const base = (try paths_mod.resolveRelative(allocator, from_path, import.specifier)) orelse continue;
+        const target = targetOf(by_path, base, from_path) orelse continue;
+        try edges.append(allocator, .{ .target = target, .line = import.line });
+    }
+    return edges.toOwnedSlice(allocator);
+}
+
+/// the file of the run a resolved specifier names, or null when it names none
+///
+/// `base`, `base.ts` and `base/index.ts` are tried in that order, and the import
+/// is dropped when the path it names is the importing file: a specifier can walk a
+/// module back to itself, which is not a dependency
+fn targetOf(by_path: *const std.StringHashMapUnmanaged(u32), base: []const u8, from_path: []const u8) ?u32 {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    for (target_candidates) |candidate| {
+        const name = std.fmt.bufPrint(&buffer, "{s}{s}{s}", .{ base, candidate.suffix, candidate.extension }) catch return null;
+        const file = by_path.get(name) orelse continue;
+        if (std.mem.eql(u8, name, from_path)) return null;
+        return file;
+    }
+    return null;
+}
+
+/// the names a relative specifier is tried against, in order: the path itself, the
+/// path with the source extension, and the path's `index.ts`
+const target_candidates = [_]struct { suffix: []const u8, extension: []const u8 }{
+    .{ .suffix = "", .extension = "" },
+    .{ .suffix = "", .extension = ".ts" },
+    .{ .suffix = "/index", .extension = ".ts" },
+};
+
+/// label every file that sits in a cycle of two or more
+///
+/// tarjan's pass, with the recursion made explicit: a repository can hold more
+/// files than a thread's stack can hold frames, and the graph is one index per
+/// file, so the walk keeps its own stack. a component of one file is not a cycle
+/// and keeps `rules.no_cycle`, so the label is the verdict a rule reports on
+fn findCycles(allocator: std.mem.Allocator, edges: []const []const rules.ResolvedEdge, file_count: usize) ![]const u32 {
+    const unvisited = std.math.maxInt(u32);
+
+    const discovery = try allocator.alloc(u32, file_count);
+    defer allocator.free(discovery);
+    const low_link = try allocator.alloc(u32, file_count);
+    defer allocator.free(low_link);
+    const on_stack = try allocator.alloc(bool, file_count);
+    defer allocator.free(on_stack);
+    @memset(discovery, unvisited);
+    @memset(on_stack, false);
+
+    const cycle_of: []u32 = try allocator.alloc(u32, file_count);
+    @memset(cycle_of, rules.no_cycle);
+
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    var frames: std.ArrayList(Frame) = .empty;
+    defer frames.deinit(allocator);
+
+    var next_discovery: u32 = 0;
+    var next_cycle: u32 = 0;
+
+    for (0..file_count) |start| {
+        if (discovery[start] != unvisited) continue;
+
+        try pushNode(allocator, &frames, &pending, discovery, low_link, on_stack, &next_discovery, @intCast(start));
+
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const node = frame.node;
+            const own_edges = edges[node];
+
+            if (frame.cursor < own_edges.len) {
+                const target = own_edges[frame.cursor].target;
+                frame.cursor += 1;
+                if (discovery[target] == unvisited) {
+                    try pushNode(allocator, &frames, &pending, discovery, low_link, on_stack, &next_discovery, target);
+                } else if (on_stack[target]) {
+                    low_link[node] = @min(low_link[node], discovery[target]);
+                }
+                continue;
+            }
+
+            // every edge read, so this node's own component is decided
+            if (low_link[node] == discovery[node]) {
+                if (popComponent(&pending, on_stack, cycle_of, next_cycle, node)) next_cycle += 1;
+            }
+            _ = frames.pop();
+            if (frames.items.len > 0) {
+                const parent = frames.items[frames.items.len - 1].node;
+                low_link[parent] = @min(low_link[parent], low_link[node]);
+            }
+        }
+    }
+
+    return cycle_of;
+}
+
+/// one node of the component walk, and how many of its edges are read
+const Frame = struct {
+    node: u32,
+    cursor: usize,
+};
+
+fn pushNode(
+    allocator: std.mem.Allocator,
+    frames: *std.ArrayList(Frame),
+    pending: *std.ArrayList(u32),
+    discovery: []u32,
+    low_link: []u32,
+    on_stack: []bool,
+    next_discovery: *u32,
+    node: u32,
+) !void {
+    discovery[node] = next_discovery.*;
+    low_link[node] = next_discovery.*;
+    next_discovery.* += 1;
+    try pending.append(allocator, node);
+    on_stack[node] = true;
+    try frames.append(allocator, .{ .node = node, .cursor = 0 });
+}
+
+/// pop one component off the walk's stack, labelling its files and returning
+/// whether the component is a cycle
+///
+/// the root is the last file popped, so a component of one is exactly a first pop
+/// that is the root, and its label is taken back: a single file is not a cycle and
+/// must not read as one
+fn popComponent(pending: *std.ArrayList(u32), on_stack: []bool, cycle_of: []u32, label: u32, root: u32) bool {
+    var members: usize = 0;
+    while (true) {
+        const member = pending.pop() orelse break;
+        on_stack[member] = false;
+        cycle_of[member] = label;
+        members += 1;
+        if (member == root) break;
+    }
+    if (members == 1) cycle_of[root] = rules.no_cycle;
+    return members > 1;
+}
 
 /// the file's bytes, or an empty slice when it cannot be read. an unreadable
 /// file produces no finding, which is what a truncated read would also do
@@ -574,6 +805,13 @@ pub fn lintContent(
         }
     }
 
+    // the imports this file contributes to the run's graph. a rule that judges a
+    // file by what it links to needs every file's, and the run resolves them once
+    // the scan is done
+    if (rules.needsImportGraph(cfg, hygiene)) {
+        if (parsed) |*module| try collectImports(finding_allocator, module, &contribution.project.imports);
+    }
+
     var context = rules.Context{
         .allocator = finding_allocator,
         .cfg = cfg,
@@ -588,4 +826,98 @@ pub fn lintContent(
         .project = if (project_wanted) &contribution.project else null,
     };
     try rules.run(&context);
+}
+
+// ── tests ────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+test "a component of one file is not a cycle, and a mutual pair is one component" {
+    const allocator = std.testing.allocator;
+
+    // 0 and 1 reach each other. 2 only points into that pair, 3 reaches 4 one way,
+    // and 5 stands alone. 6 points into the pair too and then into its own cycle
+    // with 7, which is the cross edge into an already finished component: reaching
+    // the pair back would make 6 look like part of it and lose the cycle with 7
+    const edges = [_][]const rules.ResolvedEdge{
+        &.{.{ .target = 1, .line = 1 }},
+        &.{.{ .target = 0, .line = 2 }},
+        &.{.{ .target = 0, .line = 3 }},
+        &.{.{ .target = 4, .line = 4 }},
+        &.{},
+        &.{},
+        &.{ .{ .target = 0, .line = 6 }, .{ .target = 7, .line = 7 } },
+        &.{.{ .target = 6, .line = 8 }},
+    };
+    const cycle_of = try findCycles(allocator, &edges, edges.len);
+    defer allocator.free(cycle_of);
+
+    try testing.expect(cycle_of[0] != rules.no_cycle);
+    try testing.expectEqual(cycle_of[0], cycle_of[1]);
+    try testing.expectEqual(rules.no_cycle, cycle_of[2]);
+    try testing.expectEqual(rules.no_cycle, cycle_of[3]);
+    try testing.expectEqual(rules.no_cycle, cycle_of[4]);
+    try testing.expectEqual(rules.no_cycle, cycle_of[5]);
+    try testing.expect(cycle_of[6] != rules.no_cycle);
+    try testing.expectEqual(cycle_of[6], cycle_of[7]);
+    // the two cycles are separate components, which is what makes a file's row its
+    // own closing import rather than any import that lands on a cycle
+    try testing.expect(cycle_of[6] != cycle_of[0]);
+}
+
+test "a specifier resolves by its path, and only a relative one is an edge" {
+    const allocator = std.testing.allocator;
+
+    var contributions = [_]Contribution{
+        .{ .path = "src/db/a.repo.ts" },
+        .{ .path = "src/db/b.repo.ts" },
+        .{ .path = "src/db/nested/index.ts" },
+        .{ .path = "src/db/c.repo.ts" },
+    };
+    defer for (&contributions) |*contribution| contribution.deinit(allocator);
+
+    const sources = [_]struct { file: usize, specifier: []const u8, line: u32 }{
+        // the path itself, with the extension
+        .{ .file = 0, .specifier = "./b.repo.ts", .line = 1 },
+        // a directory's `index.ts`
+        .{ .file = 0, .specifier = "./nested", .line = 2 },
+        // the path with the extension added
+        .{ .file = 1, .specifier = "./a.repo.ts", .line = 3 },
+        // a climb out of a nested directory, back to the file the first import
+        // already reached
+        .{ .file = 2, .specifier = "../a.repo.ts", .line = 4 },
+        // a bare specifier names a package, and this one is the same directory's
+        // file spelled without the `./` that would make it relative
+        .{ .file = 3, .specifier = "@lib/helper", .line = 5 },
+        .{ .file = 3, .specifier = "a.repo.ts", .line = 6 },
+        // a path the run never read names nothing, and a module cannot depend on
+        // itself
+        .{ .file = 3, .specifier = "./missing.repo", .line = 7 },
+        .{ .file = 3, .specifier = "./c.repo.ts", .line = 8 },
+        .{ .file = 3, .specifier = "../../../outside/x.repo", .line = 9 },
+    };
+    for (sources) |source| {
+        try contributions[source.file].project.imports.append(allocator, .{
+            .specifier = try allocator.dupe(u8, source.specifier),
+            .line = source.line,
+        });
+    }
+
+    var graph = try buildImportGraph(allocator, &contributions);
+    defer graph.deinit();
+
+    try testing.expectEqual(@as(usize, 2), graph.edges[0].len);
+    try testing.expectEqual(@as(u32, 1), graph.edges[0][0].target);
+    try testing.expectEqual(@as(u32, 2), graph.edges[0][1].target);
+    try testing.expectEqual(@as(u32, 0), graph.edges[1][0].target);
+    try testing.expectEqual(@as(u32, 0), graph.edges[2][0].target);
+    try testing.expectEqual(@as(usize, 0), graph.edges[3].len);
+
+    // 0 and 1 import each other and 0 also imports 2, which imports 0 back, so all
+    // three are one component. 3's specifiers resolved to nothing, so it stands
+    // alone and keeps no label
+    try testing.expectEqual(graph.cycle_of[0], graph.cycle_of[1]);
+    try testing.expect(graph.cycle_of[0] != rules.no_cycle);
+    try testing.expectEqual(graph.cycle_of[0], graph.cycle_of[2]);
+    try testing.expectEqual(rules.no_cycle, graph.cycle_of[3]);
 }

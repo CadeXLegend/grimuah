@@ -1,5 +1,6 @@
 const std = @import("std");
 const config = @import("config.zig");
+const paths = @import("paths.zig");
 
 /// result of a single pre-pass check
 pub const Finding = struct {
@@ -99,7 +100,7 @@ fn checkSurfaceFile(
     const imports = try extractImports(temp, content);
     const innate = isInnateMember(surface, file.basename);
     for (imports) |import_path| {
-        const resolved_path = (try resolveImportPath(temp, file_path, import_path)) orelse continue;
+        const resolved_path = (try paths.resolveRelative(temp, file_path, import_path)) orelse continue;
         const target_surface = cfg.owningSurface(resolved_path) orelse continue;
 
         if (!cfg.canImport(surface.name, target_surface.name) and !std.mem.eql(u8, surface.name, target_surface.name)) {
@@ -440,37 +441,6 @@ fn findClosingQuote(content: []const u8, start: usize, quote: u8) ?usize {
     return null;
 }
 
-/// resolve a relative import against the importing file's directory into a
-/// normalised repo-relative path, e.g. ("./src/db/xp.repo.ts", "../services/x.service.ts")
-/// gives "src/services/x.service.ts".
-///
-/// resolving by path rather than by the import's first segment is what makes
-/// cross-tree imports ("../src/services/...") and surfaces whose path has a
-/// prefix segment ("apps/web", "packages/core") visible to the firewall, the
-/// first-segment form silently matched nothing for both.
-/// returns null when the path climbs above the project root
-fn resolveImportPath(allocator: std.mem.Allocator, importer_path: []const u8, import_path: []const u8) !?[]u8 {
-    const importer_dir = std.fs.path.dirname(importer_path) orelse return null;
-
-    var segments: std.ArrayList([]const u8) = .empty;
-    defer segments.deinit(allocator);
-
-    for ([_][]const u8{ importer_dir, import_path }) |component| {
-        var iter = std.mem.tokenizeScalar(u8, component, '/');
-        while (iter.next()) |segment| {
-            if (std.mem.eql(u8, segment, ".")) continue;
-            if (std.mem.eql(u8, segment, "..")) {
-                if (segments.items.len == 0) return null;
-                _ = segments.pop();
-                continue;
-            }
-            try segments.append(allocator, segment);
-        }
-    }
-
-    return try std.mem.join(allocator, "/", segments.items);
-}
-
 /// join `[]const []const u8` into a comma-separated string, e.g. `.util.ts, .service.ts`
 /// caller owns the returned slice (allocator.free)
 fn formatStringSlice(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
@@ -629,40 +599,6 @@ fn testConfig() config.Config {
     return .{ .surfaces = &test_surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
 }
 
-fn expectResolved(importer_path: []const u8, import_path: []const u8, expected: []const u8) !void {
-    const allocator = testing.allocator;
-    const resolved = (try resolveImportPath(allocator, importer_path, import_path)).?;
-    defer allocator.free(resolved);
-    try testing.expectEqualStrings(expected, resolved);
-}
-
-test "resolveImportPath resolves a sibling import within its own surface" {
-    try expectResolved("./src/db/xp.repo.ts", "./xp-types.ts", "src/db/xp-types.ts");
-}
-
-test "resolveImportPath resolves a cross-surface import" {
-    try expectResolved("./src/db/xp.repo.ts", "../services/xp.service.ts", "src/services/xp.service.ts");
-}
-
-test "resolveImportPath resolves a cross-tree import through a prefix segment" {
-    // the form that used to resolve to null: the importer sits at the root, so
-    // the target's first segment is `src`, which is not a surface name
-    try expectResolved("./tools/probe.smoke.ts", "../src/db/x.repo.ts", "src/db/x.repo.ts");
-}
-
-test "resolveImportPath resolves a deep relative climb" {
-    try expectResolved("./src/services/nested/deep/x.service.ts", "../../../db/x.repo.ts", "src/db/x.repo.ts");
-}
-
-test "resolveImportPath climbs out of a prefixed surface path" {
-    try expectResolved("./apps/web/page.ts", "../../packages/core/store.ts", "packages/core/store.ts");
-}
-
-test "resolveImportPath returns null when the import climbs above the project root" {
-    const allocator = testing.allocator;
-    try testing.expect((try resolveImportPath(allocator, "./lib/x.ts", "../../y.ts")) == null);
-}
-
 test "owningSurface matches a surface path on segment boundaries only" {
     const cfg = testConfig();
     try testing.expect(cfg.owningSurface("src/db/x.repo.ts") != null);
@@ -694,7 +630,7 @@ test "a root-level surface's cross-tree import reaches the firewall" {
     // unpoliced
     const allocator = testing.allocator;
     const cfg = testConfig();
-    const resolved = (try resolveImportPath(allocator, "./tools/probe.smoke.ts", "../src/db/x.repo.ts")).?;
+    const resolved = (try paths.resolveRelative(allocator, "./tools/probe.smoke.ts", "../src/db/x.repo.ts")).?;
     defer allocator.free(resolved);
 
     const target = cfg.owningSurface(resolved).?;
@@ -706,7 +642,7 @@ test "a root-level surface's cross-tree import reaches the firewall" {
 test "a same-surface import resolves and is allowed" {
     const allocator = testing.allocator;
     const cfg = testConfig();
-    const resolved = (try resolveImportPath(allocator, "./src/services/nested/x.service.ts", "../y.service.ts")).?;
+    const resolved = (try paths.resolveRelative(allocator, "./src/services/nested/x.service.ts", "../y.service.ts")).?;
     defer allocator.free(resolved);
 
     try testing.expectEqualStrings("src/services/y.service.ts", resolved);

@@ -77,6 +77,12 @@ detector walks `TypeLiteral` nodes only. seven more rows come from fixtures that
 pin another rule and hold a mutable type literal incidentally, in a cast or a
 parameter
 
+`no-import-cycles-a.repo.ts` and `no-import-cycles-b.repo.ts` are the corpus's only
+pair: a cycle needs two files, and the two import each other so the run has to read
+both before either can be judged. each one's row lands on its own import statement,
+and the pair is the only place the corpus reaches the project pass from a fixture
+rather than from a single file
+
 `asany-param.ts`, `asany-type.ts` and the annotation in `asany-union.ts` used to
 pin the silence of `: any`: the plugin era warned on it, biome's recommended set
 owned it, and the native engine reported nothing at all for an annotation. the
