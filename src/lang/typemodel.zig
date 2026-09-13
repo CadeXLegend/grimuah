@@ -110,6 +110,9 @@ pub fn analyze(
             // class field arrives as a `.member` node, which is the detector's
             // own class-field exclusion
             .function_decl, .function_expr, .arrow => try reader.readCallable(bounds),
+            // an `as` assertion holds a type the detector walks like any other:
+            // `value as { a?: T }` is a TypeLiteral to it, and to this reader
+            .as_expr => try reader.readAssertionType(bounds),
             else => {},
         }
     }
@@ -186,6 +189,70 @@ const Bounds = struct {
 /// reported as a violation
 const ReadError = std.mem.Allocator.Error;
 
+/// one of the declaration shapes a `module`, `namespace` or `global` block may
+/// hold, and the reader that already knows how to read it
+const Declaration = struct {
+    keyword: []const u8,
+    read: *const fn (*Reader, Bounds) ReadError!void,
+};
+
+/// the declaration keywords read inside a block. a `class` is not here, because
+/// its members are not annotations, and neither is an `enum`, which carries none
+const declarations = [_]Declaration{
+    .{ .keyword = "type", .read = Reader.readTypeDeclaration },
+    .{ .keyword = "interface", .read = Reader.readTypeDeclaration },
+    .{ .keyword = "module", .read = Reader.readTypeDeclaration },
+    .{ .keyword = "namespace", .read = Reader.readTypeDeclaration },
+    .{ .keyword = "global", .read = Reader.readTypeDeclaration },
+    .{ .keyword = "function", .read = Reader.readCallable },
+    .{ .keyword = "const", .read = Reader.readVariableDeclaration },
+    .{ .keyword = "let", .read = Reader.readVariableDeclaration },
+    .{ .keyword = "var", .read = Reader.readVariableDeclaration },
+};
+
+fn declarationAt(token: Token) ?Declaration {
+    if (token.kind != .word) return null;
+    for (declarations) |declaration| {
+        if (token.isWord(declaration.keyword)) return declaration;
+    }
+    return null;
+}
+
+/// the modifiers a declaration may carry before its own keyword
+fn isDeclarationPrefix(token: Token) bool {
+    return token.kind == .word and
+        (token.isWord("export") or token.isWord("declare") or token.isWord("default"));
+}
+
+/// the token after the declaration that begins at `start`
+///
+/// an alias ends at its `;`, because its `{ ... }` is a type rather than a body.
+/// everything else ends after a balanced body, or at its `;` when it has none
+fn declarationEnd(tokens: []const Token, start: usize, limit: usize) usize {
+    const is_alias = tokens[start].kind == .word and tokens[start].isWord("type");
+    var depth: usize = 0;
+    var i = start;
+    while (i < limit) : (i += 1) {
+        const token = tokens[i];
+        if (token.kind != .punct) continue;
+        if (isOpener(token.text)) {
+            depth += 1;
+            continue;
+        }
+        if (isCloser(token.text)) {
+            if (depth == 0) return i;
+            depth -= 1;
+            // a balanced pair ends the declaration only when it is the body a
+            // declaration owns, and only a `}` closes one: a parameter list's
+            // `)` does not end the `function` it belongs to
+            if (depth == 0 and !is_alias and isPunct(token, "}")) return i + 1;
+            continue;
+        }
+        if (depth == 0 and isPunct(token, ";")) return i;
+    }
+    return limit;
+}
+
 const Reader = struct {
     arena: std.mem.Allocator,
     tokens: []const Token,
@@ -227,6 +294,16 @@ const Reader = struct {
         if (tokens[start].isWord("interface")) {
             const open = findAtTop(tokens, start + 1, end, "{") orelse return;
             try self.readObjectLiteral(open, .interface_body);
+            return;
+        }
+
+        // a `module`, `namespace` or `global` block. the front-end parses the
+        // whole block as this one node with no children, so its body is the one
+        // place the reader has to find the declarations itself
+        if (tokens[start].isWord("module") or tokens[start].isWord("namespace") or tokens[start].isWord("global")) {
+            const open = findAtTop(tokens, start + 1, end, "{") orelse return;
+            const close = matchingCloser(tokens, open, end) orelse return;
+            try self.readDeclarationList(open + 1, close);
         }
     }
 
@@ -278,6 +355,58 @@ const Reader = struct {
             .report_start = type_start,
         });
         try self.readTypeExtent(type_start, type_end);
+    }
+
+    /// the annotation an `as` assertion carries on its right-hand side
+    ///
+    /// the tree records the cast as one node over the whole expression and keeps
+    /// the type only as the node's own text, so the type's extent is found from
+    /// the `as` that is still inside the node: a chained `a as B as C` nests one
+    /// node per cast, and each one covers what follows its own `as`
+    ///
+    /// the other assertion form, `<T>value`, is not read: its type precedes its
+    /// operand and no rule has reported one
+    fn readAssertionType(self: *Reader, bounds: Bounds) ReadError!void {
+        const tokens = self.tokens;
+        const end = trimEnd(tokens, bounds.start, bounds.end);
+        var as_index: ?usize = null;
+        var cursor = bounds.start;
+        while (cursor < end) : (cursor += 1) {
+            if (tokens[cursor].kind == .word and tokens[cursor].isWord("as")) as_index = cursor;
+        }
+        const keyword = as_index orelse return;
+        if (keyword + 1 >= end) return;
+        try self.readTypeExtent(keyword + 1, end);
+    }
+
+    /// the declarations inside a `module`, `namespace` or `global` block
+    ///
+    /// the block reaches the reader as one node whose children are empty, so the
+    /// declarations have to be found here. each one ends where the block's own
+    /// `;` or balanced body ends, and the keyword it starts with decides which
+    /// of the readers already below handles it
+    ///
+    /// ponytail: a `class` declared inside the block is skipped rather than read,
+    /// because its members need a member-level scan no rule has asked for yet. it
+    /// goes in when a rule reads one
+    fn readDeclarationList(self: *Reader, start: usize, end: usize) ReadError!void {
+        const tokens = self.tokens;
+        var cursor = start;
+        while (cursor < end) {
+            var index = cursor;
+            while (index < end and isDeclarationPrefix(tokens[index])) index += 1;
+            if (index >= end) return;
+
+            const declaration_end = declarationEnd(tokens, index, end);
+            if (declaration_end <= index) {
+                cursor = index + 1;
+                continue;
+            }
+            if (declarationAt(tokens[index])) |declaration| {
+                try declaration.read(self, .{ .start = index, .end = declaration_end });
+            }
+            cursor = declaration_end;
+        }
     }
 
     /// the annotations between a parameter list's brackets
@@ -994,6 +1123,70 @@ test "a destructured binding and a default value bound the annotation" {
         "2 variable_type optional=false readonly=false -",
         "3 parameter_type optional=false readonly=false -",
         "3 parameter_type optional=false readonly=false -",
+    });
+}
+
+test "a module block's declarations are read, and a class inside one is not" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\declare module "shim" {
+        \\  export type Entry = {
+        \\    readonly id?: string;
+        \\  };
+        \\  export function read(limit: number): string;
+        \\  const runner: Entry;
+        \\  class Hidden {
+        \\    run(step: number): string {
+        \\      return "x";
+        \\    }
+        \\  }
+        \\}
+        \\
+    ;
+    try expectRows(allocator, source, &.{
+        "2 alias_type optional=false readonly=false -",
+        "3 property_type optional=true readonly=true type_literal",
+        "5 parameter_type optional=false readonly=false -",
+        "5 return_type optional=false readonly=false -",
+        "6 variable_type optional=false readonly=false -",
+    });
+}
+
+test "a namespace block is read the same way a module block is" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\declare global {
+        \\  interface Window {
+        \\    readonly tag?: string;
+        \\  }
+        \\}
+        \\
+        \\namespace Outer {
+        \\  export namespace Inner {
+        \\    export type Leaf = { readonly value?: number };
+        \\  }
+        \\}
+        \\
+    ;
+    try expectRows(allocator, source, &.{
+        "3 property_type optional=true readonly=true interface_body",
+        "9 alias_type optional=false readonly=false -",
+        "9 property_type optional=true readonly=true type_literal",
+    });
+}
+
+test "an as assertion's type is read, and a chain reads only its own" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\const chosen = value as { readonly id?: string };
+        \\const twice = value as unknown as { readonly tag?: number };
+        \\const kept = value as { readonly name: string };
+        \\
+    ;
+    try expectRows(allocator, source, &.{
+        "1 property_type optional=true readonly=true type_literal",
+        "2 property_type optional=true readonly=true type_literal",
+        "3 property_type optional=false readonly=true type_literal",
     });
 }
 
