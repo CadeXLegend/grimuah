@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("config.zig");
 const ir = @import("ir.zig");
 const ts = @import("lang/ts.zig");
+const typemodel = @import("lang/typemodel.zig");
 const rules = @import("rules.zig");
 const scope = @import("scope.zig");
 
@@ -18,6 +19,38 @@ const scope = @import("scope.zig");
 
 pub const Finding = rules.Finding;
 pub const Severity = rules.Severity;
+
+/// one source of a run, for a caller that already holds it
+pub const Source = struct {
+    path: []const u8,
+    content: []const u8,
+};
+
+/// what one file contributes to a run: the findings it produced, the return types
+/// it declares, and the call sites its rules could not settle on their own
+///
+/// the engine keeps one per file, in path order, so a worker writes only its own
+/// and the merge needs no lock. `project` stays empty unless an enabled rule
+/// declared `needs_project`
+pub const Contribution = struct {
+    /// the file this came from, borrowed from the run's own path list
+    path: []const u8 = "",
+    findings: std.ArrayList(Finding) = .empty,
+    project: rules.Project = .{},
+
+    /// free everything, with the allocator the findings and the project were built
+    /// on. every field is left empty, because a merge that empties a contribution
+    /// as it reports it and a cleanup that frees whatever is left both run
+    pub fn deinit(self: *Contribution, allocator: std.mem.Allocator) void {
+        for (self.findings.items) |finding| {
+            allocator.free(finding.path);
+            allocator.free(finding.message);
+        }
+        self.findings.deinit(allocator);
+        self.project.deinit(allocator);
+        self.* = .{};
+    }
+};
 
 /// the most lint threads a run will start. the work is per file and memory-bound,
 /// so past the machine's physical core count the workers contend for the same
@@ -38,9 +71,14 @@ const parallel_min_files = 64;
 /// can isolate the architecture rules
 ///
 /// the front-end is per file and shares nothing, so a repo with work to spread
-/// runs it on several cores. findings are merged in walk order, which is the
-/// order the single-core path produces, so the output does not depend on the
-/// machine
+/// runs it on several cores. every file's findings are collected into its own slot
+/// first and merged in walk order afterwards, which is the order a single core
+/// produces, so the output does not depend on the machine. the merge is also where
+/// a rule that needs the whole project reaches its verdict, because that verdict
+/// cannot be reached until the last file has been read
+///
+/// reads happen on the worker that needs the bytes: `std.Io` is thread-safe, and
+/// leaving them on the calling thread made the reads the serial part of the run
 pub fn runAll(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -57,15 +95,71 @@ pub fn runAll(
         allocator.free(paths);
     }
 
+    const contributions = try allocator.alloc(Contribution, paths.len);
+    defer allocator.free(contributions);
+    for (contributions) |*contribution| contribution.* = .{};
+    errdefer for (contributions) |*contribution| contribution.deinit(shared_finding_allocator);
+
     const available_cores = std.Thread.getCpuCount() catch 1;
     const worker_count = @min(available_cores, max_lint_workers);
 
+    var failure: ?anyerror = null;
     if (paths.len < parallel_min_files or worker_count < 2) {
-        for (paths) |path| try scanFile(io, allocator, cfg, &findings, path, project_root, hygiene);
-        return findings.toOwnedSlice(allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        for (paths, 0..) |path, index| {
+            // the front-end's memory is this file's and is reused for the next,
+            // the way a worker reuses its own
+            _ = arena.reset(.retain_capacity);
+            const content = readSource(io, arena.allocator(), project_root, path);
+            // the word-boundary pre-test can only rule out a file that no live rule's
+            // literal occurs in. a hygiene rule matches a declaration, and a declaration
+            // can be named anything, so with the hygiene layer on there is no file to
+            // skip and the test is not worth the scan
+            if (!rules.lintsEveryFile(cfg, hygiene) and !maybeTrigger(content)) continue;
+
+            lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], path, content, hygiene, .reclaimed) catch |err| {
+                failure = err;
+                break;
+            };
+        }
+    } else {
+        failure = try lintInParallel(io, cfg, contributions, paths, project_root, hygiene, worker_count);
     }
 
-    try lintInParallel(io, allocator, cfg, &findings, paths, project_root, hygiene, worker_count);
+    try mergeRun(allocator, &findings, contributions);
+    if (failure) |err| return err;
+    return findings.toOwnedSlice(allocator);
+}
+
+/// lint a project that is already in memory, as one run
+///
+/// production reads from disk, and this is the same run over sources a caller
+/// holds: a rule that judges a call by how its callee is declared in another file
+/// cannot be tested any other way, because its verdict needs two files at once
+pub fn runSources(
+    allocator: std.mem.Allocator,
+    cfg: *const config.Config,
+    sources: []const Source,
+    hygiene: bool,
+) ![]Finding {
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer freeFindings(allocator, findings.items);
+
+    const contributions = try allocator.alloc(Contribution, sources.len);
+    defer allocator.free(contributions);
+    for (contributions) |*contribution| contribution.* = .{};
+    errdefer for (contributions) |*contribution| contribution.deinit(shared_finding_allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    for (sources, 0..) |source, index| {
+        _ = arena.reset(.retain_capacity);
+        try lintContent(arena.allocator(), shared_finding_allocator, cfg, &contributions[index], source.path, source.content, hygiene, .reclaimed);
+    }
+
+    try mergeRun(allocator, &findings, contributions);
     return findings.toOwnedSlice(allocator);
 }
 
@@ -145,7 +239,7 @@ const Batch = struct {
     cfg: *const config.Config,
     hygiene: bool,
     paths: []const []const u8,
-    results: []std.ArrayList(Finding),
+    contributions: []Contribution,
     failures: []?anyerror,
     next: std.atomic.Value(usize),
 };
@@ -165,33 +259,27 @@ fn lintWorker(batch: *Batch, arena: *std.heap.ArenaAllocator) void {
         _ = arena.reset(.retain_capacity);
 
         const content = readSource(batch.io, arena.allocator(), batch.project_root, batch.paths[index]);
-        var local: std.ArrayList(Finding) = .empty;
-        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &local, batch.paths[index], content, batch.hygiene, .reclaimed)) |_| {
-            batch.results[index] = local;
+        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &batch.contributions[index], batch.paths[index], content, batch.hygiene, .reclaimed)) |_| {
         } else |err| {
             batch.failures[index] = err;
         }
     }
 }
 
-/// lint the paths across `worker_count` threads. the reads happen on the worker
-/// that needs the bytes: `std.Io` is thread-safe, and leaving them on the calling
-/// thread made the reads the serial part of the run
+/// lint the paths across `worker_count` threads, filling each file's contribution,
+/// and return the first failure. the merge is the caller's, because it happens
+/// after every file has been read either way
 fn lintInParallel(
     io: std.Io,
-    allocator: std.mem.Allocator,
     cfg: *const config.Config,
-    findings: *std.ArrayList(Finding),
+    contributions: []Contribution,
     paths: []const []const u8,
     project_root: []const u8,
     hygiene: bool,
     worker_count: usize,
-) !void {
-    const results = try allocator.alloc(std.ArrayList(Finding), paths.len);
-    defer allocator.free(results);
-    const failures = try allocator.alloc(?anyerror, paths.len);
-    defer allocator.free(failures);
-    for (results) |*result| result.* = .empty;
+) !?anyerror {
+    const failures = try shared_finding_allocator.alloc(?anyerror, paths.len);
+    defer shared_finding_allocator.free(failures);
     @memset(failures, null);
 
     var batch = Batch{
@@ -200,7 +288,7 @@ fn lintInParallel(
         .cfg = cfg,
         .hygiene = hygiene,
         .paths = paths,
-        .results = results,
+        .contributions = contributions,
         .failures = failures,
         .next = .init(0),
     };
@@ -220,29 +308,117 @@ fn lintInParallel(
     // left behind. worker zero is finished either way, so its arena is free
     lintWorker(&batch, &arenas[0]);
 
-    var failed: ?anyerror = null;
-    for (results, failures) |result, failure| {
-        if (failure) |err| {
-            if (failed == null) failed = err;
-        }
-        for (result.items) |finding| {
-            if (failed == null) {
-                try findings.append(allocator, .{
-                    .path = try allocator.dupe(u8, finding.path),
-                    .line = finding.line,
-                    .message = try allocator.dupe(u8, finding.message),
-                    .layer = finding.layer,
-                    .severity = finding.severity,
-                });
-            }
-            shared_finding_allocator.free(finding.path);
-            shared_finding_allocator.free(finding.message);
-        }
-        var owned = result;
-        owned.deinit(shared_finding_allocator);
+    for (failures) |failure| {
+        if (failure) |err| return err;
     }
-    if (failed) |err| return err;
+    return null;
 }
+
+/// turn every file's contribution into the run's findings, in walk order
+///
+/// a file's deferred call sites follow that file's own findings, so the run still
+/// reports a file's rows in one place. the rule table puts the project rules last,
+/// which is the order those rows would have had if the rule could have decided on
+/// its own
+fn mergeRun(
+    allocator: std.mem.Allocator,
+    findings: *std.ArrayList(Finding),
+    contributions: []Contribution,
+) !void {
+    var index = try DeclaredReturns.init(allocator, contributions);
+    defer index.deinit();
+
+    for (contributions) |*contribution| {
+        for (contribution.findings.items) |finding| {
+            try findings.append(allocator, .{
+                .path = try allocator.dupe(u8, finding.path),
+                .line = finding.line,
+                .message = try allocator.dupe(u8, finding.message),
+                .layer = finding.layer,
+                .severity = finding.severity,
+            });
+        }
+
+        try resolveDeferred(allocator, &index, contribution, findings);
+        contribution.deinit(shared_finding_allocator);
+    }
+}
+
+/// report the call sites one file deferred, now that every declaration is known
+fn resolveDeferred(
+    allocator: std.mem.Allocator,
+    index: *const DeclaredReturns,
+    contribution: *const Contribution,
+    findings: *std.ArrayList(Finding),
+) !void {
+    for (contribution.project.deferred.items) |candidate| {
+        // a name the project declares nowhere is not judged: the call may be a
+        // builtin, a call to this file's own local, or a call through a shape the
+        // reader does not model
+        const declared = index.declaredTypesOf(candidate.name) orelse continue;
+
+        var every_declaration_passes = true;
+        for (declared) |declared_return| {
+            if (!candidate.passes(declared_return)) {
+                every_declaration_passes = false;
+                break;
+            }
+        }
+        if (!every_declaration_passes) continue;
+
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, contribution.path),
+            .line = candidate.line,
+            .message = try allocator.dupe(u8, candidate.message),
+            .layer = candidate.layer.name(),
+            .severity = candidate.severity,
+        });
+    }
+}
+
+/// every declared return type a run found, keyed by the name it is declared under
+///
+/// the project rules judge a call by how its callee is declared, and the
+/// declaration can sit in any file, so the whole project is read before a verdict
+/// is reached. a name declared more than once keeps every declaration, because a
+/// call is reported only when all of them agree
+///
+/// the names and the texts are the index's own copies: a file's declarations are
+/// freed as soon as that file's rows are reported, and the index outlives them
+const DeclaredReturns = struct {
+    arena: std.heap.ArenaAllocator,
+    by_name: std.StringHashMapUnmanaged(std.ArrayListUnmanaged([]const u8)) = .empty,
+
+    fn init(allocator: std.mem.Allocator, contributions: []const Contribution) !DeclaredReturns {
+        var index = DeclaredReturns{ .arena = std.heap.ArenaAllocator.init(allocator) };
+        errdefer index.deinit();
+
+        for (contributions) |contribution| {
+            for (contribution.project.declared_returns.items) |declared| try index.add(declared);
+        }
+        return index;
+    }
+
+    fn deinit(self: *DeclaredReturns) void {
+        self.arena.deinit();
+    }
+
+    fn add(self: *DeclaredReturns, declared: typemodel.DeclaredReturn) !void {
+        const arena = self.arena.allocator();
+        // a repeated name leaks the second key into the arena, which the run frees
+        // as a whole. narrowing that would need a lookup before the insert, and the
+        // arena makes it not worth one
+        const entry = try self.by_name.getOrPut(arena, try arena.dupe(u8, declared.name));
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(arena, try arena.dupe(u8, declared.type_text));
+    }
+
+    /// the declared return types of one name, or null when no file declares it
+    fn declaredTypesOf(self: *const DeclaredReturns, name: []const u8) ?[]const []const u8 {
+        const declared = self.by_name.get(name) orelse return null;
+        return declared.items;
+    }
+};
 
 /// the file's bytes, or an empty slice when it cannot be read. an unreadable
 /// file produces no finding, which is what a truncated read would also do
@@ -330,30 +506,6 @@ fn isIdentifierContinue(char: u8) bool {
     return std.ascii.isAlphanumeric(char) or char == '_' or char == '$';
 }
 
-fn scanFile(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    cfg: *const config.Config,
-    findings: *std.ArrayList(Finding),
-    rel_path: []const u8,
-    project_root: []const u8,
-    hygiene: bool,
-) !void {
-    const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_root, rel_path });
-    defer allocator.free(full_path);
-
-    const content = std.Io.Dir.cwd().readFileAlloc(io, full_path, allocator, .limited(1 << 21)) catch return;
-    defer allocator.free(content);
-
-    // the word-boundary pre-test can only rule out a file that no live rule's
-    // literal occurs in. a hygiene rule matches a declaration, and a declaration
-    // can be named anything, so with the hygiene layer on there is no file to
-    // skip and the test is not worth the scan
-    if (!rules.lintsEveryFile(cfg, hygiene) and !maybeTrigger(content)) return;
-
-    try lintContent(allocator, allocator, cfg, findings, rel_path, content, hygiene, .owned);
-}
-
 /// whether the front-end gives back the memory it takes
 ///
 /// the parallel scan hands the front-end a region it resets after every file, so
@@ -373,12 +525,14 @@ pub fn lintContent(
     frontend_allocator: std.mem.Allocator,
     finding_allocator: std.mem.Allocator,
     cfg: *const config.Config,
-    findings: *std.ArrayList(Finding),
+    contribution: *Contribution,
     rel_path: []const u8,
     content: []const u8,
     hygiene: bool,
     teardown: Teardown,
 ) !void {
+    contribution.path = rel_path;
+
     var number_line: u32 = 1;
     const lexed = try ts.tokenizeAll(frontend_allocator, content, &number_line);
     const tokens = lexed.tokens;
@@ -409,10 +563,20 @@ pub fn lintContent(
         if (parsed) |*module| scopes = scope.analyze(frontend_allocator, module, tokens, lexed.jsx_names, walk) catch null;
     }
 
+    // the return types this file contributes to the run's index. a rule that judges
+    // a call by how its callee is declared needs them, and only a file the run
+    // parses can contribute any
+    const project_wanted = rules.needsProject(cfg, hygiene);
+    if (project_wanted) {
+        if (parsed) |*module| {
+            try typemodel.declaredReturns(finding_allocator, tokens, module, content, &contribution.project.declared_returns);
+        }
+    }
+
     var context = rules.Context{
         .allocator = finding_allocator,
         .cfg = cfg,
-        .findings = findings,
+        .findings = &contribution.findings,
         .path = rel_path,
         .source = content,
         .tokens = tokens,
@@ -420,6 +584,7 @@ pub fn lintContent(
         .scopes = if (scopes) |*table| table else null,
         .walk = walk,
         .hygiene = hygiene,
+        .project = if (project_wanted) &contribution.project else null,
     };
     try rules.run(&context);
 }

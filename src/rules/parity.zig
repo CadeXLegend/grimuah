@@ -62,30 +62,24 @@ test "the engine reports what the token engine reports" {
             }
             try lint.lintContent(a, &cfg, &reference, entry.path, source);
 
-            var candidate: std.ArrayList(engine.Finding) = .empty;
-            defer {
-                for (candidate.items) |finding| {
-                    a.free(finding.path);
-                    a.free(finding.message);
-                }
-                candidate.deinit(a);
-            }
+            var candidate: engine.Contribution = .{};
+            defer candidate.deinit(a);
             // the hygiene layer is the built-in subset, which this parity test
             // does not cover: `tests/oracle/hygiene-corpus.tsv` does
             try engine.lintContent(a, a, &cfg, &candidate, entry.path, source, false, .owned);
 
             dropUncovered(&reference);
-            dropUncoveredEngine(&candidate);
+            dropUncoveredEngine(&candidate.findings);
 
             if (reference.items.len != 0) with_findings += 1;
-            if (reference.items.len == candidate.items.len and sameFindings(reference.items, candidate.items)) continue;
+            if (reference.items.len == candidate.findings.items.len and sameFindings(reference.items, candidate.findings.items)) continue;
             differences += 1;
             if (differences > 20) continue;
-            std.debug.print("parity: {s}: token engine {d} finding(s), engine {d}\n", .{ entry.path, reference.items.len, candidate.items.len });
+            std.debug.print("parity: {s}: token engine {d} finding(s), engine {d}\n", .{ entry.path, reference.items.len, candidate.findings.items.len });
             for (reference.items) |finding| {
                 std.debug.print("  token  line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
             }
-            for (candidate.items) |finding| {
+            for (candidate.findings.items) |finding| {
                 std.debug.print("  engine line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
             }
         }

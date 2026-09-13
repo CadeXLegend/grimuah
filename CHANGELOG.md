@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [commit
 
 ### Features
 
+* add `no-discarded-outcome`: a call that returns an Outcome may not be a bare statement, because the result is dropped before it is read and the failure branch becomes unreachable. the callee's declaration is looked up across the whole project, a member access by its last name, and a name two declarations disagree about is not reported
+* add `no-unread-scalar-result`: a call whose declared result is `Promise<boolean>` or `Promise<number>` must have that result read. `void f()` states the dropped result on purpose, so it is reported as the same defect, and an assignment, a `Promise<void>` result and a disagreement between two declarations of one name are out of scope
 * add `no-async-scalar-failure-return`: an exported async operation must not report its failure as a bare boolean or number, so a result declared `Promise<boolean>` or `Promise<number>` is what it reports on. a function declaration, an arrow and a function expression are all read, and an unexported operation, a non-async one and a result of any other type are out of scope
 * enforce every rule in-process and freeze the findings biome validated in `tests/oracle/`, so the corpus check runs without biome
 * add `require-enum-over-literal-union`: a union of two or more string literals must be a string enum. a type alias, a property, a parameter and a variable annotation are read, and a return annotation is not. the module has to be named `<name>.<kind>.ts`, because a process entry script cannot use an enum at runtime

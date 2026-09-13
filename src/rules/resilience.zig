@@ -728,10 +728,9 @@ fn checkScalarDeclarator(context: *const root.Context, module: *const ir.Module,
 fn declaresScalarPromise(context: *const root.Context, module: *const ir.Module, index: ir.NodeIndex) bool {
     const span = module.spanOf(index);
     const callable_start = typemodel.tokenAtOrAfter(context.tokens, span.start);
-    const callable_end = typemodel.tokenAtOrAfter(context.tokens, span.end);
     if (!isAsyncCallable(context.tokens, callable_start)) return false;
 
-    const declared = typemodel.returnTypeOf(context.tokens, callable_start, callable_end) orelse return false;
+    const declared = typemodel.returnTypeOfNode(module, context.tokens, index) orelse return false;
     return isScalarPromise(context.tokens, declared);
 }
 

@@ -153,6 +153,106 @@ pub fn returnTypeOf(tokens: []const Token, start: usize, end: usize) ?Extent {
     return .{ .start = type_start, .end = type_end };
 }
 
+/// the return type a callable node declares, as a token extent. it is
+/// `returnTypeOf` with the node's byte span turned into the token bounds the
+/// readers take, which is the conversion every caller would otherwise repeat
+pub fn returnTypeOfNode(module: *const ir.Module, tokens: []const Token, index: ir.NodeIndex) ?Extent {
+    const span = module.spanOf(index);
+    return returnTypeOf(tokens, tokenAtOrAfter(tokens, span.start), tokenAtOrAfter(tokens, span.end));
+}
+
+/// a declared return type and the name it is declared under
+pub const DeclaredReturn = struct {
+    name: []const u8,
+    /// the declared type's own source text, verbatim
+    type_text: []const u8,
+};
+
+/// every module-level declaration's name and declared return type, as source text
+///
+/// the call-site rules judge a call by how its callee is declared, and the
+/// declaration can sit in any file of the run, so a run collects them all and a
+/// rule looks its callee up there. only a module-level statement counts, which is
+/// the detector's own walk of a file's statements, and `export` is not part of the
+/// test: a name only the file itself can reach is still a callee inside it
+///
+/// the text is the source verbatim, because one rule substring-tests it and the
+/// other compares it with an exact scalar. every string is copied into `allocator`
+/// and appended to `out`, so a caller that owns a per-file slot collects them
+/// without an ownership handover
+pub fn declaredReturns(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    module: *const ir.Module,
+    source: []const u8,
+    out: *std.ArrayList(DeclaredReturn),
+) !void {
+    var statement = module.childrenOf(module.root);
+    while (statement.next()) |index| {
+        const declaration = if (module.kindOf(index) == .export_decl)
+            module.firstChildOf(index) orelse continue
+        else
+            index;
+
+        switch (module.kindOf(declaration)) {
+            .function_decl => {
+                const name = module.nodeOf(declaration).name;
+                if (name.len == 0) continue;
+
+                const extent = returnTypeOfNode(module, tokens, declaration) orelse continue;
+                try appendDeclaration(allocator, out, name, source, tokens, extent);
+            },
+            // a declarator declares the return type of the callable it binds, and
+            // only a callable's own annotation counts: `const f: () => T = ...`
+            // annotates the binding, which the detector does not read
+            .variable_decl => try appendDeclaratorReturns(allocator, tokens, module, source, declaration, out),
+            else => {},
+        }
+    }
+}
+
+/// the declarators of one `const` / `let` / `var` statement that bind a callable
+/// carrying its own return annotation
+fn appendDeclaratorReturns(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    module: *const ir.Module,
+    source: []const u8,
+    declaration: ir.NodeIndex,
+    declared_returns: *std.ArrayList(DeclaredReturn),
+) !void {
+    var child = module.firstChildOf(declaration);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        if (module.kindOf(current) != .identifier) continue;
+        if (module.nodeOf(current).binding != .variable) continue;
+
+        // the parser appends a declarator's initializer as the child straight
+        // after the name it binds, so no declarator is ever separated from its
+        // value. a declarator without one leaves the next name here instead, which
+        // the callable test below rejects
+        const initializer = module.nextSiblingOf(current) orelse continue;
+        if (!module.kindOf(initializer).isCallable()) continue;
+
+        const extent = returnTypeOfNode(module, tokens, initializer) orelse continue;
+        try appendDeclaration(allocator, declared_returns, module.nodeOf(current).name, source, tokens, extent);
+    }
+}
+
+/// one declaration, with both of its strings copied into `allocator`
+fn appendDeclaration(
+    allocator: std.mem.Allocator,
+    declared_returns: *std.ArrayList(DeclaredReturn),
+    name: []const u8,
+    source: []const u8,
+    tokens: []const Token,
+    extent: Extent,
+) !void {
+    try declared_returns.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .type_text = try allocator.dupe(u8, source[tokens[extent.start].start..tokens[extent.end - 1].end]),
+    });
+}
+
 /// the number of members of a union type whose every member is a string
 /// literal, or 0 when the extent is not such a union
 ///
@@ -1097,6 +1197,58 @@ test "a callable's declared return type is read from the callable itself" {
     try std.testing.expectEqual(@as(usize, 2), declared.items.len);
     try std.testing.expectEqualStrings("Promise<boolean>", declared.items[0]);
     try std.testing.expectEqualStrings("{\n  ok: boolean;\n}", declared.items[1]);
+}
+
+test "every module-level declaration with a return type is read under its name" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\export function compute(): Outcome<string> {
+        \\  return { succeeded: true, result: "" };
+        \\}
+        \\const retry = async (): Promise<boolean> => true;
+        \\const inline: () => Promise<boolean> = async () => true;
+        \\export let counter = 1;
+        \\const stopped = (): void => {};
+        \\function nested(): number {
+        \\  function inner(): number {
+        \\    return 1;
+        \\  }
+        \\  return inner();
+        \\}
+        \\
+    ;
+    var line: u32 = 1;
+    const tokens = try ts.tokenize(allocator, source, &line);
+    defer allocator.free(tokens);
+    var module = try ts.parseTokens(allocator, source, tokens);
+    defer module.deinit();
+
+    var declared: std.ArrayList(DeclaredReturn) = .empty;
+    defer {
+        for (declared.items) |one| {
+            allocator.free(one.name);
+            allocator.free(one.type_text);
+        }
+        declared.deinit(allocator);
+    }
+    try declaredReturns(allocator, tokens, &module, source, &declared);
+
+    var rows: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
+    for (declared.items) |one| {
+        try rows.append(allocator, try std.fmt.allocPrint(allocator, "{s} {s}", .{ one.name, one.type_text }));
+    }
+
+    // `inline` annotates its binding rather than its arrow, `counter` declares no
+    // callable at all, and the nested `inner` is not a module-level statement
+    try std.testing.expectEqual(@as(usize, 4), rows.items.len);
+    try std.testing.expectEqualStrings("compute Outcome<string>", rows.items[0]);
+    try std.testing.expectEqualStrings("retry Promise<boolean>", rows.items[1]);
+    try std.testing.expectEqualStrings("stopped void", rows.items[2]);
+    try std.testing.expectEqualStrings("nested number", rows.items[3]);
 }
 
 fn expectMutableArray(type_text: []const u8, expected: bool) !void {

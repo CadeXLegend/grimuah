@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("config.zig");
 const ir = @import("ir.zig");
 const ts = @import("lang/ts.zig");
+const typemodel = @import("lang/typemodel.zig");
 const cosmetic = @import("rules/cosmetic.zig");
 const resilience = @import("rules/resilience.zig");
 const behavioural = @import("rules/behavioural.zig");
@@ -89,6 +90,9 @@ pub const Context = struct {
     /// whether the hygiene rules run. the parity test and the hygiene corpus
     /// turn them off to isolate the architecture rules
     hygiene: bool = true,
+    /// the project-wide pass this file takes part in. null unless an enabled rule
+    /// declared `needs_project`
+    project: ?*Project = null,
 
     pub fn report(self: *const Context, line: u32, layer: Layer, message: []const u8, severity: Severity) !void {
         try self.findings.append(self.allocator, .{
@@ -98,6 +102,70 @@ pub const Context = struct {
             .layer = layer.name(),
             .severity = severity,
         });
+    }
+
+    /// record a call site whose verdict needs the whole project, for the engine to
+    /// report once every file has been read
+    ///
+    /// a rule that forgets `needs_project` finds no project here, defers nothing,
+    /// and reports nothing: the rule's own test is what catches that, rather than a
+    /// verdict the run could not have reached
+    ///
+    /// the candidate is copied, because its name points into this file's own
+    /// memory and the file is gone by the time the run resolves it
+    pub fn deferToProject(self: *const Context, candidate: Candidate) !void {
+        const project = self.project orelse return;
+        try project.deferred.append(self.allocator, .{
+            .name = try self.allocator.dupe(u8, candidate.name),
+            .line = candidate.line,
+            .passes = candidate.passes,
+            .layer = candidate.layer,
+            .severity = candidate.severity,
+            .message = candidate.message,
+        });
+    }
+};
+
+/// a call site whose verdict waits for the whole project
+///
+/// a rule reads the call site out of its own file, but whether the call is a
+/// violation depends on how the callee is declared, and the declaration can sit in
+/// any file of the run. the rule records the call site with its own test over a
+/// declared return type, and the engine reports it once every declaration of that
+/// name has passed the test
+pub const Candidate = struct {
+    /// the callee's name as the call spells it: an identifier, or the last name
+    /// of a member access
+    name: []const u8,
+    /// the line to report, which is the statement's own start
+    line: u32,
+    /// the rule's test over a declared return type. two `read` helpers, one
+    /// returning an outcome and one a boolean, say nothing about the call in
+    /// front of them, so only a name every declaration agrees on is reported
+    passes: *const fn (declared_return: []const u8) bool,
+    layer: Layer,
+    severity: Severity,
+    message: []const u8,
+};
+
+/// the project-wide pass, as one file sees it: the return types this file declares
+/// and the call sites this file's rules defer
+///
+/// the engine keeps one per file, in path order, so a worker writes only its own
+/// and the run resolves them in walk order once every file has been read
+pub const Project = struct {
+    declared_returns: std.ArrayList(typemodel.DeclaredReturn) = .empty,
+    deferred: std.ArrayList(Candidate) = .empty,
+
+    /// free what this file contributed, with the allocator it was built on
+    pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
+        for (self.declared_returns.items) |declared| {
+            allocator.free(declared.name);
+            allocator.free(declared.type_text);
+        }
+        self.declared_returns.deinit(allocator);
+        for (self.deferred.items) |candidate| allocator.free(candidate.name);
+        self.deferred.deinit(allocator);
     }
 };
 
@@ -113,6 +181,10 @@ pub const Rule = struct {
     /// `tests/oracle/` is what pins it instead, which is why the guard reads
     /// this field rather than assuming every rule is covered
     oracle: bool = true,
+    /// this rule reports through the project index rather than per file, so the
+    /// engine collects every file's declared return types as it reads them and
+    /// resolves the rule's call sites once the scan is done
+    needs_project: bool = false,
     match: *const fn (*const Context) anyerror!void,
 };
 
@@ -152,6 +224,8 @@ pub const optional_property = "This property is optional. Make it required and d
 pub const readonly_collection_signature = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
 pub const readonly_type_member = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
 pub const scalar_failure_return = "This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.";
+pub const discarded_outcome = "This call returns an Outcome and nothing reads the result, so its failure branch is unreachable. Assign the result and narrow `succeeded`, or log the failure where the call is best effort.";
+pub const unread_scalar_result = "This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -396,6 +470,24 @@ pub const all = [_]Rule{
         .match = resilience.checkScalarFailureReturn,
     },
     .{
+        .layer = .behavioural,
+        .severity = .warn,
+        .message = discarded_outcome,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_project = true,
+        .match = behavioural.checkDiscardedOutcome,
+    },
+    .{
+        .layer = .behavioural,
+        .severity = .warn,
+        .message = unread_scalar_result,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_project = true,
+        .match = behavioural.checkUnreadScalarResult,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -449,6 +541,17 @@ pub fn needsTree(cfg: *const config.Config, with_hygiene: bool) bool {
 pub fn lintsEveryFile(cfg: *const config.Config, with_hygiene: bool) bool {
     if (with_hygiene) return true;
     return needsTree(cfg, with_hygiene);
+}
+
+/// whether an enabled rule needs the whole project's declared return types, so the
+/// engine knows to collect them as it reads each file
+pub fn needsProject(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_project) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
 }
 
 pub fn enabled(cfg: *const config.Config, layer: Layer) bool {
