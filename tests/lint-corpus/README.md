@@ -98,7 +98,8 @@ line as the reported one. five more fixtures pin another rule and hold an identi
 named body incidentally, which is what their own rows are not: `barecatch.ts` and
 `barecatch-ws.ts` are byte-identical files, and `c-return-bare.ts`,
 `handled-catch-multiline.ts` and `handled-return-bare.ts` declare `f` three times over
-with one body between them. those five carry seven duplicate-body rows
+with one body between them. those five carry five of the rule's seven rows, and the pair
+above carries the other two
 
 `no-export-without-consumer.repo.ts` carries a suffix for the corpus's own reason:
 the rule reads the suffixed-module convention, `<name>.<kind>.ts`, rather than a
