@@ -1571,7 +1571,11 @@ test "the collapse folds every code point JavaScript's whitespace matches, and k
     // and the code points around them come through byte for byte
     // every one of them sits below the astral planes, so it is one UTF-16 unit however
     // many bytes it takes: a two-byte soft hyphen and a three-byte em dash are both one
+    // the unit count is written out rather than read from `utf16_basic_units`, because an
+    // expectation built from the constant the implementation reads moves with it and catches
+    // nothing
     const surrounding_letters: usize = 2;
+    const bmp_units: usize = 1;
     for (kept_code_points) |codepoint| {
         var kept_input: [8]u8 = undefined;
         kept_input[0] = 'a';
@@ -1580,7 +1584,7 @@ test "the collapse folds every code point JavaScript's whitespace matches, and k
         const kept_text = kept_input[0 .. surrounding_letters + width];
         const kept_collapsed = collapseWhitespace(&destination, kept_text);
         try testing.expectEqualStrings(kept_text, destination[0..kept_collapsed.len]);
-        try testing.expectEqual(surrounding_letters + utf16_basic_units, kept_collapsed.units);
+        try testing.expectEqual(surrounding_letters + bmp_units, kept_collapsed.units);
         try testing.expectEqual(surrounding_letters + width, kept_collapsed.len);
     }
 }
@@ -1595,8 +1599,12 @@ test "the collapse trims both ends and counts a surrogate pair as two UTF-16 uni
     const collapsed = collapseWhitespace(&destination, source);
 
     try testing.expectEqualStrings("value \u{1f600}", destination[0..collapsed.len]);
-    // `value` is five, the space is one, and the surrogate pair is two
-    try testing.expectEqual(@as(usize, 5 + 1 + 2), collapsed.units);
-    // and the byte length is the four bytes the astral character takes
-    try testing.expectEqual(@as(usize, 5 + 1 + 4), collapsed.len);
+    // the word, the one space the run folded to, and the surrogate pair's two units, which
+    // is the one count this test exists to pin: it is written out rather than read from
+    // `utf16_astral_units`, which the implementation reads too
+    const astral_units: usize = 2;
+    try testing.expectEqual("value".len + 1 + astral_units, collapsed.units);
+    // and the byte length is the four bytes the astral character takes rather than its two
+    // units
+    try testing.expectEqual("value".len + 1 + "\u{1f600}".len, collapsed.len);
 }

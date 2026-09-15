@@ -2684,7 +2684,7 @@ test "parse keeps a function body that follows a return annotation" {
 }
 
 test "parse reads a return annotation that spells a function type, and still stops at the body" {
-    const a = testing.allocator;
+    const allocator = testing.allocator;
     // the annotation holds a `=>` of its own, because that is how a function type is
     // spelled, and the token that owns the body is still the `{`
     // reading the annotation's `=>` as the body's ended the type at the arrow, left the
@@ -2709,7 +2709,7 @@ test "parse reads a return annotation that spells a function type, and still sto
         \\}
         \\
     ;
-    var module = try parse(a, source);
+    var module = try parse(allocator, source);
     defer module.deinit();
 
     try testing.expectEqual(@as(u32, 0), module.unsupported);
@@ -2749,7 +2749,7 @@ test "parse reads a return annotation that spells a function type, and still sto
 }
 
 test "parse consumes a parameter's function-type annotation, and names no binding from it" {
-    const a = testing.allocator;
+    const allocator = testing.allocator;
     // the annotation ends at the `=` that introduces the default, and the `=>` inside it is
     // the type's own arrow
     // stopping at the arrow left the type's tail to the parameter list, which read
@@ -2762,7 +2762,7 @@ test "parse consumes a parameter's function-type annotation, and names no bindin
         \\}
         \\
     ;
-    var module = try parse(a, source);
+    var module = try parse(allocator, source);
     defer module.deinit();
 
     try testing.expectEqual(@as(u32, 0), module.unsupported);
