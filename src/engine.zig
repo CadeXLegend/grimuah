@@ -1504,3 +1504,99 @@ test "a specifier resolves by its path, and only a relative one is an edge" {
     try testing.expectEqual(graph.cycle_of[0], graph.cycle_of[2]);
     try testing.expectEqual(rules.no_cycle, graph.cycle_of[3]);
 }
+
+/// every code point `/\s/` matches, which is the set the collapse has to fold: a body
+/// written with one of them keys differently from the detector's, so a missed member splits
+/// one group into two and moves the rule's whole site set
+///
+/// the ASCII half is `std.ascii.isWhitespace` and the rest is `java_script_spaces` plus the
+/// en-to-hair run, spelled out here as the spec rather than read back from the
+/// implementation, so a change to either list fails this test instead of agreeing with it
+const foldable_spaces = [_]u21{
+    0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x0020, // the ASCII whitespace
+    0x00a0, // the no-break space
+    0x1680, // the ogham space
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009,
+    0x200a, // the en-to-hair space run, which is a range rather than a list
+    0x2028, 0x2029, // the two line separators
+    0x202f, 0x205f, 0x3000, // the narrow no-break, medium mathematical and ideographic spaces
+    0xfeff, // the byte-order mark
+};
+
+/// code points that sit next to the set above and that `/\s/` does not match, so the
+/// collapse has to keep them: the neighbours of both ends of the ASCII range and of the
+/// en-to-hair run, the two separator-like characters a hand-written list is most likely to
+/// take with it, and one ordinary non-space of each width
+const kept_code_points = [_]u21{
+    0x001f,
+    0x0021,
+    0x007f,
+    0x00ad, // the soft hyphen, which is not a space
+    0x1681,
+    0x180e, // the mongolian vowel separator, dropped from the JavaScript set
+    0x1fff,
+    0x200b, // the zero-width space, which is not a space
+    0x2014, // the em dash
+    0x2060, // the word joiner
+    0x3001, // the ideographic comma
+};
+
+test "the collapse folds every code point JavaScript's whitespace matches, and keeps the rest" {
+    var input: [256]u8 = undefined;
+    var written: usize = 0;
+    // a letter between every space, so each one is interior and the trim cannot hide it
+    for (foldable_spaces) |codepoint| {
+        input[written] = 'a';
+        written += 1;
+        written += try std.unicode.utf8Encode(codepoint, input[written..]);
+    }
+    input[written] = 'a';
+    written += 1;
+
+    var expected: [128]u8 = undefined;
+    expected[0] = 'a';
+    var expected_len: usize = 1;
+    for (foldable_spaces) |_| {
+        expected[expected_len] = ' ';
+        expected[expected_len + 1] = 'a';
+        expected_len += 2;
+    }
+
+    var destination: [256]u8 = undefined;
+    const collapsed = collapseWhitespace(&destination, input[0..written]);
+    // one space per run, and one letter more than there are spaces
+    try testing.expectEqualStrings(expected[0..expected_len], destination[0..collapsed.len]);
+    try testing.expectEqual(expected_len, collapsed.units);
+
+    // and the code points around them come through byte for byte
+    // every one of them sits below the astral planes, so it is one UTF-16 unit however
+    // many bytes it takes: a two-byte soft hyphen and a three-byte em dash are both one
+    const surrounding_letters: usize = 2;
+    for (kept_code_points) |codepoint| {
+        var kept_input: [8]u8 = undefined;
+        kept_input[0] = 'a';
+        const width = try std.unicode.utf8Encode(codepoint, kept_input[1..]);
+        kept_input[1 + width] = 'b';
+        const kept_text = kept_input[0 .. surrounding_letters + width];
+        const kept_collapsed = collapseWhitespace(&destination, kept_text);
+        try testing.expectEqualStrings(kept_text, destination[0..kept_collapsed.len]);
+        try testing.expectEqual(surrounding_letters + utf16_basic_units, kept_collapsed.units);
+        try testing.expectEqual(surrounding_letters + width, kept_collapsed.len);
+    }
+}
+
+test "the collapse trims both ends and counts a surrogate pair as two UTF-16 units" {
+    // a body written with a leading and a trailing space of the unicode set, two runs of
+    // ASCII spaces, and one astral character: the gate is measured on the collapsed text in
+    // UTF-16 code units, so the emoji is two of them while its four bytes are four
+    const source = "\u{00a0}\u{3000}  value \u{2009} \u{1f600}  \u{feff}\n";
+
+    var destination: [64]u8 = undefined;
+    const collapsed = collapseWhitespace(&destination, source);
+
+    try testing.expectEqualStrings("value \u{1f600}", destination[0..collapsed.len]);
+    // `value` is five, the space is one, and the surrogate pair is two
+    try testing.expectEqual(@as(usize, 5 + 1 + 2), collapsed.units);
+    // and the byte length is the four bytes the astral character takes
+    try testing.expectEqual(@as(usize, 5 + 1 + 4), collapsed.len);
+}
