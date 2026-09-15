@@ -752,6 +752,11 @@ fn isScalarPromise(tokens: []const Token, declared: typemodel.Extent) bool {
 /// twice, which is the whole rule
 const DUPLICATE_BODY_FILE_THRESHOLD = 2;
 
+/// how many times one statement must be written before the copies are a defect
+/// the detector counts OCCURRENCES rather than distinct files, so one file that writes the
+/// same statement twice holds the whole defect
+const DUPLICATE_STATEMENT_THRESHOLD = 2;
+
 /// a function body written byte for byte into another file under the same name
 /// the run's index holds one count per `name|body` fingerprint, so the verdict is one
 /// lookup per declaration rather than a walk of the run
@@ -783,6 +788,35 @@ pub fn checkDuplicatedFunctionBody(
             .path = try allocator.dupe(u8, path),
             .line = fingerprint.line,
             .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
+}
+
+/// every copy of a statement the run writes more than once
+///
+/// the run's index holds one count per collapsed statement text, and the verdict reads the
+/// count of the file's own sites: every occurrence of a repeated statement is reported, at
+/// the literal's own line rather than at the call that prepares it
+/// the message is the table's
+/// own, so it names nothing and needs no format
+pub fn checkDuplicatedStatementText(
+    allocator: std.mem.Allocator,
+    index: *const root.FingerprintIndex,
+    project: *const root.Project,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    for (project.statement_sites.items) |site| {
+        const occurrences = index.statement_occurrences.get(site.key) orelse continue;
+        if (occurrences < DUPLICATE_STATEMENT_THRESHOLD) continue;
+
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = site.line,
+            .message = try allocator.dupe(u8, rule.message),
             .layer = rule.layer.name(),
             .severity = rule.severity,
         });
@@ -1095,7 +1129,7 @@ test "a collection read with no LIMIT is reported, and the exclusions hold" {
         \\export const delimited = database.prepare("SELECT fish_id FROM delimited").all();
         \\export const wrapped = withRetry(database.prepare("SELECT x FROM y")).all();
         \\export const named = database.prepare(query).all();
-        \\export const first = database.prepare("SELECT x FROM y").first();
+        \\export const first = database.prepare("SELECT z FROM w").first();
         \\
     ;
     try probe.expect(.resilience, "probe.ts", source, &.{
@@ -1499,4 +1533,69 @@ test "a destructuring declarator whose value is a function is not a body" {
         \\
         },
     }, &.{});
+}
+
+test "a statement written twice is reported at every copy, and the literals the detector does not collect are not" {
+    // every statement in these two files is deliberately paired with one other copy, so a
+    // pair that reports nothing is a pair the detector's own guards excluded rather than one
+    // that only appears once
+    // the pairs that report:
+    //   `SELECT id, name ...` is written twice, the second copy on a line of its own, which
+    //     pins the line the token starts on rather than the statement's
+    //   `SELECT id FROM padding` is written with leading whitespace once, which the leading
+    //     `\s*` admits and the trim folds away
+    //   `UPDATE tokens SET used = 1` is written with a `\n` escape once, which only the
+    //     cooked value's collapse folds into the same key
+    //   `DELETE FROM audit WHERE id = ?` is written in capitals twice, which is the
+    //     detector's `i` flag: a case-sensitive match would call neither a statement
+    //   `SELECT id FROM spaced` starts with a NO-BREAK SPACE once, which is `\s` rather
+    //     than the ASCII whitespace set, and the collapse is what folds it for the key
+    // the pairs that do not, each one a guard of the detector's own:
+    //   a backtick literal with no substitution is a `StringLiteralLike` and not a
+    //     `ts.isStringLiteral`, so the template and the quoted copy of the same text are
+    //     one site and one site is no defect
+    //   two copies of one statement that differ only in case key differently, because the
+    //     keyword match is case-insensitive and the key is not
+    //   `Selected rows ...` opens with the keyword and has no word boundary after it
+    //   `remember to run SELECT ...` holds the keyword, which the `^` refuses anywhere but
+    //     at the start
+    const message = root.duplicated_statement_text;
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/db/a.repo.ts", .content =
+        \\export const listActive = "SELECT id, name FROM users WHERE active = ?";
+        \\export const listAll =
+        \\  "SELECT id, name FROM users WHERE active = ?";
+        \\export const padded = "   SELECT id FROM padding";
+        \\export const touched = "UPDATE tokens\nSET used = 1";
+        \\export const template = `SELECT id FROM tpl_dup`;
+        \\export const lowercased = "insert into audit values (?)";
+        \\export const selectedLabel = "Selected rows for the report";
+        \\export const narrated = "remember to run SELECT id FROM users";
+        \\export const indented = "\u00a0SELECT id FROM spaced";
+        \\export const audited = "DELETE FROM audit WHERE id = ?";
+        \\
+        },
+        .{ .path = "src/db/b.repo.ts", .content =
+        \\export const paddedAgain = "SELECT id FROM padding";
+        \\export const touchedAgain = "UPDATE tokens SET used = 1";
+        \\export const quoted = "SELECT id FROM tpl_dup";
+        \\export const upper = "INSERT INTO audit values (?)";
+        \\export const sameLabel = "Selected rows for the report";
+        \\export const alsoNarrated = "remember to run SELECT id FROM users";
+        \\export const alsoIndented = "SELECT id FROM spaced";
+        \\export const auditedAgain = "DELETE FROM audit WHERE id = ?";
+        \\
+        },
+    }, &.{
+        "src/db/a.repo.ts:1: " ++ message,
+        "src/db/a.repo.ts:3: " ++ message,
+        "src/db/a.repo.ts:4: " ++ message,
+        "src/db/a.repo.ts:5: " ++ message,
+        "src/db/a.repo.ts:10: " ++ message,
+        "src/db/a.repo.ts:11: " ++ message,
+        "src/db/b.repo.ts:1: " ++ message,
+        "src/db/b.repo.ts:2: " ++ message,
+        "src/db/b.repo.ts:7: " ++ message,
+        "src/db/b.repo.ts:8: " ++ message,
+    });
 }

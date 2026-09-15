@@ -118,3 +118,11 @@ owned it, and the native engine reported nothing at all for an annotation. the
 the rows that were already there, and `any-type.ts` pins the shapes it reads
 (`any[]`, `Array<any>`, a return annotation) against the names it must not
 (`named.any`, `{ any: "any" }`)
+
+`no-duplicated-statement-text.ts` is the statement-text rule's only fixture, and it is
+the corpus's one fixture that needs no second file: the rule counts OCCURRENCES rather
+than distinct files, so a single module that writes the same statement twice is the whole
+defect. the two copies also disagree on how they are written, one on a single line and one
+across three with `\n` escapes and indentation, which is the collapse's half of the rule:
+the two key the same only after the escapes cook and the whitespace folds. both rows land
+on the literal's own line rather than on the call that prepares it

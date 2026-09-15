@@ -312,6 +312,17 @@ pub const FingerprintFiles = struct {
     last_file: u32 = std.math.maxInt(u32),
 };
 
+/// one statement literal a file offers to the run's statement index
+pub const StatementSite = struct {
+    /// the COOKED value with every run of whitespace folded to one space and both ends
+    /// trimmed, which is the detector's own key: two copies that differ only in how they
+    /// are wrapped, or only in the escapes they spell their whitespace with, are one
+    /// statement
+    key: []const u8,
+    /// the line the literal starts on, which is where the detector reports
+    line: u32,
+};
+
 /// the run's text fingerprints: what every file's declarations say, so a rule can ask
 /// whether one implementation is written in two files
 /// it is the run's rather than one file's, and it is built from every file's own
@@ -327,6 +338,11 @@ pub const FingerprintIndex = struct {
     arena: std.heap.ArenaAllocator,
     /// the distinct files that declare each function body, keyed by `name|body text`
     body_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
+    /// how many times the run writes each statement, keyed by the collapsed cooked text
+    /// the count is of OCCURRENCES rather than distinct files, because the detector's own
+    /// test is `count >= 2` and two copies in one file are the whole defect, which is what
+    /// makes this map its own rather than a `FingerprintFiles`
+    statement_occurrences: std.StringHashMapUnmanaged(u32) = .empty,
 
     pub fn deinit(self: *FingerprintIndex) void {
         self.arena.deinit();
@@ -364,6 +380,9 @@ pub const Project = struct {
     /// every function body this file offers to the run's fingerprint index, in the order
     /// the declarations appear, which is the order the rows are reported in
     body_fingerprints: std.ArrayList(BodyFingerprint) = .empty,
+    /// every statement literal this file offers to the run's statement index, in the order
+    /// the literals appear, which is the order the rows are reported in
+    statement_sites: std.ArrayList(StatementSite) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -387,6 +406,8 @@ pub const Project = struct {
         self.mentions.deinit(allocator);
         for (self.body_fingerprints.items) |fingerprint| allocator.free(fingerprint.key);
         self.body_fingerprints.deinit(allocator);
+        for (self.statement_sites.items) |site| allocator.free(site.key);
+        self.statement_sites.deinit(allocator);
     }
 };
 
@@ -421,6 +442,12 @@ pub const Rule = struct {
     /// magnitude more of it, so the families are gated apart from `needs_project_index`: a
     /// project that enables only one family pays only for it
     needs_body_fingerprints: bool = false,
+    /// this rule's verdict needs every statement literal the run holds, so the engine
+    /// collects them as it reads each file and the merge counts them before any verdict
+    /// it is a family of its own beside `needs_body_fingerprints` rather than a share of
+    /// it, because the two read the same run for different text and a project that enables
+    /// only one of them must not pay for the other's walk
+    needs_statement_text: bool = false,
     /// the verdict this rule reaches over the run's fingerprints
     /// its table entry must
     /// declare a family flag, or the collection it reads was never made
@@ -475,6 +502,7 @@ pub const shared_type_placement = "This type is imported from another directory,
 pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
 pub const export_without_consumer = "`{s}` is exported but no other module names it. Drop the `export` keyword, or have another module name it.";
 pub const duplicated_function_body = "`{s}` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.";
+pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
 
 /// the shortest collapsed body text the duplicate-body rule counts, which is the detector's
 /// own gate
@@ -794,6 +822,15 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedFunctionBody,
     },
     .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = duplicated_statement_text,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_statement_text = true,
+        .resolve_fingerprints = resilience.checkDuplicatedStatementText,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -900,11 +937,25 @@ pub fn needsBodyFingerprints(cfg: *const config.Config, with_hygiene: bool) bool
     return false;
 }
 
+/// whether an enabled rule needs every statement literal of the run, so the engine knows
+/// whether to collect them as it reads each file
+/// it is separate from `needsFingerprints` because the families are collected apart, and
+/// separate from `needsBodyFingerprints` because the statement sites come off the token
+/// stream rather than out of a parsed body, which is the cheap half of the two
+pub fn needsStatementText(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_statement_text) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
 /// whether a rule reads a family of the run's fingerprints
 /// the families are ported one at a time, and this is the one place a new one is declared:
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
-    return rule.needs_body_fingerprints;
+    return rule.needs_body_fingerprints or rule.needs_statement_text;
 }
 
 /// reach every enabled graph rule's verdict for one file of the run

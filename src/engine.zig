@@ -771,6 +771,107 @@ fn countBodyFingerprintFiles(
     return counts;
 }
 
+/// every statement literal one file offers to the run's statement index, in the order the
+/// literals appear, which is the order the rows are reported in
+///
+/// the site comes off the TOKEN stream rather than out of the tree, because a tree walk
+/// can only be a subset: the front-end models `interface`, `type`, `enum`, `namespace` and
+/// `declare` as one childless node, so a literal-union member never reaches the tree, and a
+/// lost site can drop a group below its threshold and lose the whole group
+///
+/// the shape is the detector's own `ts.isStringLiteral` rather than `StringLiteralLike`,
+/// so a backtick literal with no substitution is no site, and the value is the COOKED text,
+/// because the detector reads `node.text`: `"It's."` and `'It\'s.'` are one statement, and a
+/// `\n` escape folds the way the newline it stands for does
+fn collectStatementSites(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    sites: *std.ArrayList(rules.StatementSite),
+) !void {
+    for (tokens) |token| {
+        if (token.kind != .string) continue;
+
+        // the cooked value is never longer than the raw text, so one buffer holds it
+        const buffer = try allocator.alloc(u8, token.text.len);
+        defer allocator.free(buffer);
+        const cooked = ts.decodeStringLiteral(buffer, token.text);
+        const value = buffer[0..cooked.len];
+        if (!startsStatementText(value)) continue;
+
+        // the collapse never grows the text either, so the key is built at the cooked
+        // length and handed back at the length it uses, because a `free` needs the slice
+        // the allocation returned
+        const key = try allocator.alloc(u8, value.len);
+        errdefer allocator.free(key);
+        const collapsed = collapseWhitespace(key, value);
+        try sites.append(allocator, .{
+            .key = try allocator.realloc(key, collapsed.len),
+            .line = token.line,
+        });
+    }
+}
+
+/// the statement keywords a duplicate-statement site opens with, which is the detector's
+/// own list
+const statement_keywords = [_][]const u8{ "select", "insert", "update", "delete", "with", "replace" };
+
+/// whether a cooked literal is a statement, which is the detector's own
+/// `/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b/i`
+///
+/// the leading `\s*` is JavaScript's whitespace set rather than the ASCII one, and the
+/// trailing `\b` is the boundary between a word character and anything else, so
+/// `SELECTED` opens with the keyword and is still no statement, and the case is ignored
+/// the way the detector's `i` flag ignores it
+fn startsStatementText(cooked: []const u8) bool {
+    var index: usize = 0;
+    while (index < cooked.len) {
+        const decoded = ts.decodeCodepoint(cooked, index);
+        if (!isJavaScriptSpace(decoded.codepoint)) break;
+        index += decoded.width;
+    }
+
+    const rest = cooked[index..];
+    for (statement_keywords) |keyword| {
+        if (rest.len < keyword.len) continue;
+        if (!std.ascii.eqlIgnoreCase(rest[0..keyword.len], keyword)) continue;
+        // `\b` is the boundary between a word character and anything else, and the end of
+        // the text is a boundary too
+        // the byte is read through a bound rather than after an
+        // early return, so the read cannot leave the slice
+        const boundary = if (rest.len > keyword.len) rest[keyword.len] else 0;
+        if (!isIdentifierContinue(boundary)) return true;
+    }
+    return false;
+}
+
+/// how many times the run writes each statement
+///
+/// the count is of OCCURRENCES rather than distinct files, which is the detector's own
+/// test, so unlike a body's count there is no per-file dedup to make: two copies in one
+/// file are two copies
+/// the keys are the index's own copies, because a file's
+/// sites are freed as soon as its rows are reported, while the index answers for every
+/// file after it
+/// that copy is a verdict guard rather than a tidiness one: without it the map compares
+/// against a freed slice, and the second file's own copy of a statement loses its row
+fn countStatementOccurrences(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(u32) {
+    var counts: std.StringHashMapUnmanaged(u32) = .empty;
+    for (contributions) |contribution| {
+        for (contribution.project.statement_sites.items) |site| {
+            const entry = try counts.getOrPut(allocator, site.key);
+            if (!entry.found_existing) {
+                entry.key_ptr.* = try allocator.dupe(u8, site.key);
+                entry.value_ptr.* = 0;
+            }
+            entry.value_ptr.* += 1;
+        }
+    }
+    return counts;
+}
+
 /// the run's fingerprints, built from every file's own contribution
 /// every allocation through the arena happens before the struct literal copies the arena,
 /// because the arena's state is a value: a copy taken mid-literal misses the buffers a
@@ -781,7 +882,10 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
     const index_allocator = arena.allocator();
 
     const body_files = try countBodyFingerprintFiles(index_allocator, contributions);
-    return .{ .arena = arena, .body_files = body_files };
+    // a family the run did not collect contributes no site, so this walk is over an empty
+    // list when the statement rule is off and needs no gate of its own
+    const statement_occurrences = try countStatementOccurrences(index_allocator, contributions);
+    return .{ .arena = arena, .body_files = body_files, .statement_occurrences = statement_occurrences };
 }
 
 /// every declaration this file exports that a rule can judge by where it lives
@@ -1374,6 +1478,14 @@ pub fn lintContent(
         if (parsed) |*module| {
             try collectBodyFingerprints(finding_allocator, module, tokens, walk, &contribution.project.body_fingerprints);
         }
+    }
+
+    // the statement literals this file offers to the run's fingerprints
+    // the family is gated
+    // apart from the bodies' because the two read different text, and this one needs no
+    // parse: the literals are already in the token stream in front of it
+    if (rules.needsStatementText(cfg, hygiene)) {
+        try collectStatementSites(finding_allocator, tokens, &contribution.project.statement_sites);
     }
 
     var context = rules.Context{
