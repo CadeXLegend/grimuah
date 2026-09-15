@@ -7,6 +7,7 @@ const paths_mod = @import("paths.zig");
 const ts = @import("lang/ts.zig");
 const typemodel = @import("lang/typemodel.zig");
 const rules = @import("rules.zig");
+const rule_tokens = @import("rules/tokens.zig");
 const scope = @import("scope.zig");
 
 /// the lint engine: discovery, the per-file front-end, rule dispatch, findings
@@ -872,6 +873,76 @@ fn countStatementOccurrences(
     return counts;
 }
 
+/// how many distinct files of the run write each user-facing sentence
+/// the count is of files rather than occurrences, which is the detector's own test: one
+/// file that writes the same sentence twice holds one copy of the defect
+/// the last-file
+/// guard is the same one the body family needs, for the same reason
+fn countCopyFiles(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(rules.FingerprintFiles) {
+    var counts: std.StringHashMapUnmanaged(rules.FingerprintFiles) = .empty;
+    for (contributions, 0..) |contribution, file| {
+        const current: u32 = @intCast(file);
+        for (contribution.project.copy_sites.items) |site| {
+            const entry = try counts.getOrPut(allocator, site.key);
+            if (!entry.found_existing) {
+                // a lifetime guard rather than a tidiness one: the merge frees a file's
+                // sites once its rows are reported, while the index answers for every file
+                // after it
+                entry.key_ptr.* = try allocator.dupe(u8, site.key);
+                entry.value_ptr.* = .{};
+            }
+            if (entry.value_ptr.last_file == current) continue;
+            entry.value_ptr.last_file = current;
+            entry.value_ptr.files += 1;
+        }
+    }
+    return counts;
+}
+
+/// every user-facing copy literal one file offers to the run's copy index, in the order the
+/// literals appear
+///
+/// the site is the detector's `ts.isStringLiteralLike`: a quoted literal, or a template with
+/// no substitution. the gate is the detector's own, a JavaScript string of 24 UTF-16 code
+/// units or more that holds two letters around a space, so a key, an id and a short label
+/// never count
+///
+/// the key is the COOKED text with nothing folded, because the detector keys on `node.text`
+/// itself: two copies that differ only in the whitespace they are written with are two
+/// sentences
+///
+/// a `.d.ts` contributes here and is skipped at report time, which is the detector's own
+/// shape: it walks every file for the owner index and returns early from `detect`
+fn collectCopySites(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    source: []const u8,
+    sites: *std.ArrayList(rules.CopySite),
+) !void {
+    var index: usize = 0;
+    while (index < tokens.len) {
+        const line = tokens[index].line;
+        const site = rule_tokens.literalSite(tokens, source, index) orelse {
+            index += 1;
+            continue;
+        };
+        index = site.next;
+
+        // the cooked value is never longer than the raw text, so one buffer holds it
+        const buffer = try allocator.alloc(u8, site.raw.len);
+        defer allocator.free(buffer);
+        const cooked = ts.decodeStringLiteral(buffer, site.raw);
+        if (cooked.units < rules.minimum_duplicated_copy_length) continue;
+        const value = buffer[0..cooked.len];
+        if (!rule_tokens.hasLettersAroundSpace(value)) continue;
+
+        try sites.append(allocator, .{ .key = try allocator.dupe(u8, value), .line = line });
+    }
+}
+
 /// the run's fingerprints, built from every file's own contribution
 /// every allocation through the arena happens before the struct literal copies the arena,
 /// because the arena's state is a value: a copy taken mid-literal misses the buffers a
@@ -882,10 +953,16 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
     const index_allocator = arena.allocator();
 
     const body_files = try countBodyFingerprintFiles(index_allocator, contributions);
-    // a family the run did not collect contributes no site, so this walk is over an empty
-    // list when the statement rule is off and needs no gate of its own
+    // a family the run did not collect contributes no site, so these walks are over an empty
+    // list when the rule is off and need no gate of their own
     const statement_occurrences = try countStatementOccurrences(index_allocator, contributions);
-    return .{ .arena = arena, .body_files = body_files, .statement_occurrences = statement_occurrences };
+    const copy_files = try countCopyFiles(index_allocator, contributions);
+    return .{
+        .arena = arena,
+        .body_files = body_files,
+        .statement_occurrences = statement_occurrences,
+        .copy_files = copy_files,
+    };
 }
 
 /// every declaration this file exports that a rule can judge by where it lives
@@ -1486,6 +1563,14 @@ pub fn lintContent(
     // parse: the literals are already in the token stream in front of it
     if (rules.needsStatementText(cfg, hygiene)) {
         try collectStatementSites(finding_allocator, tokens, &contribution.project.statement_sites);
+    }
+
+    // the user-facing copy literals this file offers to the run's fingerprints
+    // the family is
+    // gated apart from the other two for the same reason, and this one reads the token
+    // stream's own literal sites, so it needs no parse either
+    if (rules.needsCopyOwners(cfg, hygiene)) {
+        try collectCopySites(finding_allocator, tokens, content, &contribution.project.copy_sites);
     }
 
     var context = rules.Context{

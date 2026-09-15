@@ -81,6 +81,9 @@ src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. nu
 src/probe/d-null-objectkey.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/d-throw-cond.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/d-two-as.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/duplicated-user-facing-copy/first.ts:6: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
+src/probe/duplicated-user-facing-copy/second.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
+src/probe/duplicated-user-facing-copy/third.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
 src/probe/duplicate-function-body/first.ts:1: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/duplicate-function-body/second.ts:2: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/emdash-comment.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead

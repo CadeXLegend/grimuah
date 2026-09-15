@@ -126,3 +126,10 @@ defect. the two copies also disagree on how they are written, one on a single li
 across three with `\n` escapes and indentation, which is the collapse's half of the rule:
 the two key the same only after the escapes cook and the whitespace folds. both rows land
 on the literal's own line rather than on the call that prepares it
+
+`duplicated-user-facing-copy/first.ts`, `second.ts` and `third.ts` are the corpus's
+three-file fixture, and the rule is the reason: it counts DISTINCT FILES rather than
+occurrences, and its threshold is three, so a pair of files reports nothing at all. the
+sentence the three share reports one row per file, at the literal's own line, and the
+second sentence the fixture holds is written into two of the three on purpose, which is
+the exclusion that pair pins

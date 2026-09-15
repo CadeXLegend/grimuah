@@ -10,6 +10,54 @@ const ts = @import("../lang/ts.zig");
 
 pub const Token = ts.Token;
 
+/// one literal site's raw source slice, spanning its delimiters, and the token index to
+/// carry on from
+pub const LiteralSite = struct {
+    raw: []const u8,
+    next: usize,
+};
+
+/// the literal site at `index`, or null when the token begins no literal the detectors'
+/// `ts.isStringLiteralLike` covers
+///
+/// a quoted literal is its own token, and a template with no substitution is a `.template`
+/// followed by its closing `.template_end`, whose two spans together give the raw text in
+/// full
+/// a template that holds a substitution is NOT one site: its opening backtick is
+/// followed by the container's own tokens, and `ts.isStringLiteral` is false of a
+/// TemplateExpression as well
+///
+/// the caller decodes `raw` with `ts.decodeStringLiteral`, whose destination must hold
+/// `raw.len` bytes, and `next` is where a walk of the stream carries on
+pub fn literalSite(tokens: []const Token, source: []const u8, index: usize) ?LiteralSite {
+    const token = tokens[index];
+    switch (token.kind) {
+        .string => return .{ .raw = token.text, .next = index + 1 },
+        .template => {
+            if (index + 1 >= tokens.len) return null;
+            const closing = tokens[index + 1];
+            if (closing.kind != .template_end) return null;
+            return .{ .raw = source[token.start..closing.end], .next = index + 2 };
+        },
+        else => return null,
+    }
+}
+
+/// `[a-zA-Z] [a-zA-Z]` anywhere in the text, which is the copy detectors' own test for a
+/// sentence rather than a key: two letters separated by one space, so an enum value like
+/// `nowplaying` or an identifier never counts
+/// the space is the ASCII one the regex spells rather than any whitespace `\s` would match
+pub fn hasLettersAroundSpace(text: []const u8) bool {
+    var i: usize = 0;
+    while (i + 2 < text.len) : (i += 1) {
+        if (!std.ascii.isAlphabetic(text[i])) continue;
+        if (text[i + 1] != ' ') continue;
+        if (!std.ascii.isAlphabetic(text[i + 2])) continue;
+        return true;
+    }
+    return false;
+}
+
 pub fn isPunct(token: Token, text: []const u8) bool {
     return token.isPunct(text);
 }

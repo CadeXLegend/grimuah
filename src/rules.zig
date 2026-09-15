@@ -323,6 +323,16 @@ pub const StatementSite = struct {
     line: u32,
 };
 
+/// one user-facing copy literal a file offers to the run's copy index
+pub const CopySite = struct {
+    /// the COOKED value with nothing folded, which is the detector's own key: it keys on
+    /// `node.text` itself, so two copies that differ only in the whitespace they are
+    /// written with are two sentences
+    key: []const u8,
+    /// the line the literal starts on, which is where the detector reports
+    line: u32,
+};
+
 /// the run's text fingerprints: what every file's declarations say, so a rule can ask
 /// whether one implementation is written in two files
 /// it is the run's rather than one file's, and it is built from every file's own
@@ -343,6 +353,11 @@ pub const FingerprintIndex = struct {
     /// test is `count >= 2` and two copies in one file are the whole defect, which is what
     /// makes this map its own rather than a `FingerprintFiles`
     statement_occurrences: std.StringHashMapUnmanaged(u32) = .empty,
+    /// the distinct files that write each user-facing sentence, keyed by the cooked text
+    /// the count is of files rather than occurrences, which is the detector's own test, so
+    /// this family reads the same `FingerprintFiles` shape the body family does: one file
+    /// that writes a sentence twice holds one copy of the defect
+    copy_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
 
     pub fn deinit(self: *FingerprintIndex) void {
         self.arena.deinit();
@@ -383,6 +398,9 @@ pub const Project = struct {
     /// every statement literal this file offers to the run's statement index, in the order
     /// the literals appear, which is the order the rows are reported in
     statement_sites: std.ArrayList(StatementSite) = .empty,
+    /// every user-facing copy literal this file offers to the run's copy index, in the order
+    /// the literals appear, which is the order the rows are reported in
+    copy_sites: std.ArrayList(CopySite) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -408,6 +426,8 @@ pub const Project = struct {
         self.body_fingerprints.deinit(allocator);
         for (self.statement_sites.items) |site| allocator.free(site.key);
         self.statement_sites.deinit(allocator);
+        for (self.copy_sites.items) |site| allocator.free(site.key);
+        self.copy_sites.deinit(allocator);
     }
 };
 
@@ -448,6 +468,11 @@ pub const Rule = struct {
     /// it, because the two read the same run for different text and a project that enables
     /// only one of them must not pay for the other's walk
     needs_statement_text: bool = false,
+    /// this rule's verdict needs every user-facing copy literal the run holds, so the engine
+    /// collects them as it reads each file and the merge counts the files that write each
+    /// sentence before any verdict
+    /// it is a family of its own for the same reason the statement's is
+    needs_copy_owners: bool = false,
     /// the verdict this rule reaches over the run's fingerprints
     /// its table entry must
     /// declare a family flag, or the collection it reads was never made
@@ -503,6 +528,12 @@ pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' 
 pub const export_without_consumer = "`{s}` is exported but no other module names it. Drop the `export` keyword, or have another module name it.";
 pub const duplicated_function_body = "`{s}` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.";
 pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
+pub const duplicated_user_facing_copy = "This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.";
+
+/// the shortest cooked copy the duplicate-copy rule counts, in UTF-16 code units, which is
+/// what a JavaScript string's own `length` reads. it is the detector's own gate, and the
+/// collection is the only place that reads it: a sentence under it never reaches the index
+pub const minimum_duplicated_copy_length: u32 = 24;
 
 /// the shortest collapsed body text the duplicate-body rule counts, which is the detector's
 /// own gate
@@ -831,6 +862,15 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedStatementText,
     },
     .{
+        .layer = .cosmetic,
+        .severity = .warn,
+        .message = duplicated_user_facing_copy,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_copy_owners = true,
+        .resolve_fingerprints = cosmetic.checkDuplicatedUserFacingCopy,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -951,11 +991,22 @@ pub fn needsStatementText(cfg: *const config.Config, with_hygiene: bool) bool {
     return false;
 }
 
+/// whether an enabled rule needs every user-facing copy literal of the run, so the engine
+/// knows whether to collect them as it reads each file
+pub fn needsCopyOwners(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_copy_owners) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
 /// whether a rule reads a family of the run's fingerprints
 /// the families are ported one at a time, and this is the one place a new one is declared:
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
-    return rule.needs_body_fingerprints or rule.needs_statement_text;
+    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners;
 }
 
 /// reach every enabled graph rule's verdict for one file of the run
