@@ -345,6 +345,19 @@ pub const Module = struct {
         return entries;
     }
 
+    /// whether any node is unreachable from the root, which is what `parseUnknown`
+    /// leaves behind: it adds a node without appending it to a parent
+    ///
+    /// `unknownCount` follows the same links from the same root, so it reports zero
+    /// for exactly the shape the assert above takes down. a corpus that asserts only
+    /// the unknown count passes with the defect reinstated
+    pub fn hasOrphanedNode(self: *const Module) bool {
+        var count: usize = 0;
+        var walker = self.iterator();
+        while (walker.next()) |_| count += 1;
+        return count != self.nodes.items.len;
+    }
+
     /// the end of the last byte any node other than the root covers. a front-end
     /// that stops early leaves the tail of the file outside this, which is how a
     /// truncated parse is told apart from a clean one

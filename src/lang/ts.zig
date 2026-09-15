@@ -146,6 +146,14 @@ const LexError = error{OutOfMemory};
 fn lex(lexer: *Lexer, stop: Stop) LexError!void {
     const source = lexer.source;
 
+    // how many brace pairs the walk has opened inside a `${...}` container. the
+    // container's own closing brace is implied by the `${` and is no token, while a
+    // brace pair inside it is an object literal or a block whose `{` and its `}` are
+    // both tokens, so the walk returns at the brace that closes the CONTAINER rather
+    // than at the first one it meets. without the count, `${g({})}` ends the
+    // container at the object literal's `}`, and every token after it strands
+    var container_depth: usize = 0;
+
     while (lexer.pos < source.len) {
         const char = source[lexer.pos];
 
@@ -211,10 +219,21 @@ fn lex(lexer: *Lexer, stop: Stop) LexError!void {
             if (try skipJsx(lexer)) continue;
         }
 
+        if (char == '{' and stop == .brace_close) {
+            container_depth += 1;
+            try lexer.push(.punct, lexer.pos, lexer.pos + 1, lexer.line_number);
+            lexer.pos += 1;
+            lexer.regex_state = .allowed;
+            continue;
+        }
+
         if (char == '}') {
             if (stop == .brace_close) {
-                lexer.pos += 1;
-                return;
+                if (container_depth == 0) {
+                    lexer.pos += 1;
+                    return;
+                }
+                container_depth -= 1;
             }
             try lexer.push(.punct, lexer.pos, lexer.pos + 1, lexer.line_number);
             lexer.pos += 1;
@@ -3332,6 +3351,45 @@ test "parse models a type argument in a class heritage clause" {
     try testing.expect(order.len > 0);
 }
 
+test "parse reads a brace pair inside a template's substitution" {
+    const allocator = testing.allocator;
+    const source =
+        \\const empty = `${ {} }`;
+        \\const built = `${gifOf({ name: "x" })}`;
+        \\const nested = `${f({ a: { b: 1 } })}`;
+        \\const counted = parse(`${fileTextOf([pressOf({})])}\n`).length;
+        \\
+    ;
+    var module = try parse(allocator, source);
+    defer module.deinit();
+
+    // `unsupported` rather than `unknownCount` alone: the container used to end at
+    // the object literal's `}`, which left the rest of the substitution, the
+    // template's own closing backtick and the statement's `;` as nodes
+    // `parseUnknown` added without a parent. `unknownCount` walks from the root, so
+    // it cannot reach an orphan, and the walk's own node-count assert is what
+    // reported this one instead: `grimuah check` aborted before it printed a row
+    try testing.expectEqual(@as(usize, 0), module.unsupported);
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    // four templates, each holding its substitution's own expression
+    var templates: usize = 0;
+    var objects: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) == .template) {
+            templates += 1;
+            try testing.expectEqual(@as(usize, 1), module.childCount(index));
+        }
+        if (module.kindOf(index) == .object_literal) objects += 1;
+    }
+    try testing.expectEqual(@as(usize, 4), templates);
+    // one for three of the substitutions and two for the nested one, whose inner
+    // pair is its own object literal
+    const object_literals: usize = 5;
+    try testing.expectEqual(object_literals, objects);
+}
+
 test "parse models async arrows and a default-exported object literal" {
     const a = testing.allocator;
     const source =
@@ -3496,10 +3554,20 @@ test "parse sweep over real projects" {
             defer module.deinit();
 
             const unknown = module.unknownCount();
-            if (unknown == 0 and firstUncoveredByte(source, module.coveredEnd()) == null) continue;
+            // the orphan test is not the unknown count again: an orphaned node is
+            // unreachable from the root, so a file whose container lexing truncated
+            // its tokens reads as `unknown == 0` here and takes the assert inside
+            // `walkOrder` down at lint time instead. `grimuah check` aborted on
+            // sleepy's gateway before this test could say a word about it
+            const orphaned = module.hasOrphanedNode();
+            if (!orphaned and unknown == 0 and firstUncoveredByte(source, module.coveredEnd()) == null) continue;
             unknown_files += 1;
             unknown_nodes += unknown;
             if (unknown_files > 40) continue;
+            if (orphaned) {
+                std.debug.print("sweep: {s}: an orphaned node, which no unknown count sees\n", .{entry.path});
+                continue;
+            }
             if (unknown > 0) {
                 std.debug.print("sweep: {s}: {d} unknown\n", .{ entry.path, unknown });
                 var gaps = module.iterator();
