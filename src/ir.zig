@@ -283,6 +283,30 @@ pub const Module = struct {
         return self.source[span.start..span.end];
     }
 
+    /// where the leftmost token of an expression begins
+    /// a chain of members and calls is one expression to a reader and to the detector,
+    /// while a front-end span begins each member and call at the token before it, so a
+    /// node's own `span.start` is not where the expression begins.
+    ///
+    /// the detector asks
+    /// `node.getStart()`, which is the leftmost token, so a rule that compares an
+    /// expression's text or reports its line asks this
+    pub fn expressionStart(self: *const Module, index: NodeIndex) usize {
+        var start = self.spanOf(index).start;
+        var child = self.firstChildOf(index);
+        while (child) |current| : (child = self.nextSiblingOf(current)) {
+            start = @min(start, self.expressionStart(current));
+        }
+        return start;
+    }
+
+    /// the source text of one expression, from its leftmost token to the node's own end,
+    /// which is what the detector's `getText()` reads
+    pub fn expressionText(self: *const Module, index: NodeIndex) []const u8 {
+        const span = self.spanOf(index);
+        return self.source[@min(self.expressionStart(index), span.end)..span.end];
+    }
+
     /// an ancestor of `index`, or `null` at the root
     pub fn ancestorOf(self: *const Module, index: NodeIndex, kind: Kind) ?NodeIndex {
         var current = index;
@@ -503,6 +527,28 @@ test "textOf slices the source the node covers" {
 
     const node = try module.add(.identifier, .{ .start = 6, .end = 11, .line = 1 });
     try testing.expectEqualStrings("total", module.textOf(node));
+}
+
+// the chain's outer node carries the span of its tail, because the front-end begins each
+// member and call at the token before it: `total.trim().padEnd(2)` is one expression and
+// the node for the whole of it starts at `padEnd`
+// the leftmost token is what the detector
+// reads as the expression's start and its text
+test "an expression's start and text reach past a chain's own span" {
+    const source = "total.trim().padEnd(2)";
+    var module = try Module.init(testing.allocator, source);
+    defer module.deinit();
+
+    // the tail call, which is the outermost node of the chain
+    const tail = try module.add(.call, .{ .start = 13, .end = 22, .line = 1 });
+    const member = try module.add(.member, .{ .start = 11, .end = 13, .line = 1 });
+    const head = try module.add(.call, .{ .start = 0, .end = 11, .line = 1 });
+    module.appendChild(tail, member);
+    module.appendChild(member, head);
+
+    try testing.expectEqual(@as(usize, 0), module.expressionStart(tail));
+    try testing.expectEqualStrings(source, module.expressionText(tail));
+    try testing.expectEqualStrings("padEnd(2)", module.textOf(tail));
 }
 
 test "isInside finds an enclosing node" {

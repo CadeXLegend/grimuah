@@ -351,6 +351,12 @@ fn mergeRun(
     if (rules.needsProjectIndex(cfg, hygiene)) graph = try buildProjectIndex(allocator, contributions);
     defer if (graph) |*built| built.deinit();
 
+    var fingerprints: ?rules.FingerprintIndex = null;
+    // a cost gate rather than a verdict one, like the collection's: building an index no
+    // enabled rule reads changes no row
+    if (rules.needsFingerprints(cfg, hygiene)) fingerprints = try buildFingerprintIndex(allocator, contributions);
+    defer if (fingerprints) |*built| built.deinit();
+
     for (contributions, 0..) |*contribution, file| {
         for (contribution.findings.items) |finding| {
             try findings.append(allocator, .{
@@ -365,6 +371,9 @@ fn mergeRun(
         try resolveDeferred(allocator, &index, contribution, findings);
         if (graph) |*built| {
             try rules.resolveIndex(allocator, built, file, contribution.path, cfg, hygiene, findings);
+        }
+        if (fingerprints) |*built| {
+            try rules.resolveFingerprints(allocator, built, &contribution.project, contribution.path, cfg, hygiene, findings);
         }
         contribution.deinit(shared_finding_allocator);
     }
@@ -533,6 +542,264 @@ fn countMentionFiles(
         }
     }
     return counts;
+}
+
+/// every function body one file offers to the run's fingerprint index, in the order the
+/// declarations appear, which is the order their rows are reported in
+/// the shapes are the detector's own two, and only its two: a named function declaration,
+/// and a variable declarator whose initializer is an arrow or a function expression the
+/// tree reaches a class member as a function declaration under its class and an object
+/// literal's method as a function expression, so neither is a site here, which is what the
+/// detector's `ts.isFunctionDeclaration` and `ts.isVariableDeclaration` do not match either
+fn collectBodyFingerprints(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    walk: []const ir.WalkEntry,
+    bodies: *std.ArrayList(rules.BodyFingerprint),
+) !void {
+    for (walk) |entry| {
+        switch (entry.kind) {
+            .function_decl => {
+                // a class method arrives as a function declaration under its class, and it
+                // carries no name: the front-end consumes the member's own name before it
+                // builds the node the empty-name test below is therefore what keeps a
+                // method out, and a front-end that starts naming members has to bring this
+                // exclusion back with it
+                const name = module.nodeOf(entry.index).name;
+                if (name.len == 0) continue;
+                const body = module.bodyOf(entry.index) orelse continue;
+                try appendBodyFingerprint(allocator, module, tokens, name, body, bodies);
+            },
+            .variable_decl => try appendDeclaratorBodies(allocator, module, tokens, entry.index, bodies),
+            else => {},
+        }
+    }
+}
+
+/// the fingerprint of every declarator a `const`, `let` or `var` statement declares whose
+/// initializer is a function
+/// one declarator is one direct identifier child, which is what keeps a destructuring
+/// pattern's names out: they hang off the pattern rather than the statement
+/// the initializer
+/// is the sibling that follows the name, and a following declarator's own name is not one,
+/// so the two never take each other's place
+/// the identifier test is the detector's own `ts.isIdentifier(node.name)`, which is what
+/// leaves a destructuring declarator whose value is a function to the renamed-copy rule's
+/// index instead
+///
+/// a binding test beside it would be dead: the front-end builds a direct
+/// identifier child of a declarator with no binding but a declaration's own
+fn appendDeclaratorBodies(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    declaration: ir.NodeIndex,
+    bodies: *std.ArrayList(rules.BodyFingerprint),
+) !void {
+    var child = module.firstChildOf(declaration);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        const declarator = module.nodeOf(current);
+        if (declarator.kind != .identifier) continue;
+
+        const initializer = module.nextSiblingOf(current) orelse continue;
+        // the detector's `isArrowFunction || isFunctionExpression`, and `bodyOf` would
+        // reject every other kind anyway: widening this test changes no row, so it is the
+        // detector's shape restated rather than a verdict guard
+        switch (module.kindOf(initializer)) {
+            .arrow, .function_expr => {},
+            else => continue,
+        }
+        const body = module.bodyOf(initializer) orelse continue;
+        try appendBodyFingerprint(allocator, module, tokens, declarator.name, body, bodies);
+    }
+}
+
+/// the fingerprint one declaration offers: its name, the body text collapsed beside it, and
+/// the line the body starts on, which is where the detector reports
+/// the detector's gate is on the COLLAPSED text, so a short body is skipped after the
+/// collapse rather than before
+/// a raw text under the gate is skipped here anyway, and that
+/// test changes nothing: collapsing and trimming only ever shorten a text, and a byte is
+/// never fewer than the UTF-16 unit it encodes
+fn appendBodyFingerprint(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    name: []const u8,
+    body: ir.NodeIndex,
+    bodies: *std.ArrayList(rules.BodyFingerprint),
+) !void {
+    // the body's text and its line both come from the leftmost token it covers rather than
+    // from its own span: a body that is a chain of members and calls is one expression to
+    // the detector, and its outermost node begins at the chain's tail
+    const start = module.expressionStart(body);
+    const span = module.spanOf(body);
+    const raw = module.source[start..span.end];
+    // a cost guard rather than a verdict one: the gate that decides is the collapsed length
+    // in `fingerprintKey`, and a raw text under it in bytes cannot clear that, because
+    // collapsing and trimming only ever shorten a text, so dropping this test changes no
+    // row and allocates a key for every short body
+    if (raw.len < rules.minimum_body_length) return;
+    const key = (try fingerprintKey(allocator, name, raw)) orelse return;
+    errdefer allocator.free(key);
+    try bodies.append(allocator, .{
+        .name = key[0..name.len],
+        .key = key,
+        .line = tokens[typemodel.tokenAtOrAfter(tokens, @intCast(start))].line,
+    });
+}
+
+/// `name|collapsed body text`, allocated at the length the run keeps, or null when the
+/// collapsed text is under the detector's gate
+/// the key is built at its longest possible size and handed back to the allocator at the
+/// length it uses, because a `free` needs the slice the allocation returned
+fn fingerprintKey(allocator: std.mem.Allocator, name: []const u8, raw: []const u8) !?[]u8 {
+    const separator_length = 1;
+    const buffer = try allocator.alloc(u8, name.len + separator_length + raw.len);
+    errdefer allocator.free(buffer);
+
+    @memcpy(buffer[0..name.len], name);
+    buffer[name.len] = '|';
+    const collapsed = collapseWhitespace(buffer[name.len + separator_length ..], raw);
+    if (collapsed.units < rules.minimum_body_length) {
+        allocator.free(buffer);
+        return null;
+    }
+    return try allocator.realloc(buffer, name.len + separator_length + collapsed.len);
+}
+
+/// a collapsed text's byte length and its length in UTF-16 code units, which is what a
+/// JavaScript string's own `length` counts
+const Collapsed = struct {
+    len: usize,
+    units: usize,
+};
+
+/// `text` with every run of whitespace replaced by one space and both ends trimmed, which
+/// is what `text.replace(/\s+/g, " ").trim()` produces
+///
+/// `destination` holds `text.len`
+/// bytes, which the collapse never grows past
+/// the count is of UTF-16 code units rather than bytes or code points, because the detector
+/// measures a JavaScript string: an astral character counts twice there, and a body holding
+/// one would otherwise sit a unit apart from the detector across the gate
+/// the two lengths one code point takes in UTF-16: one unit below the astral planes and a
+/// surrogate pair at or above them, which is what a JavaScript string's `length` counts
+const utf16_basic_units: usize = 1;
+const utf16_astral_units: usize = 2;
+const last_basic_plane_codepoint: u21 = 0xffff;
+
+fn collapseWhitespace(destination: []u8, text: []const u8) Collapsed {
+    var written: usize = 0;
+    var units: usize = 0;
+    var pending_space = false;
+    var index: usize = 0;
+    while (index < text.len) {
+        const decoded = decodeAt(text, index);
+        if (isJavaScriptSpace(decoded.codepoint)) {
+            pending_space = true;
+            index += decoded.width;
+            continue;
+        }
+        // a run at either end contributes no space, which is the trim's half of the
+        // replacement
+        if (pending_space and written > 0) {
+            destination[written] = ' ';
+            written += 1;
+            units += utf16_basic_units;
+        }
+        pending_space = false;
+        @memcpy(destination[written..][0..decoded.width], text[index..][0..decoded.width]);
+        written += decoded.width;
+        units += if (decoded.codepoint > last_basic_plane_codepoint) utf16_astral_units else utf16_basic_units;
+        index += decoded.width;
+    }
+    return .{ .len = written, .units = units };
+}
+
+/// one code point of a UTF-8 slice and the bytes it occupies
+const Codepoint = struct {
+    codepoint: u21,
+    width: usize,
+};
+
+/// the code point at `index`, or the byte itself when it begins no sequence the encoding
+/// accepts a source the lexer accepted is walked without the fallback, which is what keeps
+/// a malformed byte from shortening the walk
+fn decodeAt(text: []const u8, index: usize) Codepoint {
+    const width = std.unicode.utf8ByteSequenceLength(text[index]) catch return .{ .codepoint = text[index], .width = 1 };
+    if (index + width > text.len) return .{ .codepoint = text[index], .width = 1 };
+    const codepoint = std.unicode.utf8Decode(text[index..][0..width]) catch return .{ .codepoint = text[index], .width = 1 };
+    return .{ .codepoint = codepoint, .width = width };
+}
+
+/// the unicode spaces `/\s/` matches beyond the ASCII set: the no-break space, the ogham
+/// space, the two line separators, the narrow no-break space, the medium mathematical
+/// space, the ideographic space, and the byte-order mark
+const java_script_spaces = [_]u21{ 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff };
+
+/// the last ASCII code point, and the en-to-hair space run JavaScript folds with the ASCII
+/// whitespace. naming both keeps the two bounds of `isJavaScriptSpace` visible
+const last_ascii_codepoint: u21 = 0x7f;
+const first_en_space_codepoint: u21 = 0x2000;
+const last_hair_space_codepoint: u21 = 0x200a;
+
+/// whether `/\s/` matches a code point, which is the ASCII set the tokenizer's own
+/// predicate covers plus the unicode spaces above and the en-to-hair space run a body
+/// holding one would otherwise key differently from the detector's
+fn isJavaScriptSpace(codepoint: u21) bool {
+    if (codepoint <= last_ascii_codepoint) return std.ascii.isWhitespace(@intCast(codepoint));
+    if (codepoint >= first_en_space_codepoint and codepoint <= last_hair_space_codepoint) return true;
+    for (java_script_spaces) |candidate| {
+        if (codepoint == candidate) return true;
+    }
+    return false;
+}
+
+/// how many distinct files of the run declare each function body
+/// the count is of files rather than declarations, which is the detector's own test: one
+/// file that writes the same body twice holds one copy of the defect
+/// the last-file guard is
+/// what keeps the count honest without a per-file set, because the run walks one file's
+/// bodies at a time, so a repeat is always a key this file already counted
+/// the keys are the index's own copies, because a file's fingerprints are freed as soon as
+/// its rows are reported, while the index answers for every file after it
+fn countBodyFingerprintFiles(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(rules.FingerprintFiles) {
+    var counts: std.StringHashMapUnmanaged(rules.FingerprintFiles) = .empty;
+    for (contributions, 0..) |contribution, file| {
+        const current: u32 = @intCast(file);
+        for (contribution.project.body_fingerprints.items) |fingerprint| {
+            const entry = try counts.getOrPut(allocator, fingerprint.key);
+            if (!entry.found_existing) {
+                // the map keeps its own copy, and this is a lifetime guard rather than a
+                // tidiness one: the merge frees a file's fingerprints once its rows are
+                // reported, while the index answers for every file after it
+                entry.key_ptr.* = try allocator.dupe(u8, fingerprint.key);
+                entry.value_ptr.* = .{};
+            }
+            if (entry.value_ptr.last_file == current) continue;
+            entry.value_ptr.last_file = current;
+            entry.value_ptr.files += 1;
+        }
+    }
+    return counts;
+}
+
+/// the run's fingerprints, built from every file's own contribution
+/// every allocation through the arena happens before the struct literal copies the arena,
+/// because the arena's state is a value: a copy taken mid-literal misses the buffers a
+/// later field allocated, so `deinit` would free only the first
+fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Contribution) !rules.FingerprintIndex {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const index_allocator = arena.allocator();
+
+    const body_files = try countBodyFingerprintFiles(index_allocator, contributions);
+    return .{ .arena = arena, .body_files = body_files };
 }
 
 /// every declaration this file exports that a rule can judge by where it lives
@@ -1112,6 +1379,19 @@ pub fn lintContent(
         // member access all name something, and only the tree's expression positions
         // reach the tree as nodes
         try collectMentions(finding_allocator, tokens, &contribution.project.mentions);
+    }
+
+    // the function bodies this file offers to the run's fingerprints
+    // the family is gated
+    // apart from the graph, because the bodies are the heavy half of the two: a project
+    // that enables only the statement or copy rules never pays for the walk
+    // the gate is a
+    // cost one rather than a verdict one, because a run that collects bodies it has no rule
+    // for reports the same rows
+    if (rules.needsBodyFingerprints(cfg, hygiene)) {
+        if (parsed) |*module| {
+            try collectBodyFingerprints(finding_allocator, module, tokens, walk, &contribution.project.body_fingerprints);
+        }
     }
 
     var context = rules.Context{

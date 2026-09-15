@@ -284,6 +284,68 @@ pub const IndexVerdict = *const fn (
     findings: *std.ArrayList(Finding),
 ) std.mem.Allocator.Error!void;
 
+/// one function body a file offers to the run's fingerprint index
+pub const BodyFingerprint = struct {
+    /// the declared name, which is the row's subject
+    /// it is a view into `key` rather than a
+    /// second allocation: the key opens with the name, and the separator is a byte a name
+    /// cannot hold
+    name: []const u8,
+    /// `name|collapsed body text`, which is the detector's own key for "the same helper
+    /// written twice"
+    /// the name is part of it, which is what makes the accepted rule for an
+    /// identical body exact, and a body copied into another file under a new name is a
+    /// different key
+    key: []const u8,
+    /// the line the body starts on, which is where the detector reports
+    line: u32,
+};
+
+/// how many distinct files of the run hold one fingerprint, and which file was counted last
+/// the count is of files rather than sites: one file that writes the same body twice holds
+/// one copy of the defect, and the detector's own test is `files.size >= 2`
+/// the last-file
+/// guard is what makes the count say so while the run walks one file's sites at a time,
+/// which needs neither a per-file set nor a second pass over the run
+pub const FingerprintFiles = struct {
+    files: u32 = 0,
+    last_file: u32 = std.math.maxInt(u32),
+};
+
+/// the run's text fingerprints: what every file's declarations say, so a rule can ask
+/// whether one implementation is written in two files
+/// it is the run's rather than one file's, and it is built from every file's own
+/// contribution before the first file's verdict, because the last file of the run can hold
+/// the copy the first file's declaration duplicates
+/// it is kept apart from `ProjectIndex` because the two cost very different amounts: the
+/// graph's pass resolves every import and runs a component pass, while a fingerprint is the
+/// collapsed text of a declaration, so a project that enables one of the two must not pay
+/// for the other
+pub const FingerprintIndex = struct {
+    /// the index's own memory: every fingerprint outlives the file it was read from,
+    /// because the last file's verdict needs the first file's
+    arena: std.heap.ArenaAllocator,
+    /// the distinct files that declare each function body, keyed by `name|body text`
+    body_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
+
+    pub fn deinit(self: *FingerprintIndex) void {
+        self.arena.deinit();
+    }
+};
+
+/// the run's fingerprints, as one file sees it: the count of files that hold each
+/// fingerprint, and the contributing file's own sites
+/// the sites come with it because the
+/// rows to report and the lines to report them at are the file's rather than the run's
+pub const FingerprintVerdict = *const fn (
+    allocator: std.mem.Allocator,
+    index: *const FingerprintIndex,
+    project: *const Project,
+    path: []const u8,
+    rule: *const Rule,
+    findings: *std.ArrayList(Finding),
+) std.mem.Allocator.Error!void;
+
 /// the project-wide pass, as one file sees it: the return types this file declares,
 /// the call sites this file's rules defer, and the imports the merge resolves into
 /// the run's graph
@@ -299,6 +361,9 @@ pub const Project = struct {
     /// a name is here once however often the file writes it, because the run's
     /// question is which files know a name rather than how often one does
     mentions: std.StringHashMapUnmanaged(void) = .empty,
+    /// every function body this file offers to the run's fingerprint index, in the order
+    /// the declarations appear, which is the order the rows are reported in
+    body_fingerprints: std.ArrayList(BodyFingerprint) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -320,6 +385,8 @@ pub const Project = struct {
         var names = self.mentions.keyIterator();
         while (names.next()) |name| allocator.free(name.*);
         self.mentions.deinit(allocator);
+        for (self.body_fingerprints.items) |fingerprint| allocator.free(fingerprint.key);
+        self.body_fingerprints.deinit(allocator);
     }
 };
 
@@ -347,6 +414,17 @@ pub const Rule = struct {
     /// `needs_project_index` must have one, or it would drive the pass and report
     /// nothing
     resolve_index: ?IndexVerdict = null,
+    /// this rule's verdict needs the run's function-body fingerprints, so the engine
+    /// collects every declaration's body text as it reads each file and the merge builds
+    /// the index before any verdict
+    /// the collection copies text rather than the graph's names, which is an order of
+    /// magnitude more of it, so the families are gated apart from `needs_project_index`: a
+    /// project that enables only one family pays only for it
+    needs_body_fingerprints: bool = false,
+    /// the verdict this rule reaches over the run's fingerprints
+    /// its table entry must
+    /// declare a family flag, or the collection it reads was never made
+    resolve_fingerprints: ?FingerprintVerdict = null,
     /// the per-file matcher. a rule whose only verdict is the import graph has
     /// none, because that verdict needs every file of the run rather than the one
     /// in front of it
@@ -396,6 +474,13 @@ pub const import_cycle = "This import closes a cycle: the file it names imports 
 pub const shared_type_placement = "This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in {s}.types.ts instead.";
 pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
 pub const export_without_consumer = "`{s}` is exported but no other module names it. Drop the `export` keyword, or have another module name it.";
+pub const duplicated_function_body = "`{s}` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.";
+
+/// the shortest collapsed body text the duplicate-body rule counts, which is the detector's
+/// own gate
+/// the collection and the verdict read the same number, because a body the
+/// collection skipped is not a group any verdict can find
+pub const minimum_body_length: u32 = 30;
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -700,6 +785,15 @@ pub const all = [_]Rule{
         .resolve_index = structural.checkExportWithoutConsumer,
     },
     .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = duplicated_function_body,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_body_fingerprints = true,
+        .resolve_fingerprints = resilience.checkDuplicatedFunctionBody,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -781,6 +875,38 @@ pub fn needsProjectIndex(cfg: *const config.Config, with_hygiene: bool) bool {
     return false;
 }
 
+/// whether an enabled rule reads a family of the run's fingerprints, so the merge knows
+/// whether to build the fingerprint index
+pub fn needsFingerprints(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!declaresFingerprintFamily(rule)) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
+/// whether an enabled rule needs every file's function bodies, so the engine knows whether
+/// to collect them as it reads each file
+/// it is separate from `needsFingerprints` because the families are collected apart: a
+/// project that enables only the statement or the copy rules builds the index without ever
+/// walking a body
+pub fn needsBodyFingerprints(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_body_fingerprints) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
+/// whether a rule reads a family of the run's fingerprints
+/// the families are ported one at a time, and this is the one place a new one is declared:
+/// a family that is not named here never reaches its verdict
+fn declaresFingerprintFamily(rule: Rule) bool {
+    return rule.needs_body_fingerprints;
+}
+
 /// reach every enabled graph rule's verdict for one file of the run
 ///
 /// the merge builds the graph once and calls this as it walks the files, so a
@@ -801,6 +927,27 @@ pub fn resolveIndex(
         if (rule.layer == .hygiene and !with_hygiene) continue;
         if (!enabled(cfg, rule.layer)) continue;
         try verdict(allocator, graph, file, path, rule, findings);
+    }
+}
+
+/// reach every enabled fingerprint rule's verdict for one file of the run
+/// the merge builds the run's fingerprints once and calls this as it walks the files, so a
+/// rule's own resolver decides only what that file's row is, and the layer, the severity
+/// and the message come off the table entry the resolver is handed
+pub fn resolveFingerprints(
+    allocator: std.mem.Allocator,
+    index: *const FingerprintIndex,
+    project: *const Project,
+    path: []const u8,
+    cfg: *const config.Config,
+    with_hygiene: bool,
+    findings: *std.ArrayList(Finding),
+) std.mem.Allocator.Error!void {
+    for (&all) |*rule| {
+        const verdict = rule.resolve_fingerprints orelse continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (!enabled(cfg, rule.layer)) continue;
+        try verdict(allocator, index, project, path, rule, findings);
     }
 }
 
@@ -836,15 +983,15 @@ pub fn run(context: *const Context) !void {
 
 const testing = std.testing;
 
-// the two flags a rule can reach its verdict through are not independent, and the
-// table is where a mistake in them is silent: a rule with neither reports nothing
-// for the whole run, a rule that drives the graph pass without a verdict pays for
-// the pass and reports nothing, and a rule with a verdict but no flag never reads
-// a graph
-test "every rule has a verdict, and the graph flag and the graph verdict agree" {
+// the flags a rule can reach its verdict through are not independent, and the table is
+// where a mistake in them is silent: a rule with no verdict reports nothing for the whole
+// run, a rule that drives a pass without a verdict pays for the pass and reports nothing,
+// and a rule with a verdict but no flag never reads the index it needs
+test "every rule has a verdict, and the index flags and the index verdicts agree" {
     for (all) |rule| {
-        try testing.expect(rule.match != null or rule.resolve_index != null);
+        try testing.expect(rule.match != null or rule.resolve_index != null or rule.resolve_fingerprints != null);
         try testing.expect(rule.needs_project_index == (rule.resolve_index != null));
+        try testing.expect(declaresFingerprintFamily(rule) == (rule.resolve_fingerprints != null));
     }
 }
 

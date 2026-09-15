@@ -836,7 +836,16 @@ const non_reference_lookup = std.StaticStringMap(void).initComptime(init: {
 /// annotation or `implements` it starts the body, so the type has to stop there.
 /// an object *type* in those positions (`(): {a: number} => x`) is read as a body
 /// instead, a known gap the corpus records
-const TypeStop = enum { brace_starts_object, brace_starts_body };
+const TypeStop = enum {
+    /// a declarator's own annotation, `const x: T = value`
+    /// the `{` that follows `:` is an
+    /// object type like any other annotation's, but a `=>` inside this one is a function
+    /// type's arrow rather than the arrow that owns a body, so the annotation runs to the
+    /// `=` that introduces the value
+    declaration_annotation,
+    brace_starts_object,
+    brace_starts_body,
+};
 
 /// how many type-parameter levels a `>`-family token closes: one for `>`, two for
 /// `>>`, three for `>>>`, nothing for `>=`, `>>=`, `>>>=` and every other token.
@@ -861,7 +870,10 @@ fn isTypeStop(stop: TypeStop, text: []const u8) bool {
     if (text.len == 0) return false;
     return switch (text[0]) {
         ',', ';', ':', '?', '+', '-', '*', '/', '%', '~', '^' => text.len == 1,
-        '=' => text.len <= 3, // `=`, `=>`, `==`, `===`
+        // `=` introduces a declarator's value, and a `=>` is one token further in: a
+        // declared type can hold `=>` as a function type's arrow, which only a return
+        // annotation stops at, because there the arrow is the one that owns the body
+        '=' => if (stop == .declaration_annotation) text.len == 1 else text.len <= 3,
         '!' => text.len <= 3, // `!`, `!=`, `!==`
         '&' => text.len == 2, // `&&`; `&` is a type operator
         '|' => text.len == 2, // `||`; `|` is a type operator
@@ -1184,7 +1196,7 @@ const Parser = struct {
             try self.parseBindingTarget(node);
             if (self.atPunct(":")) {
                 self.pos += 1;
-                self.skipType(.brace_starts_object);
+                self.skipType(.declaration_annotation);
             }
             if (self.atPunct("=")) {
                 const value_from = self.begin();
@@ -2570,6 +2582,52 @@ test "parse sees literals in conditions and as-casts with their type" {
     }
     try testing.expect(saw_literal_condition);
     try testing.expect(saw_cast);
+}
+
+test "parse keeps a declarator's initializer when its own annotation spells a function type" {
+    const allocator = testing.allocator;
+    // the annotation holds a `=>` of its own, and the `=` that introduces the value is the
+    // only terminator that ends it
+    // reading the annotation's `=>` as the one that owns a body left the declaration
+    // ending at its type, re-parsed the arrow as a stray statement and reported an
+    // unmodelled node
+    const source =
+        \\const assert: (condition: boolean, message: string) => asserts condition = (
+        \\  condition,
+        \\  message,
+        \\) => {
+        \\  if (!condition) {
+        \\    fail(message);
+        \\  }
+        \\};
+        \\
+    ;
+    var module = try parse(allocator, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    // one declaration, whose children are the declarator's name and the arrow, and the
+    // arrow's last child is the block the body is
+    var declaration: ?ir.NodeIndex = null;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) == .variable_decl) declaration = index;
+    }
+    try testing.expect(declaration != null);
+    try testing.expectEqual(@as(usize, 2), module.childCount(declaration.?));
+
+    const name = module.firstChildOf(declaration.?);
+    try testing.expectEqual(ir.Kind.identifier, module.kindOf(name.?));
+    try testing.expectEqualStrings("assert", module.nodeOf(name.?).name);
+
+    const initializer = module.nextSiblingOf(name.?);
+    try testing.expectEqual(ir.Kind.arrow, module.kindOf(initializer.?));
+    try testing.expectEqual(ir.Kind.block, module.kindOf(module.bodyOf(initializer.?).?));
+
+    // and the declared type still runs to its own last token, so the declaration's extent
+    // is the whole statement
+    try testing.expectEqualStrings(source[0 .. source.len - 1], module.textOf(declaration.?));
 }
 
 test "parse keeps a function body that follows a return annotation" {

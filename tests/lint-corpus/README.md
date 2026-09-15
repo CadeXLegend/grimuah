@@ -83,11 +83,22 @@ another directory needs: the consumer sits under `src/probe/consumer`, so its im
 of the declaration crosses a boundary. the declaration module is the one judged, and
 its row names `shared-type-placement.types.ts`, the file name minus its kind
 
-`no-import-cycles-a.repo.ts` and `no-import-cycles-b.repo.ts` are the corpus's only
-pair: a cycle needs two files, and the two import each other so the run has to read
+`no-import-cycles-a.repo.ts` and `no-import-cycles-b.repo.ts` are one of the corpus's
+two pairs: a cycle needs two files, and the two import each other so the run has to read
 both before either can be judged. each one's row lands on its own import statement,
 and the pair is the only place the corpus reaches the project pass from a fixture
 rather than from a single file
+
+`duplicate-function-body/first.ts` and `duplicate-function-body/second.ts` are the
+other pair, and the boundary the duplicate-body rule needs: it keys on a declaration's
+name beside its collapsed body, so it can only fire across two files that declare the
+same thing. the first writes the body on one line and the second splits it and puts the
+`{` on a line of its own, which pins both the whitespace collapse and the body's own
+line as the reported one. five more fixtures pin another rule and hold an identical
+named body incidentally, which is what their own rows are not: `barecatch.ts` and
+`barecatch-ws.ts` are byte-identical files, and `c-return-bare.ts`,
+`handled-catch-multiline.ts` and `handled-return-bare.ts` declare `f` three times over
+with one body between them. those five carry seven duplicate-body rows
 
 `no-export-without-consumer.repo.ts` carries a suffix for the corpus's own reason:
 the rule reads the suffixed-module convention, `<name>.<kind>.ts`, rather than a

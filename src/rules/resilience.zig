@@ -399,39 +399,21 @@ fn subjectText(module: *const ir.Module, condition: ir.NodeIndex) []const u8 {
     var current = condition;
     if (module.kindOf(current) == .unary) current = firstChildOr(module, current);
     if (module.kindOf(current) == .paren) current = firstChildOr(module, current);
-    if (module.kindOf(current) == .binary) return expressionText(module, firstChildOr(module, current));
+    if (module.kindOf(current) == .binary) return module.expressionText(firstChildOr(module, current));
 
     if (module.kindOf(current) == .call) {
-        const callee = module.firstChildOf(current) orelse return expressionText(module, current);
-        const argument = module.nextSiblingOf(callee) orelse return expressionText(module, current);
-        if (module.nextSiblingOf(argument) != null) return expressionText(module, current);
-        return expressionText(module, argument);
+        const callee = module.firstChildOf(current) orelse return module.expressionText(current);
+        const argument = module.nextSiblingOf(callee) orelse return module.expressionText(current);
+        if (module.nextSiblingOf(argument) != null) return module.expressionText(current);
+        return module.expressionText(argument);
     }
-    return expressionText(module, current);
+    return module.expressionText(current);
 }
 
 fn firstChildOr(module: *const ir.Module, index: ir.NodeIndex) ir.NodeIndex {
     return module.firstChildOf(index) orelse index;
 }
 
-/// the text of an expression. a chain of members and calls is one expression to
-/// a reader and to the detector, while a front-end span begins each member at the
-/// token before it, so the text runs from the leftmost token in the expression to
-/// the node's own end
-fn expressionText(module: *const ir.Module, index: ir.NodeIndex) []const u8 {
-    const span = module.spanOf(index);
-    const start = @min(leftmostStart(module, index), span.end);
-    return module.source[start..span.end];
-}
-
-fn leftmostStart(module: *const ir.Module, index: ir.NodeIndex) usize {
-    var start = module.spanOf(index).start;
-    var child = module.firstChildOf(index);
-    while (child) |current| : (child = module.nextSiblingOf(current)) {
-        start = @min(start, leftmostStart(module, current));
-    }
-    return start;
-}
 
 
 
@@ -763,6 +745,48 @@ fn isScalarPromise(tokens: []const Token, declared: typemodel.Extent) bool {
     if (!tokens[declared.start + 1].isPunct("<")) return false;
     if (!settled.isWord("boolean") and !settled.isWord("number")) return false;
     return tokens[declared.start + 3].isPunct(">");
+}
+
+/// the number of distinct files that must declare one body for the copy to be a defect
+/// one other file is enough: the same implementation written twice is one decision written
+/// twice, which is the whole rule
+const DUPLICATE_BODY_FILE_THRESHOLD = 2;
+
+/// a function body written byte for byte into another file under the same name
+/// the run's index holds one count per `name|body` fingerprint, so the verdict is one
+/// lookup per declaration rather than a walk of the run
+/// the count is of distinct files and
+/// the declaring file always counts itself, so a count under the threshold is a body
+/// nothing outside this file writes
+/// the reported line is the body's own start, which is where the detector's
+/// `body.getStart()` lands: the `{` of a block, or the first token of an arrow's expression
+/// body
+pub fn checkDuplicatedFunctionBody(
+    allocator: std.mem.Allocator,
+    index: *const root.FingerprintIndex,
+    project: *const root.Project,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    for (project.body_fingerprints.items) |fingerprint| {
+        const owners = index.body_files.get(fingerprint.key) orelse continue;
+        if (owners.files < DUPLICATE_BODY_FILE_THRESHOLD) continue;
+
+        // the message names the function, so it is formatted rather than taken from the
+        // table as a finished string
+        // the format is the same constant the table names, so
+        // the wording still has one source
+        const message = try std.fmt.allocPrint(allocator, root.duplicated_function_body, .{fingerprint.name});
+        defer allocator.free(message);
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = fingerprint.line,
+            .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
 }
 
 const probe = @import("probe.zig");
@@ -1285,4 +1309,194 @@ test "an exported async scalar result is reported, and the shapes around it are 
         "6: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.",
         "39: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.",
     });
+}
+
+/// the row a duplicate-body finding produces, built from the table's message so a wording
+/// change is one edit
+fn duplicateBodyRow(allocator: std.mem.Allocator, path: []const u8, line: u32, name: []const u8) ![]const u8 {
+    const message = try std.fmt.allocPrint(allocator, root.duplicated_function_body, .{name});
+    defer allocator.free(message);
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, message });
+}
+
+test "a body written into another file under the same name is reported, and the shapes the detector does not collect are not" {
+    const allocator = std.testing.allocator;
+
+    // the four names that pair up
+    // `charge` and `settle` put the body's `{` on a line of its
+    // own in the second file, `makeCharge` is a function expression in one and an arrow in
+    // the other, and the two are keyed on the variable's name whichever shape the
+    // initializer has
+    const charge = try duplicateBodyRow(allocator, "src/a.service.ts", 1, "charge");
+    defer allocator.free(charge);
+    const split_charge = try duplicateBodyRow(allocator, "src/b.service.ts", 2, "charge");
+    defer allocator.free(split_charge);
+    const settle = try duplicateBodyRow(allocator, "src/a.service.ts", 5, "settle");
+    defer allocator.free(settle);
+    const split_settle = try duplicateBodyRow(allocator, "src/b.service.ts", 8, "settle");
+    defer allocator.free(split_settle);
+    const make_charge = try duplicateBodyRow(allocator, "src/a.service.ts", 9, "makeCharge");
+    defer allocator.free(make_charge);
+    const arrow_charge = try duplicateBodyRow(allocator, "src/b.service.ts", 13, "makeCharge");
+    defer allocator.free(arrow_charge);
+
+    try probe.expectProject(.resilience, &.{
+        // `shadow` is declared twice in this file under one name and one body, so the count
+        // of FILES is one and neither declaration is a site
+        // `alpha` and `beta` share a body under two names in the two files, which is the
+        // renamed rule's case and not this one
+        // `tiny` is under the minimum
+        // the class method's body is a byte-identical copy of `charge`'s, and the detector
+        // collects no method
+        // the second file writes its bodies across more lines than the first, which the
+        // collapse folds into the same key
+        .{ .path = "src/a.service.ts", .content =
+        \\export function charge(amount: number, rate: number): number {
+        \\  return Math.round(amount * rate) + Math.floor(amount / rate);
+        \\}
+        \\
+        \\export const settle = (amount: number, rate: number): number => {
+        \\  return Math.min(amount, rate) + Math.max(amount, rate);
+        \\};
+        \\
+        \\export const makeCharge = function (amount: number, rate: number): number {
+        \\  return Math.max(amount, rate) - Math.min(amount, rate);
+        \\};
+        \\
+        \\function shadow(amount: number, rate: number): number {
+        \\  return Math.round(amount - rate) * Math.floor(amount + rate);
+        \\}
+        \\
+        \\export function outer(amount: number, rate: number): number {
+        \\  function shadow(amount: number, rate: number): number {
+        \\    return Math.round(amount - rate) * Math.floor(amount + rate);
+        \\  }
+        \\  return shadow(amount, rate);
+        \\}
+        \\
+        \\export function alpha(amount: number, rate: number): number {
+        \\  return Math.round(amount / rate) + Math.floor(amount * rate);
+        \\}
+        \\
+        \\export const tiny = (): number => 1 + 1;
+        \\
+        \\export class Ledger {
+        \\  charge(amount: number, rate: number): number {
+        \\    return Math.round(amount * rate) + Math.floor(amount / rate);
+        \\  }
+        \\}
+        \\
+        },
+        .{ .path = "src/b.service.ts", .content =
+        \\export function charge(amount: number, rate: number): number
+        \\{
+        \\  return Math.round(amount
+        \\    * rate) + Math.floor(amount / rate);
+        \\}
+        \\
+        \\export const settle = (amount: number, rate: number): number =>
+        \\{
+        \\  return Math.min(amount,
+        \\    rate) + Math.max(amount, rate);
+        \\};
+        \\
+        \\export const makeCharge = (amount: number, rate: number): number => {
+        \\  return Math.max(amount, rate) - Math.min(amount, rate);
+        \\};
+        \\
+        \\export function beta(amount: number, rate: number): number {
+        \\  return Math.round(amount / rate) + Math.floor(amount * rate);
+        \\}
+        \\
+        \\export const tiny = (): number => 1 + 1;
+        \\
+        \\export class Ledger {
+        \\  charge(amount: number, rate: number): number {
+        \\    return Math.round(amount * rate) + Math.floor(amount / rate);
+        \\  }
+        \\}
+        \\
+        },
+    }, &.{ charge, settle, make_charge, split_charge, split_settle, arrow_charge });
+}
+
+test "a body's text and its line come from its leftmost token, not from its own span" {
+    const allocator = std.testing.allocator;
+    // the detector reads an expression body's own start, and a chain's outermost node
+    // begins at the last member rather than at the value the chain hangs off: this body
+    // starts at `text` on line 2 while the node for the whole of it starts on line 4
+    const first = try duplicateBodyRow(allocator, "src/a.service.ts", 2, "escapeText");
+    defer allocator.free(first);
+    const second = try duplicateBodyRow(allocator, "src/b.service.ts", 2, "escapeText");
+    defer allocator.free(second);
+
+    // the two files write the same bytes, so the text the keys hold is the same however the
+    // body is read, and the line is the only thing this test can be about
+    // a body read from
+    // its own span reports line 4
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/a.service.ts", .content =
+        \\export const escapeText = (text: string): string =>
+        \\  text
+        \\    .replaceAll("&", "&amp;")
+        \\    .replaceAll("<", "&lt;");
+        \\
+        },
+        .{ .path = "src/b.service.ts", .content =
+        \\export const escapeText = (text: string): string =>
+        \\  text
+        \\    .replaceAll("&", "&amp;")
+        \\    .replaceAll("<", "&lt;");
+        \\
+        },
+    }, &.{ first, second });
+}
+
+test "the body gate is the detector's own, and a body at it is a site" {
+    const allocator = std.testing.allocator;
+    // `atLimit`'s body collapses to exactly thirty characters and `underLimit`'s to twenty
+    // five, so a gate moved in either direction reports the wrong pair: a gate at twenty
+    // five adds two rows, one at thirty one drops two
+    // `underLimit` is written with two spaces between its tokens on purpose
+    // the gate is on
+    // the COLLAPSED text, and a raw text the collapse brings under it is the only shape
+    // that reaches that gate without the byte-length pre-test dropping it first
+    const at_limit = try duplicateBodyRow(allocator, "src/a.service.ts", 1, "atLimit");
+    defer allocator.free(at_limit);
+    const also_at_limit = try duplicateBodyRow(allocator, "src/b.service.ts", 1, "atLimit");
+    defer allocator.free(also_at_limit);
+
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/a.service.ts", .content =
+        \\export const atLimit = (value: number): number => value * value + value * 100000;
+        \\export const underLimit = (value: number): number => value  *  value  +  value  *  2;
+        \\
+        },
+        .{ .path = "src/b.service.ts", .content =
+        \\export const atLimit = (value: number): number => value * value + value * 100000;
+        \\export const underLimit = (value: number): number => value  *  value  +  value  *  2;
+        \\
+        },
+    }, &.{ at_limit, also_at_limit });
+}
+
+test "a destructuring declarator whose value is a function is not a body" {
+    // the detector reads a declaration's name with `ts.isIdentifier`, so a pattern's
+    // declarator has no name and no site
+    // its own body is long enough to be one, which is
+    // what makes this a test of the identifier test rather than of the length gate
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/a.service.ts", .content =
+        \\const { handler } = (value: number): number => {
+        \\  return value * 2 + value * 3 + value * 4;
+        \\};
+        \\
+        },
+        .{ .path = "src/b.service.ts", .content =
+        \\const { handler } = (value: number): number => {
+        \\  return value * 2 + value * 3 + value * 4;
+        \\};
+        \\
+        },
+    }, &.{});
 }

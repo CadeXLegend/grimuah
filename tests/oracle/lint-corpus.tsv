@@ -23,8 +23,10 @@ src/probe/await-in-loop.ts:5: [resilience] This signature hands over a mutable a
 src/probe/await-in-loop.ts:6: [behavioural] This loop awaits inside its body, so every iteration runs in sequence. Map the items to promises and await Promise.all once.
 src/probe/barecatch-comment.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/barecatch-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/barecatch.ts:1: [resilience] `f` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/barecatch.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/barecatch.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/barecatch-ws.ts:1: [resilience] `f` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/barecatch-ws.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/barecatch-ws.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
 src/probe/boolean-flag-argument.ts:5: [resilience] This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value.
@@ -46,6 +48,7 @@ src/probe/config-declares-data-only.config.ts:16: [structural] This .config.ts f
 src/probe/config-declares-data-only.config.ts:20: [structural] `LocalKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/config-declares-data-only.config.ts:6: [structural] `Message` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/consumer/uses-shared-type.util.ts:8: [structural] `balanceOf` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/c-return-bare.ts:1: [resilience] `f` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/c-throw-noval.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/cyclomatic-complexity.ts:5: [resilience] This function has a cyclomatic complexity of 18. Extract each decision into a named predicate or a lookup.
 src/probe/d-as-generic.ts:2: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
@@ -78,6 +81,8 @@ src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. nu
 src/probe/d-null-objectkey.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
 src/probe/d-throw-cond.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/d-two-as.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
+src/probe/duplicate-function-body/first.ts:1: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
+src/probe/duplicate-function-body/second.ts:2: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/emdash-comment.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
 src/probe/emdash-string.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
 src/probe/emdash-template.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
@@ -95,8 +100,10 @@ src/probe/for-of-accumulation.ts:5: [resilience] This signature hands over a mut
 src/probe/for-of-accumulation.ts:7: [resilience] This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead.
 src/probe/for-of.ts:1: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/for-of.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/handled-catch-multiline.ts:1: [resilience] `f` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/handled-comment.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/handled-comment.ts:4: [behavioural] do not use bare catch with silent failure; log the error or return an Outcome
+src/probe/handled-return-bare.ts:1: [resilience] `f` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/handled-throw.ts:5: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/if-chain-dispatch.ts:6: [resilience] These 3 branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.
 src/probe/let-destructure.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
