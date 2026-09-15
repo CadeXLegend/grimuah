@@ -2474,6 +2474,426 @@ fn stripQuotes(text: []const u8) []const u8 {
     return text[1 .. text.len - 1];
 }
 
+/// one code point of a UTF-8 slice and the bytes it occupies
+pub const Codepoint = struct {
+    codepoint: u21,
+    width: usize,
+};
+
+/// the code point at `index`, or the byte itself when it begins no sequence the
+/// encoding accepts. a source the lexer accepted is walked without the fallback,
+/// which is what keeps a malformed byte from shortening the walk
+///
+/// the encoding read is the one that also holds a surrogate, because
+/// `decodeStringLiteral` writes a lone `\uD800` as the three bytes it stands
+/// for, and a reader that stopped at the byte after it would count a literal's
+/// length wrong
+pub fn decodeCodepoint(text: []const u8, index: usize) Codepoint {
+    const width = std.unicode.utf8ByteSequenceLength(text[index]) catch return .{ .codepoint = text[index], .width = 1 };
+    if (index + width > text.len) return .{ .codepoint = text[index], .width = 1 };
+    const codepoint = std.unicode.wtf8Decode(text[index..][0..width]) catch return .{ .codepoint = text[index], .width = 1 };
+    return .{ .codepoint = codepoint, .width = width };
+}
+
+/// the last code point below the astral planes, and the two counts a JavaScript
+/// string can hold for one code point: one UTF-16 code unit, or the surrogate
+/// pair the astral planes are held as
+const last_basic_plane_codepoint: u21 = 0xffff;
+const utf16_basic_units: usize = 1;
+const utf16_astral_units: usize = 2;
+
+/// the UTF-16 code units one code point occupies, which is what a JavaScript
+/// string's own `length` reads
+pub fn utf16Units(codepoint: u21) usize {
+    return if (codepoint > last_basic_plane_codepoint) utf16_astral_units else utf16_basic_units;
+}
+
+/// a cooked string literal's byte length and its length in UTF-16 code units
+pub const Cooked = struct {
+    len: usize,
+    units: usize,
+};
+
+/// what one escape sequence contributes to a cooked value
+const Escape = struct {
+    kind: Kind = .dropped,
+    /// the code point the sequence stands for, when it stands for one
+    codepoint: u21 = 0,
+    /// the characters the sequence reads as when it stands for no code point,
+    /// which is the sequence without its backslash
+    text: []const u8 = "",
+    /// how many bytes of the raw text the sequence occupies
+    length: usize = minimum_escape_length,
+
+    const Kind = enum { dropped, codepoint, text };
+};
+
+const escape_marker = '\\';
+const escape_marker_length = 1;
+/// the shortest escape there is: a backslash and the character it stands for
+const minimum_escape_length = escape_marker_length + 1;
+const maximum_codepoint_width = 4;
+const last_codepoint: u21 = 0x10ffff;
+const maximum_braced_digits = 6;
+/// the two line separators outside the ASCII set, which end a line rather than
+/// standing for themselves when a backslash precedes them
+const line_separator_codepoint: u21 = 0x2028;
+const paragraph_separator_codepoint: u21 = 0x2029;
+
+/// the value a string literal's raw source slice cooks to, with every escape
+/// replaced by the character it stands for
+///
+/// `raw` spans the delimiters, so a quoted literal passes its whole token text
+/// and a template passes the source from its opening backtick to its closing one
+/// `destination` must hold `raw.len` bytes, which is the longest a cooked value
+/// can be: every escape is at least as long as the character it stands for
+///
+/// the units count is what a JavaScript string's own `length` reads, and a
+/// rule's length gate is measured in those rather than in bytes, so a literal
+/// holding an astral character counts it twice
+///
+/// a lone surrogate is kept as the three bytes it stands for rather than
+/// replaced, so two different lone surrogates never cook to one value
+///
+/// the lexer accepts text the language does not, so a malformed escape reads as
+/// its own characters rather than aborting the walk
+pub fn decodeStringLiteral(destination: []u8, raw: []const u8) Cooked {
+    const delimiter_width = 1;
+    const content = if (raw.len >= 2 * delimiter_width) raw[delimiter_width .. raw.len - delimiter_width] else raw[0..0];
+
+    var written: usize = 0;
+    var units: usize = 0;
+    var index: usize = 0;
+    while (index < content.len) {
+        if (content[index] == escape_marker) {
+            const escape = readEscape(content, index);
+            switch (escape.kind) {
+                .dropped => {},
+                .codepoint => appendCodepoint(destination, &written, &units, escape.codepoint),
+                .text => appendText(destination, &written, &units, escape.text),
+            }
+            index += escape.length;
+            continue;
+        }
+        const decoded = decodeCodepoint(content, index);
+        appendText(destination, &written, &units, content[index..][0..decoded.width]);
+        index += decoded.width;
+    }
+    return .{ .len = written, .units = units };
+}
+
+/// the escape sequence beginning at the backslash at `start`, read the way the
+/// language reads it: the single character escapes, `\xHH`, `\uHHHH`, `\u{...}`,
+/// a backslash that ends a line contributing nothing, and any other character
+/// standing for itself
+///
+/// a high surrogate escape followed by a low surrogate escape spells one code
+/// point, which is what the two code units together are to a JavaScript string:
+/// a key that held them apart would read a character and its escaped spelling as
+/// two different values
+fn readEscape(content: []const u8, start: usize) Escape {
+    const escape = readSingleEscape(content, start);
+    if (escape.kind != .codepoint) return escape;
+    if (!isHighSurrogate(escape.codepoint)) return escape;
+
+    const next_start = start + escape.length;
+    if (next_start >= content.len or content[next_start] != escape_marker) return escape;
+    const next = readSingleEscape(content, next_start);
+    if (next.kind != .codepoint or !isLowSurrogate(next.codepoint)) return escape;
+
+    return .{
+        .kind = .codepoint,
+        .codepoint = combineSurrogates(escape.codepoint, next.codepoint),
+        .length = escape.length + next.length,
+    };
+}
+
+/// the first ten bits of a surrogate pair and the offset its halves carry
+const surrogate_shift: u21 = 10;
+const high_surrogate_start: u21 = 0xd800;
+const low_surrogate_start: u21 = 0xdc00;
+const low_surrogate_end: u21 = 0xdfff;
+/// where the astral planes begin, which is what a pair spells above the ten bits
+/// each half carries
+const astral_base: u21 = 0x10000;
+
+fn isHighSurrogate(codepoint: u21) bool {
+    return codepoint >= high_surrogate_start and codepoint < low_surrogate_start;
+}
+
+fn isLowSurrogate(codepoint: u21) bool {
+    return codepoint >= low_surrogate_start and codepoint <= low_surrogate_end;
+}
+
+/// the code point a high surrogate and the low surrogate after it spell
+fn combineSurrogates(high: u21, low: u21) u21 {
+    return astral_base + ((high - high_surrogate_start) << surrogate_shift) + (low - low_surrogate_start);
+}
+
+/// one escape sequence, without the pairing above
+fn readSingleEscape(content: []const u8, start: usize) Escape {
+    if (start + minimum_escape_length > content.len) return readStandaloneEscape(content, start);
+
+    return switch (content[start + escape_marker_length]) {
+        'n' => Escape{ .kind = .codepoint, .codepoint = '\n' },
+        't' => Escape{ .kind = .codepoint, .codepoint = '\t' },
+        'r' => Escape{ .kind = .codepoint, .codepoint = '\r' },
+        'b' => Escape{ .kind = .codepoint, .codepoint = 0x08 },
+        'f' => Escape{ .kind = .codepoint, .codepoint = 0x0c },
+        'v' => Escape{ .kind = .codepoint, .codepoint = 0x0b },
+        '0' => Escape{ .kind = .codepoint, .codepoint = 0 },
+        'x' => readHexEscape(content, start),
+        'u' => readUnicodeEscape(content, start),
+        // a backslash at the end of a line contributes nothing, and a carriage
+        // return carries its newline with it
+        '\r' => Escape{ .kind = .dropped, .length = if (start + 3 <= content.len and content[start + 2] == '\n') 3 else 2 },
+        '\n' => Escape{ .kind = .dropped, .length = 2 },
+        // any other character stands for itself, which covers the quotes, the
+        // backslash itself and a digit an octal escape would have used
+        else => readStandaloneEscape(content, start),
+    };
+}
+
+/// `\xHH`, exactly two hexadecimal digits
+fn readHexEscape(content: []const u8, start: usize) Escape {
+    const prefix_length = "\\x".len;
+    const digit_count = 2;
+    const value = readHexDigits(content, start + prefix_length, digit_count) orelse return readStandaloneEscape(content, start);
+    return .{ .kind = .codepoint, .codepoint = value, .length = prefix_length + digit_count };
+}
+
+/// `\uHHHH` or `\u{H...}`, the two spellings the language accepts, the second
+/// naming one code point in one to six digits
+///
+/// a braced escape past the last code point is not one the encoding can hold, so
+/// it reads as its own characters, and this is the only arm that has to say so:
+/// no other spelling of an escape reaches above the last code unit, and the pair
+/// of two surrogates spells at most the last code point
+fn readUnicodeEscape(content: []const u8, start: usize) Escape {
+    const prefix_length = "\\u".len;
+    const digits_start = start + prefix_length;
+    if (digits_start >= content.len or content[digits_start] != '{') {
+        const digit_count = 4;
+        const value = readHexDigits(content, digits_start, digit_count) orelse return readStandaloneEscape(content, start);
+        return .{ .kind = .codepoint, .codepoint = value, .length = prefix_length + digit_count };
+    }
+
+    const braced_start = digits_start + 1;
+    const closing = std.mem.indexOfScalarPos(u8, content, braced_start, '}') orelse return readStandaloneEscape(content, start);
+    const digit_count = closing - braced_start;
+    if (digit_count == 0 or digit_count > maximum_braced_digits) return readStandaloneEscape(content, start);
+    const value = readHexDigits(content, braced_start, digit_count) orelse return readStandaloneEscape(content, start);
+    if (value > last_codepoint) return readStandaloneEscape(content, start);
+    return .{ .kind = .codepoint, .codepoint = value, .length = closing + 1 - start };
+}
+
+/// `count` hexadecimal digits at `start`, or null when the text holds no such run
+fn readHexDigits(content: []const u8, start: usize, count: usize) ?u21 {
+    if (start + count > content.len) return null;
+    var value: u21 = 0;
+    for (content[start..][0..count]) |digit| {
+        const nibble = std.fmt.charToDigit(digit, 16) catch return null;
+        value = value * 16 + nibble;
+    }
+    return value;
+}
+
+/// a backslash with no escape of its own: the character after it stands for
+/// itself, which is also what the characters of a malformed escape are read as
+///
+/// a line separator after the backslash ends the line instead and contributes
+/// nothing, the way the newline and the carriage return above do
+fn readStandaloneEscape(content: []const u8, start: usize) Escape {
+    const text_start = start + escape_marker_length;
+    if (text_start >= content.len) return .{ .kind = .dropped, .length = content.len - start };
+    const decoded = decodeCodepoint(content, text_start);
+    const length = escape_marker_length + decoded.width;
+    if (decoded.codepoint == line_separator_codepoint or decoded.codepoint == paragraph_separator_codepoint) {
+        return .{ .kind = .dropped, .length = length };
+    }
+    return .{ .kind = .text, .text = content[text_start..][0..decoded.width], .length = length };
+}
+
+/// write `text` and count the UTF-16 units a JavaScript string adds for it
+fn appendText(destination: []u8, written: *usize, units: *usize, text: []const u8) void {
+    @memcpy(destination[written.*..][0..text.len], text);
+    written.* += text.len;
+    var index: usize = 0;
+    while (index < text.len) {
+        const decoded = decodeCodepoint(text, index);
+        units.* += utf16Units(decoded.codepoint);
+        index += decoded.width;
+    }
+}
+
+/// write one code point and count its UTF-16 units, keeping a code point the
+/// encoding holds only as a surrogate
+///
+/// the four bytes it may write are inside the buffer: a cooked value is never
+/// longer than the raw text it came from, so `written` sits at least the
+/// escape's own two bytes below the end of a buffer that holds the whole raw
+/// slice
+///
+/// the encoder refuses nothing: `readUnicodeEscape` is where an escape past the
+/// last code point stops being one, and every other reading of an escape is at
+/// most a code unit
+fn appendCodepoint(destination: []u8, written: *usize, units: *usize, codepoint: u21) void {
+    const width = std.unicode.wtf8Encode(codepoint, destination[written.*..][0..maximum_codepoint_width]) catch return;
+    written.* += width;
+    units.* += utf16Units(codepoint);
+}
+
+/// the cooked value of `raw`, allocated, with the caller's side of the decoder's
+/// contract checked as it goes
+fn cookedValue(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    const buffer = try allocator.alloc(u8, raw.len);
+    defer allocator.free(buffer);
+    const cooked = decodeStringLiteral(buffer, raw);
+    // a cooked value is never longer than the raw text, in bytes or in UTF-16
+    // units, which is what lets the decoder write one code point at a time into
+    // a buffer the size of the raw slice
+    try testing.expect(cooked.len <= raw.len);
+    try testing.expect(cooked.units <= cooked.len);
+    return allocator.dupe(u8, buffer[0..cooked.len]);
+}
+
+/// the UTF-16 length the decoder reads for `raw`
+fn cookedUnits(allocator: std.mem.Allocator, raw: []const u8) !usize {
+    const buffer = try allocator.alloc(u8, raw.len);
+    defer allocator.free(buffer);
+    return decodeStringLiteral(buffer, raw).units;
+}
+
+test "the decoder reads every escape the language spells" {
+    const a = testing.allocator;
+    const cases = [_]struct { raw: []const u8, cooked: []const u8 }{
+        // the delimiters come off, whichever the literal was written with
+        .{ .raw = "'plain'", .cooked = "plain" },
+        .{ .raw = "\"plain\"", .cooked = "plain" },
+        .{ .raw = "`plain`", .cooked = "plain" },
+        .{ .raw = "''", .cooked = "" },
+        // the single character escapes
+        .{ .raw = "'a\\nb'", .cooked = "a\nb" },
+        .{ .raw = "'a\\tb'", .cooked = "a\tb" },
+        .{ .raw = "'a\\rb'", .cooked = "a\rb" },
+        .{ .raw = "'a\\bb'", .cooked = "a\x08b" },
+        .{ .raw = "'a\\fb'", .cooked = "a\x0cb" },
+        .{ .raw = "'a\\vb'", .cooked = "a\x0bb" },
+        .{ .raw = "'a\\0b'", .cooked = "a\x00b" },
+        // the two digit and the four digit spellings, and the braced one, which
+        // names a code point rather than a code unit
+        .{ .raw = "'\\x41\\x7a'", .cooked = "Az" },
+        .{ .raw = "'\\u0041\\u007a'", .cooked = "Az" },
+        .{ .raw = "'\\u{41}\\u{7a}'", .cooked = "Az" },
+        .{ .raw = "'\\u{1f600}'", .cooked = "\u{1f600}" },
+        // a backslash before a character with no escape of its own stands for
+        // that character, which covers the quotes, the backslash, and a digit an
+        // octal escape would have used
+        .{ .raw = "'\\\\'", .cooked = "\\" },
+        .{ .raw = "'\\''", .cooked = "'" },
+        .{ .raw = "\"\\\"\"", .cooked = "\"" },
+        .{ .raw = "`\\``", .cooked = "`" },
+        .{ .raw = "'\\q'", .cooked = "q" },
+        .{ .raw = "'\\8'", .cooked = "8" },
+        // a backslash ending a line contributes nothing, carriage return
+        // included, and so does one before a line separator
+        .{ .raw = "'a\\\nb'", .cooked = "ab" },
+        .{ .raw = "'a\\\r\nb'", .cooked = "ab" },
+        .{ .raw = "'a\\\u{2028}b'", .cooked = "ab" },
+        // a code point written directly is the code point
+        .{ .raw = "'caf\u{e9}'", .cooked = "caf\u{e9}" },
+    };
+    for (cases) |case| {
+        const cooked = try cookedValue(a, case.raw);
+        defer a.free(cooked);
+        try testing.expectEqualStrings(case.cooked, cooked);
+    }
+}
+
+test "the decoder counts a literal's length in UTF-16 units" {
+    const a = testing.allocator;
+    const cases = [_]struct { raw: []const u8, units: usize }{
+        .{ .raw = "''", .units = 0 },
+        .{ .raw = "'abcd'", .units = 4 },
+        // an escape contributes the character it stands for rather than the
+        // bytes it is written with
+        .{ .raw = "'a\\nb'", .units = 3 },
+        .{ .raw = "'\\u0041'", .units = 1 },
+        // one code point written directly, in two bytes and in four
+        .{ .raw = "'\u{e9}'", .units = 1 },
+        .{ .raw = "'\u{1f600}'", .units = 2 },
+        // the astral planes by each spelling: a braced escape, a surrogate pair
+        // of two escapes, and a lone surrogate, which is one unit
+        .{ .raw = "'\\u{1f600}'", .units = 2 },
+        .{ .raw = "'\\u{10ffff}'", .units = 2 },
+        .{ .raw = "'\\uD83D\\uDE00'", .units = 2 },
+        .{ .raw = "'\\uD83D'", .units = 1 },
+    };
+    for (cases) |case| {
+        try testing.expectEqual(case.units, try cookedUnits(a, case.raw));
+    }
+}
+
+test "the decoder reads one value from either spelling of one literal" {
+    const a = testing.allocator;
+    const double_quoted = try cookedValue(a, "\"It's done.\"");
+    defer a.free(double_quoted);
+    const single_quoted = try cookedValue(a, "'It\\'s done.'");
+    defer a.free(single_quoted);
+
+    // a detector keying on the cooked value sees one string here, and a rule
+    // comparing the raw slices would see two
+    const expected = "It's done.";
+    try testing.expectEqualStrings(expected, double_quoted);
+    try testing.expectEqualStrings(expected, single_quoted);
+}
+
+test "the decoder keeps a lone surrogate as the three bytes it stands for" {
+    const a = testing.allocator;
+    const first = try cookedValue(a, "'\\uD800'");
+    defer a.free(first);
+    const second = try cookedValue(a, "'\\uD801'");
+    defer a.free(second);
+
+    const surrogate_bytes = 3;
+    try testing.expectEqual(surrogate_bytes, first.len);
+    try testing.expectEqual(surrogate_bytes, second.len);
+    // two lone surrogates are two values, which one replacement character for
+    // either of them would not produce
+    try testing.expect(!std.mem.eql(u8, first, second));
+
+    // and the two halves of a pair are not two characters: they spell one code
+    // point, in four bytes and two units
+    const pair = try cookedValue(a, "'\\uD83D\\uDE00'");
+    defer a.free(pair);
+    const astral_bytes = 4;
+    try testing.expectEqual(astral_bytes, pair.len);
+    try testing.expectEqualStrings("\u{1f600}", pair);
+}
+
+test "a malformed escape reads as its own characters rather than aborting the walk" {
+    const a = testing.allocator;
+    // the lexer skips an escape without reading it, so text the language rejects
+    // reaches the decoder, which reads it the way a reader of the source would
+    const cases = [_]struct { raw: []const u8, cooked: []const u8 }{
+        .{ .raw = "'\\xZZ'", .cooked = "xZZ" },
+        .{ .raw = "'\\x4'", .cooked = "x4" },
+        .{ .raw = "'\\uZZZZ'", .cooked = "uZZZZ" },
+        .{ .raw = "'\\u12'", .cooked = "u12" },
+        .{ .raw = "'\\u{}'", .cooked = "u{}" },
+        .{ .raw = "'\\u{'", .cooked = "u{" },
+        .{ .raw = "'\\u{110000}'", .cooked = "u{110000}" },
+        .{ .raw = "'\\u{1234567}'", .cooked = "u{1234567}" },
+        // a backslash with nothing after it stands for nothing
+        .{ .raw = "'\\", .cooked = "" },
+    };
+    for (cases) |case| {
+        const cooked = try cookedValue(a, case.raw);
+        defer a.free(cooked);
+        try testing.expectEqualStrings(case.cooked, cooked);
+    }
+}
+
 fn isModifier(text: []const u8) bool {
     return contains(&member_modifiers, text);
 }

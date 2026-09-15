@@ -684,19 +684,17 @@ const Collapsed = struct {
 /// the count is of UTF-16 code units rather than bytes or code points, because the detector
 /// measures a JavaScript string: an astral character counts twice there, and a body holding
 /// one would otherwise sit a unit apart from the detector across the gate
-/// the two lengths one code point takes in UTF-16: one unit below the astral planes and a
-/// surrogate pair at or above them, which is what a JavaScript string's `length` counts
-const utf16_basic_units: usize = 1;
-const utf16_astral_units: usize = 2;
-const last_basic_plane_codepoint: u21 = 0xffff;
-
+///
+/// the reader and the unit count are the front-end's, which is where the other reading of a
+/// literal's length lives: one formula for how a JavaScript string counts a code point, and
+/// one reader that holds a surrogate the way that reading needs it held
 fn collapseWhitespace(destination: []u8, text: []const u8) Collapsed {
     var written: usize = 0;
     var units: usize = 0;
     var pending_space = false;
     var index: usize = 0;
     while (index < text.len) {
-        const decoded = decodeAt(text, index);
+        const decoded = ts.decodeCodepoint(text, index);
         if (isJavaScriptSpace(decoded.codepoint)) {
             pending_space = true;
             index += decoded.width;
@@ -707,31 +705,15 @@ fn collapseWhitespace(destination: []u8, text: []const u8) Collapsed {
         if (pending_space and written > 0) {
             destination[written] = ' ';
             written += 1;
-            units += utf16_basic_units;
+            units += ts.utf16Units(' ');
         }
         pending_space = false;
         @memcpy(destination[written..][0..decoded.width], text[index..][0..decoded.width]);
         written += decoded.width;
-        units += if (decoded.codepoint > last_basic_plane_codepoint) utf16_astral_units else utf16_basic_units;
+        units += ts.utf16Units(decoded.codepoint);
         index += decoded.width;
     }
     return .{ .len = written, .units = units };
-}
-
-/// one code point of a UTF-8 slice and the bytes it occupies
-const Codepoint = struct {
-    codepoint: u21,
-    width: usize,
-};
-
-/// the code point at `index`, or the byte itself when it begins no sequence the encoding
-/// accepts a source the lexer accepted is walked without the fallback, which is what keeps
-/// a malformed byte from shortening the walk
-fn decodeAt(text: []const u8, index: usize) Codepoint {
-    const width = std.unicode.utf8ByteSequenceLength(text[index]) catch return .{ .codepoint = text[index], .width = 1 };
-    if (index + width > text.len) return .{ .codepoint = text[index], .width = 1 };
-    const codepoint = std.unicode.utf8Decode(text[index..][0..width]) catch return .{ .codepoint = text[index], .width = 1 };
-    return .{ .codepoint = codepoint, .width = width };
 }
 
 /// the unicode spaces `/\s/` matches beyond the ASCII set: the no-break space, the ogham
