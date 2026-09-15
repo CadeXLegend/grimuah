@@ -831,19 +831,37 @@ const non_reference_lookup = std.StaticStringMap(void).initComptime(init: {
     break :init entries;
 });
 
-/// where a type expression ends at depth 0. the two stop sets differ only in
-/// `{`: in most positions a brace *starts* an object type, but after a return
-/// annotation or `implements` it starts the body, so the type has to stop there.
-/// an object *type* in those positions (`(): {a: number} => x`) is read as a body
-/// instead, a known gap the corpus records
+/// where a type expression ends at depth 0. the stop sets differ in two places: a
+/// `{` *starts* an object type in most positions but starts the body after a
+/// return annotation, and a `=>` ends the type wherever it does not belong to a
+/// function type. an object *type* in a body position (`(): {a: number} => x`) is
+/// read as a body instead, a known gap the corpus records
+///
+/// a type can spell a `=>` of its own, because that is how a function type is
+/// written, so "ends at a `=>`" is only true of the one annotation whose `=>`
+/// really does own the body
 const TypeStop = enum {
-    /// a declarator's own annotation, `const x: T = value`
-    /// the `{` that follows `:` is an
-    /// object type like any other annotation's, but a `=>` inside this one is a function
-    /// type's arrow rather than the arrow that owns a body, so the annotation runs to the
-    /// `=` that introduces the value
-    declaration_annotation,
+    /// an annotation a value can follow: a declarator's own (`const x: T = value`), a
+    /// parameter's default, or a member's initializer
+    /// its `{` is an object type like any other annotation's, and it ends at the `=`
+    /// that introduces the value, so a `=>` inside it is a function type's arrow
+    annotation_before_value,
+    /// a return annotation, where the `{` after the type starts the body rather than an
+    /// object type
+    /// a `=>` inside it is still a function type's arrow, because the token that owns
+    /// the body is the brace
+    return_annotation,
+    /// a type in every other position, where `{` starts an object type
     brace_starts_object,
+    /// the one place a `=>` owns the body: an arrow's own return annotation, where what
+    /// follows the type is the arrow that introduces the body rather than a brace
+    ///
+    /// an arrow cannot read `return_annotation`, because `(x): (y: number) => number => y`
+    /// spells its own annotation with a `=>` too and telling the type's arrow from the
+    /// body's needs the type grammar rather than the token stream, so the token reader's
+    /// reading stays and the shape is a known gap. an `implements` clause reads this too,
+    /// and reads the same either way, because a `=>` cannot stand in a heritage list at
+    /// depth 0
     brace_starts_body,
 };
 
@@ -870,14 +888,22 @@ fn isTypeStop(stop: TypeStop, text: []const u8) bool {
     if (text.len == 0) return false;
     return switch (text[0]) {
         ',', ';', ':', '?', '+', '-', '*', '/', '%', '~', '^' => text.len == 1,
-        // `=` introduces a declarator's value, and a `=>` is one token further in: a
-        // declared type can hold `=>` as a function type's arrow, which only a return
-        // annotation stops at, because there the arrow is the one that owns the body
-        '=' => if (stop == .declaration_annotation) text.len == 1 else text.len <= 3,
+        // `=` introduces a value, and a `=>` is one token further in: only an annotation
+        // whose `=` really does introduce a value stops at the bare `=`, so the shapes
+        // that hold a function type run past the type's own arrow
+        '=' => switch (stop) {
+            .annotation_before_value, .return_annotation => text.len == 1,
+            .brace_starts_object, .brace_starts_body => text.len <= 3,
+        },
         '!' => text.len <= 3, // `!`, `!=`, `!==`
         '&' => text.len == 2, // `&&`; `&` is a type operator
         '|' => text.len == 2, // `||`; `|` is a type operator
-        '{' => stop == .brace_starts_body,
+        // a brace opens an object type wherever the body cannot follow, and starts the body
+        // in the two positions where it can
+        '{' => switch (stop) {
+            .return_annotation, .brace_starts_body => true,
+            .annotation_before_value, .brace_starts_object => false,
+        },
         else => false,
     };
 }
@@ -1196,7 +1222,7 @@ const Parser = struct {
             try self.parseBindingTarget(node);
             if (self.atPunct(":")) {
                 self.pos += 1;
-                self.skipType(.declaration_annotation);
+                self.skipType(.annotation_before_value);
             }
             if (self.atPunct("=")) {
                 const value_from = self.begin();
@@ -1291,7 +1317,7 @@ const Parser = struct {
         try self.parseParameterList(node);
         if (self.atPunct(":")) {
             self.pos += 1;
-            self.skipType(.brace_starts_body);
+            self.skipType(.return_annotation);
         }
         if (self.atPunct("{")) {
             const body = try self.parseBlock();
@@ -1336,7 +1362,7 @@ const Parser = struct {
                     const value = try self.parseExpression();
                     self.module.appendChild(parent, value);
                 } else {
-                    self.skipType(.brace_starts_object);
+                    self.skipType(.annotation_before_value);
                 }
                 continue;
             }
@@ -1428,7 +1454,7 @@ const Parser = struct {
                 try self.parseParameterList(member);
                 if (self.atPunct(":")) {
                     self.pos += 1;
-                    self.skipType(.brace_starts_body);
+                    self.skipType(.return_annotation);
                 }
                 if (self.atPunct("{")) {
                     const body = try self.parseBlock();
@@ -1440,7 +1466,7 @@ const Parser = struct {
 
             if (self.atPunct(":")) {
                 self.pos += 1;
-                self.skipType(.brace_starts_object);
+                self.skipType(.annotation_before_value);
             }
             if (self.atPunct("=")) {
                 self.pos += 1;
@@ -2029,7 +2055,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 try self.parseParameterList(node);
                 if (self.atPunct(":")) {
                     self.pos += 1;
-                    self.skipType(.brace_starts_body);
+                    self.skipType(.return_annotation);
                 }
                 if (self.atPunct("{")) {
                     const body = try self.parseBlock();
@@ -2325,7 +2351,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     try self.parseParameterList(method);
                     if (self.atPunct(":")) {
                         self.pos += 1;
-                        self.skipType(.brace_starts_body);
+                        self.skipType(.return_annotation);
                     }
                     if (self.atPunct("{")) {
                         const body = try self.parseBlock();
@@ -2655,6 +2681,115 @@ test "parse keeps a function body that follows a return annotation" {
     const statement = module.firstChildOf(body.?);
     try testing.expect(statement != null);
     try testing.expectEqual(ir.Kind.return_stmt, module.kindOf(statement.?));
+}
+
+test "parse reads a return annotation that spells a function type, and still stops at the body" {
+    const a = testing.allocator;
+    // the annotation holds a `=>` of its own, because that is how a function type is
+    // spelled, and the token that owns the body is still the `{`
+    // reading the annotation's `=>` as the body's ended the type at the arrow, left the
+    // method without a body and re-parsed what followed as class member syntax, which
+    // orphaned a node and took the whole process down in `walkOrder`
+    //
+    // `unsupported` is the assertion that catches an orphan: `unknownCount` reaches only
+    // what hangs off the root, and the unmodelled `=>` was never appended to a parent
+    const source =
+        \\class Ledger {
+        \\  private handler: (value: number) => number;
+        \\
+        \\  private formatter: (value: number) => string = (value) => String(value);
+        \\
+        \\  m(): (value: number) => number {
+        \\    return (value) => value + 1;
+        \\  }
+        \\}
+        \\
+        \\function returnsFn(): (value: number) => number {
+        \\  return (value) => value + 1;
+        \\}
+        \\
+    ;
+    var module = try parse(a, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(u32, 0), module.unsupported);
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    // the member's own annotation is a type rather than a body, so the class holds exactly
+    // the one block its method declares
+    var blocks: usize = 0;
+    var declarations: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) == .block) blocks += 1;
+        if (module.kindOf(index) != .function_decl) continue;
+        declarations += 1;
+        const body = module.bodyOf(index);
+        try testing.expect(body != null);
+        try testing.expectEqual(ir.Kind.block, module.kindOf(body.?));
+        const statement = module.firstChildOf(body.?);
+        try testing.expect(statement != null);
+        try testing.expectEqual(ir.Kind.return_stmt, module.kindOf(statement.?));
+    }
+    try testing.expectEqual(@as(usize, 2), declarations);
+    try testing.expectEqual(@as(usize, 2), blocks);
+
+    // and the annotation runs to its own last token, so the member that carries one keeps
+    // the arrow its `=` introduces
+    var initializer: ?ir.NodeIndex = null;
+    var second = module.iterator();
+    while (second.next()) |index| {
+        if (module.kindOf(index) == .arrow) {
+            if (initializer == null) initializer = index;
+        }
+    }
+    try testing.expect(initializer != null);
+    const default_body = module.bodyOf(initializer.?) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("String(value)", module.expressionText(default_body));
+}
+
+test "parse consumes a parameter's function-type annotation, and names no binding from it" {
+    const a = testing.allocator;
+    // the annotation ends at the `=` that introduces the default, and the `=>` inside it is
+    // the type's own arrow
+    // stopping at the arrow left the type's tail to the parameter list, which read
+    // `string` as a second parameter's name
+    const source =
+        \\function withDefault(
+        \\  formatter: (value: number) => string = (value) => String(value),
+        \\): string {
+        \\  return formatter(1);
+        \\}
+        \\
+    ;
+    var module = try parse(a, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(u32, 0), module.unsupported);
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    // `formatter` is the parameter and `value` belongs to the default's own arrow: the
+    // declared type contributes no name at all
+    // the array takes more than the two are, so a third name fails the
+    // count rather than a bounds guard
+    var names: [4][]const u8 = undefined;
+    var found: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        const node = module.nodeOf(index);
+        if (node.binding != .parameter) continue;
+        try testing.expect(found < names.len);
+        names[found] = node.name;
+        found += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), found);
+    std.mem.sort([]const u8, names[0..found], {}, struct {
+        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+            return std.mem.lessThan(u8, left, right);
+        }
+    }.lessThan);
+    try testing.expectEqualStrings("formatter", names[0]);
+    try testing.expectEqualStrings("value", names[1]);
 }
 
 test "parse ends a semicolon-less type alias at the next statement" {
