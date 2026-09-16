@@ -1,7 +1,7 @@
 const std = @import("std");
 const ts = @import("../lang/ts.zig");
 
-/// token-level helpers shared by the rules that read the token stream
+/// token and literal-text helpers shared by the rules and the engine
 ///
 /// these are the readers the rules were checked against the biome engine with
 /// while it was the oracle, moved here
@@ -10,15 +10,8 @@ const ts = @import("../lang/ts.zig");
 
 pub const Token = ts.Token;
 
-/// one literal site's raw source slice, spanning its delimiters, and the token index to
-/// carry on from
-pub const LiteralSite = struct {
-    raw: []const u8,
-    next: usize,
-};
-
-/// the literal site at `index`, or null when the token begins no literal the detectors'
-/// `ts.isStringLiteralLike` covers
+/// the raw source slice of the literal site at `index`, spanning its delimiters, or null
+/// when the token begins no literal the detectors' `ts.isStringLiteralLike` covers
 ///
 /// a quoted literal is its own token, and a template with no substitution is a `.template`
 /// followed by its closing `.template_end`, whose two spans together give the raw text in
@@ -27,20 +20,47 @@ pub const LiteralSite = struct {
 /// followed by the container's own tokens, and `ts.isStringLiteral` is false of a
 /// TemplateExpression as well
 ///
-/// the caller decodes `raw` with `ts.decodeStringLiteral`, whose destination must hold
-/// `raw.len` bytes, and `next` is where a walk of the stream carries on
-pub fn literalSite(tokens: []const Token, source: []const u8, index: usize) ?LiteralSite {
+/// the caller decodes the slice with `ts.decodeStringLiteral`, whose destination must hold
+/// `raw.len` bytes. it advances one token whatever the answer, because the token a site
+/// ends on, a closing `.template_end`, is no site itself
+pub fn literalSite(tokens: []const Token, source: []const u8, index: usize) ?[]const u8 {
     const token = tokens[index];
     switch (token.kind) {
-        .string => return .{ .raw = token.text, .next = index + 1 },
+        .string => return token.text,
         .template => {
             if (index + 1 >= tokens.len) return null;
             const closing = tokens[index + 1];
             if (closing.kind != .template_end) return null;
-            return .{ .raw = source[token.start..closing.end], .next = index + 2 };
+            return source[token.start..closing.end];
         },
         else => return null,
     }
+}
+
+/// the unicode spaces ``/\s/`` matches beyond the ASCII set: the no-break space, the ogham
+/// space, the two line separators, the narrow no-break space, the medium mathematical
+/// space, the ideographic space, and the byte-order mark
+const java_script_spaces = [_]u21{ 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff };
+
+/// the last ASCII code point, and the en-to-hair space run JavaScript folds with the ASCII
+/// whitespace. naming both keeps the two bounds of `isJavaScriptSpace` visible
+const last_ascii_codepoint: u21 = 0x7f;
+const first_en_space_codepoint: u21 = 0x2000;
+const last_hair_space_codepoint: u21 = 0x200a;
+
+/// whether `/\s/` matches a code point, which is the ASCII set the tokenizer's own predicate
+/// covers plus the unicode spaces above and the en-to-hair space run
+///
+/// the detectors read a literal's text with JavaScript's `\s`, so a rule that keys, folds or
+/// tests for whitespace has to use this set rather than the ASCII one: the engine's collapse
+/// and the literal rules all read it here
+pub fn isJavaScriptSpace(codepoint: u21) bool {
+    if (codepoint <= last_ascii_codepoint) return std.ascii.isWhitespace(@intCast(codepoint));
+    if (codepoint >= first_en_space_codepoint and codepoint <= last_hair_space_codepoint) return true;
+    for (java_script_spaces) |candidate| {
+        if (codepoint == candidate) return true;
+    }
+    return false;
 }
 
 /// `[a-zA-Z] [a-zA-Z]` anywhere in the text, which is the copy detectors' own test for a

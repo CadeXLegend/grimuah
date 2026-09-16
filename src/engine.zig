@@ -696,7 +696,7 @@ fn collapseWhitespace(destination: []u8, text: []const u8) Collapsed {
     var index: usize = 0;
     while (index < text.len) {
         const decoded = ts.decodeCodepoint(text, index);
-        if (isJavaScriptSpace(decoded.codepoint)) {
+        if (rule_tokens.isJavaScriptSpace(decoded.codepoint)) {
             pending_space = true;
             index += decoded.width;
             continue;
@@ -715,29 +715,6 @@ fn collapseWhitespace(destination: []u8, text: []const u8) Collapsed {
         index += decoded.width;
     }
     return .{ .len = written, .units = units };
-}
-
-/// the unicode spaces `/\s/` matches beyond the ASCII set: the no-break space, the ogham
-/// space, the two line separators, the narrow no-break space, the medium mathematical
-/// space, the ideographic space, and the byte-order mark
-const java_script_spaces = [_]u21{ 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff };
-
-/// the last ASCII code point, and the en-to-hair space run JavaScript folds with the ASCII
-/// whitespace. naming both keeps the two bounds of `isJavaScriptSpace` visible
-const last_ascii_codepoint: u21 = 0x7f;
-const first_en_space_codepoint: u21 = 0x2000;
-const last_hair_space_codepoint: u21 = 0x200a;
-
-/// whether `/\s/` matches a code point, which is the ASCII set the tokenizer's own
-/// predicate covers plus the unicode spaces above and the en-to-hair space run a body
-/// holding one would otherwise key differently from the detector's
-fn isJavaScriptSpace(codepoint: u21) bool {
-    if (codepoint <= last_ascii_codepoint) return std.ascii.isWhitespace(@intCast(codepoint));
-    if (codepoint >= first_en_space_codepoint and codepoint <= last_hair_space_codepoint) return true;
-    for (java_script_spaces) |candidate| {
-        if (codepoint == candidate) return true;
-    }
-    return false;
 }
 
 /// how many distinct files of the run declare each function body
@@ -827,7 +804,7 @@ fn startsStatementText(cooked: []const u8) bool {
     var index: usize = 0;
     while (index < cooked.len) {
         const decoded = ts.decodeCodepoint(cooked, index);
-        if (!isJavaScriptSpace(decoded.codepoint)) break;
+        if (!rule_tokens.isJavaScriptSpace(decoded.codepoint)) break;
         index += decoded.width;
     }
 
@@ -925,16 +902,16 @@ fn collectCopySites(
     var index: usize = 0;
     while (index < tokens.len) {
         const line = tokens[index].line;
-        const site = rule_tokens.literalSite(tokens, source, index) orelse {
+        const raw = rule_tokens.literalSite(tokens, source, index) orelse {
             index += 1;
             continue;
         };
-        index = site.next;
+        index += 1;
 
         // the cooked value is never longer than the raw text, so one buffer holds it
-        const buffer = try allocator.alloc(u8, site.raw.len);
+        const buffer = try allocator.alloc(u8, raw.len);
         defer allocator.free(buffer);
-        const cooked = ts.decodeStringLiteral(buffer, site.raw);
+        const cooked = ts.decodeStringLiteral(buffer, raw);
         if (cooked.units < rules.minimum_duplicated_copy_length) continue;
         const value = buffer[0..cooked.len];
         if (!rule_tokens.hasLettersAroundSpace(value)) continue;
@@ -1688,9 +1665,10 @@ test "a specifier resolves by its path, and only a relative one is an edge" {
 /// written with one of them keys differently from the detector's, so a missed member splits
 /// one group into two and moves the rule's whole site set
 ///
-/// the ASCII half is `std.ascii.isWhitespace` and the rest is `java_script_spaces` plus the
-/// en-to-hair run, spelled out here as the spec rather than read back from the
-/// implementation, so a change to either list fails this test instead of agreeing with it
+/// the ASCII half is `std.ascii.isWhitespace` and the rest is the unicode list
+/// `src/rules/tokens.zig` holds plus the en-to-hair run, spelled out here as the spec rather
+/// than read back from the implementation, so a change to either list fails this test instead
+/// of agreeing with it
 const foldable_spaces = [_]u21{
     0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x0020, // the ASCII whitespace
     0x00a0, // the no-break space

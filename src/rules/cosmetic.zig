@@ -1,6 +1,8 @@
 const std = @import("std");
 const root = @import("../rules.zig");
 const tokens_mod = @import("tokens.zig");
+const ir = @import("../ir.zig");
+const ts = @import("../lang/ts.zig");
 
 const Token = tokens_mod.Token;
 
@@ -174,8 +176,10 @@ test "a sentence written in three files is reported in each of them, and the sha
     //   `Nothing is playing. 🎵` is 20 letters and a space plus one astral character, which
     //     is 22 UTF-16 units in 24 bytes: a gate measured in bytes, or read as the cooked
     //     byte length, admits it and three rows appear
-    //   `Right now this one is busy.` is written twice in one file and once in another, which
-    //     is two distinct files: the count is of FILES, so the repeat counts once
+    //   `Right now this one is busy` is written twice in one file and once in another, which
+    //     is two distinct files: the count is of FILES, so the repeat counts once. it carries
+    //     no terminal punctuation on purpose, so it stays the inline-repeat rule's exclusion
+    //     rather than adding its rows to this test
     //   a 31-unit literal of digits and a space holds no two letters around one
     //   `Right now this one is ${value} busy.` is a TemplateExpression, which
     //     `StringLiteralLike` is false of: its opening backtick is followed by the
@@ -185,8 +189,8 @@ test "a sentence written in three files is reported in each of them, and the sha
         .{ .path = "src/messages/a.service.ts", .content =
         \\export const atLimit = "Nothing is playing here.";
         \\export const underLimit = "Nothing is playing now.";
-        \\export const repeated = "Right now this one is busy.";
-        \\export const doubled = "Right now this one is busy.";
+        \\export const repeated = "Right now this one is busy";
+        \\export const doubled = "Right now this one is busy";
         \\export const identifiers = "123456789012345678901234567 890";
         \\export const plain = `Right now this one is idle.`;
         \\export const dynamic = `Right now this one is ${value} busy.`;
@@ -197,7 +201,7 @@ test "a sentence written in three files is reported in each of them, and the sha
         .{ .path = "src/messages/b.service.ts", .content =
         \\export const atLimit = "Nothing is playing here.";
         \\export const underLimit = "Nothing is playing now.";
-        \\export const repeated = "Right now this one is busy.";
+        \\export const repeated = "Right now this one is busy";
         \\export const identifiers = "123456789012345678901234567 890";
         \\export const plain = `Right now this one is idle.`;
         \\export const dynamic = `Right now this one is ${value} busy.`;
@@ -228,4 +232,185 @@ test "a sentence written in three files is reported in each of them, and the sha
         "src/messages/c.service.ts:1: " ++ message,
         "src/messages/c.service.ts:4: " ++ message,
     });
+}
+
+/// the shortest cooked copy an inline repeat counts, in UTF-16 code units, which is what a
+/// JavaScript string's own `length` reads
+const minimum_inline_copy_length = 8;
+
+/// how many occurrences of one sentence inside one file make the repeat a defect
+const minimum_inline_occurrences = 2;
+
+/// one occurrence of a sentence inside the file being read
+const InlineCopySite = struct {
+    /// the cooked value, which is the key the file's own occurrences are grouped by
+    key: []const u8,
+    /// the line the literal starts on, which is where the detector reports
+    line: u32,
+};
+
+/// a sentence written more than once inside one file
+///
+/// this is the only rule of the literal group with no index at all: the detector's verdict is
+/// the file's, so the file's own occurrences are grouped as it is read and no other file of
+/// the run can change the answer
+///
+/// a `.config.ts` is where the sentence belongs rather than where a repeat is a duplicate,
+/// and a `.d.ts` declares no copy at all, so both files are skipped whole, which is the
+/// detector's own two exclusions
+pub fn checkRepeatedInlineCopy(context: *const root.Context) !void {
+    if (std.mem.endsWith(u8, context.path, ".config.ts")) return;
+    if (std.mem.endsWith(u8, context.path, ".d.ts")) return;
+
+    // the file's own memory: a site's key is only needed until the rows are handed on, and
+    // an arena releases the whole set in one step
+    var arena = std.heap.ArenaAllocator.init(context.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // the import statements, whose specifiers the detector excludes by their parent. one
+    // array of spans answers that for every literal in the file
+    var import_spans: std.ArrayList(ir.Span) = .empty;
+    if (context.module) |module| {
+        for (context.walk) |entry| {
+            if (entry.kind != .import_decl) continue;
+            try import_spans.append(allocator, module.spanOf(entry.index));
+        }
+    }
+
+    var sites: std.ArrayList(InlineCopySite) = .empty;
+    var index: usize = 0;
+    while (index < context.tokens.len) {
+        const token = context.tokens[index];
+        const raw = tokens_mod.literalSite(context.tokens, context.source, index) orelse {
+            index += 1;
+            continue;
+        };
+        index += 1;
+        if (insideImportSpecifier(import_spans.items, token.start)) continue;
+        const key = (try inlineCopyKey(allocator, raw)) orelse continue;
+        try sites.append(allocator, .{ .key = key, .line = token.line });
+    }
+
+    for (sites.items) |site| {
+        if (countOccurrences(sites.items, site.key) < minimum_inline_occurrences) continue;
+        try context.report(site.line, .cosmetic, root.repeated_inline_copy, .warn);
+    }
+}
+
+/// the cooked key of a literal site, or null when the detector collects no copy from it: a
+/// value under eight UTF-16 code units, one holding no whitespace, and one that does not end
+/// in terminal punctuation are all out of scope, and the last is the project's own marker for
+/// a sentence rather than a log line
+fn inlineCopyKey(allocator: std.mem.Allocator, raw: []const u8) !?[]const u8 {
+    const buffer = try allocator.alloc(u8, raw.len);
+    const cooked = ts.decodeStringLiteral(buffer, raw);
+    const value = buffer[0..cooked.len];
+    if (cooked.units < minimum_inline_copy_length) return null;
+    if (!holdsWhitespace(value)) return null;
+    if (!endsSentence(value)) return null;
+    return value;
+}
+
+/// whether the detector's `/\s/` matches anywhere in the text, which is what keeps a key or
+/// an id with no whitespace in it out of the rule
+fn holdsWhitespace(text: []const u8) bool {
+    var index: usize = 0;
+    while (index < text.len) {
+        const decoded = ts.decodeCodepoint(text, index);
+        if (tokens_mod.isJavaScriptSpace(decoded.codepoint)) return true;
+        index += decoded.width;
+    }
+    return false;
+}
+
+/// the detector's `/[.!?]$/`: the last character is sentence punctuation, and a multi-byte
+/// character never is
+fn endsSentence(text: []const u8) bool {
+    if (text.len == 0) return false;
+    const last = text[text.len - 1];
+    return last == '.' or last == '!' or last == '?';
+}
+
+/// whether an offset lies inside an import statement, which is the detector's
+/// `parent is ImportDeclaration`: the front-end consumes a specifier into the statement's own
+/// name and builds no node for it, so the specifier is the only literal whose token lies
+/// inside an `import_decl`
+fn insideImportSpecifier(spans: []const ir.Span, offset: u32) bool {
+    for (spans) |span| {
+        if (offset >= span.start and offset < span.end) return true;
+    }
+    return false;
+}
+
+/// how many of the file's sites carry `key`, which is what tells a repeat from a mention
+/// the file's own sites are few, so a scan of them is cheaper than a map
+fn countOccurrences(sites: []const InlineCopySite, key: []const u8) u32 {
+    var occurrences: u32 = 0;
+    for (sites) |site| {
+        if (std.mem.eql(u8, site.key, key)) occurrences += 1;
+    }
+    return occurrences;
+}
+
+test "a sentence written twice in one file is reported at both copies, and the shapes the detector leaves alone are not" {
+    // every literal here is written twice, so one that reports no row is one the detector's
+    // own gates excluded rather than one that only appears once
+    // the pairs that report:
+    //   `Nothing is playing now.` is an ordinary sentence
+    //   `Yes, ok.` is exactly eight UTF-16 code units, which is the length gate's own
+    //     boundary: a gate at nine drops this pair and one at seven adds the pair below
+    //   a backtick literal with no substitution is a `StringLiteralLike`, so `Nothing is
+    //     playing here.` is a site
+    // the pairs that do not:
+    //   `Not ok.` is seven units, one under the gate
+    //   `Nowhere.` holds no whitespace at all, which is what keeps a key or an id out
+    //   `Nothing is playing now` does not end in the project's terminal punctuation
+    //   `Ok 🎵!` is 6 UTF-16 units in 8 bytes: a gate read as the cooked byte length, or
+    //     measured in bytes, admits it and two rows appear
+    //   `./a sentence.` is the specifier of an import statement, which the detector excludes
+    //     by the literal's parent
+    //   the substituted template is a TemplateExpression, whose opening backtick is followed
+    //     by the container's own token rather than by the closing one
+    const message = root.repeated_inline_copy;
+    const source =
+        \\import alice from "./a sentence.";
+        \\import bob from "./a sentence.";
+        \\export const first = "Nothing is playing now.";
+        \\export const second = "Nothing is playing now.";
+        \\export const once = "Something else is playing now.";
+        \\export const under = "Not ok.";
+        \\export const underAgain = "Not ok.";
+        \\export const boundary = "Yes, ok.";
+        \\export const boundaryAgain = "Yes, ok.";
+        \\export const spaceless = "Nowhere.";
+        \\export const spacelessAgain = "Nowhere.";
+        \\export const unpunctuated = "Nothing is playing now";
+        \\export const unpunctuatedAgain = "Nothing is playing now";
+        \\export const templated = `Nothing is playing here.`;
+        \\export const templatedAgain = `Nothing is playing here.`;
+        \\export const substituted = `Nothing is playing ${value} now.`;
+        \\export const substitutedAgain = `Nothing is playing ${value} now.`;
+        \\export const astral = "Ok 🎵!";
+        \\export const astralAgain = "Ok 🎵!";
+        \\
+    ;
+    try probe.expect(.cosmetic, "probe.ts", source, &.{
+        "3: " ++ message,
+        "4: " ++ message,
+        "8: " ++ message,
+        "9: " ++ message,
+        "14: " ++ message,
+        "15: " ++ message,
+    });
+}
+
+test "the two files the detector skips whole are skipped here too" {
+    const source =
+        \\export const first = "Nothing is playing now.";
+        \\export const second = "Nothing is playing now.";
+        \\
+    ;
+    try probe.expect(.cosmetic, "probe.d.ts", source, &.{});
+    try probe.expect(.cosmetic, "probe.config.ts", source, &.{});
 }

@@ -133,3 +133,9 @@ occurrences, and its threshold is three, so a pair of files reports nothing at a
 sentence the three share reports one row per file, at the literal's own line, and the
 second sentence the fixture holds is written into two of the three on purpose, which is
 the exclusion that pair pins
+
+`no-repeated-inline-copy.ts` is the corpus's only single-file copy fixture, and the
+sentence it holds is written twice inside the one module on purpose: this rule's verdict
+is the file's, so no second file takes part in it. the sentence is deliberately one no
+other fixture writes, because the cross-file copy rule counts distinct files and would
+report on this one too

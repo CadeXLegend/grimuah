@@ -529,6 +529,7 @@ pub const export_without_consumer = "`{s}` is exported but no other module names
 pub const duplicated_function_body = "`{s}` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.";
 pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
 pub const duplicated_user_facing_copy = "This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.";
+pub const repeated_inline_copy = "This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.";
 
 /// the shortest cooked copy the duplicate-copy rule counts, in UTF-16 code units, which is
 /// what a JavaScript string's own `length` reads. it is the detector's own gate, and the
@@ -869,6 +870,14 @@ pub const all = [_]Rule{
         .oracle = false,
         .needs_copy_owners = true,
         .resolve_fingerprints = cosmetic.checkDuplicatedUserFacingCopy,
+    },
+    .{
+        .layer = .cosmetic,
+        .severity = .warn,
+        .message = repeated_inline_copy,
+        .syntax = .ir,
+        .oracle = false,
+        .match = cosmetic.checkRepeatedInlineCopy,
     },
     .{
         .layer = .hygiene,
