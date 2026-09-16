@@ -139,3 +139,13 @@ sentence it holds is written twice inside the one module on purpose: this rule's
 is the file's, so no second file takes part in it. the sentence is deliberately one no
 other fixture writes, because the cross-file copy rule counts distinct files and would
 report on this one too
+
+`literal-duplicating-config-value.config.ts` and `literal-duplicating-config-value.ts`
+are the corpus's only same-stem pair BEYOND the two `.config.ts` fixtures that already
+exist, and they are the fourth literal rule's whole world: the config declares the values,
+the consumer retypes two of them and names one nothing declares, and the rule pairs the two
+by the consuming file's own path minus `.ts`. the config's name is what makes the pair work:
+a config is read as the sibling of the one module whose name it shares, so a directory
+neighbour's values never match. the pair also carries three rows between them, not two: the
+config's enum is exported and the consumer does not name it yet, which is the defect the
+rule describes rather than a separate one

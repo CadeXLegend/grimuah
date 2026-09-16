@@ -414,3 +414,219 @@ test "the two files the detector skips whole are skipped here too" {
     try probe.expect(.cosmetic, "probe.d.ts", source, &.{});
     try probe.expect(.cosmetic, "probe.config.ts", source, &.{});
 }
+
+/// the surface a consuming file reads its config from, which is its own path minus `.ts`
+/// the convention is the file's name rather than its directory: `afk.service.ts` reads the
+/// values of `afk.service.config.ts` and no other config, which is what keeps a directory
+/// neighbour's values from matching. a path that does not end in `.ts` keeps its own name,
+/// which is what the detector's `replace(/\.ts$/, "")` does with it
+fn surfaceOfConsumer(path: []const u8) []const u8 {
+    const suffix = ".ts";
+    if (std.mem.endsWith(u8, path, suffix)) return path[0 .. path.len - suffix.len];
+    return path;
+}
+
+/// a literal that retypes a value the surface's own `.config.ts` declares
+///
+/// the enum is the single source of truth for the value, and the literal is a second copy
+/// the compiler cannot keep in step: changing the enum leaves the literal comparing against
+/// the old text, and a reader cannot tell whether the match is deliberate or whether it used
+/// to be a different value
+///
+/// the detector's `detect` opens by returning no row for a `.config.ts` or a `.d.ts`, and both
+/// skips are mirrored here whole
+/// they are FAITHFULNESS guards rather than behaviour ones, and the mutation check proved it:
+/// the surface key already answers `none` for both files, because `x.config.ts` and `x.d.ts`
+/// minus `.ts` are `x.config` and `x.d`, and the only configs that could declare those surfaces
+/// are `x.config.config.ts` and `x.d.config.ts`. they stay because the spec makes the pair, so a
+/// future change to the surface convention cannot silently drop an exclusion
+/// a surface with no config of its own reports nothing, which is a lookup that finds no
+/// surface rather than a rule about directories
+pub fn checkLiteralDuplicatingConfigValue(
+    allocator: std.mem.Allocator,
+    index: *const root.FingerprintIndex,
+    project: *const root.Project,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    if (std.mem.endsWith(u8, path, ".config.ts")) return;
+    if (std.mem.endsWith(u8, path, ".d.ts")) return;
+
+    const values = index.config_values.get(surfaceOfConsumer(path)) orelse return;
+    for (project.literal_values.items) |literal| {
+        const declared = values.get(literal.value) orelse continue;
+
+        // the row names the member the value belongs to, so it is formatted rather than taken
+        // from the table as a finished string
+        // the format is the same constant the table names, so the wording still has one
+        // source
+        // the FIRST member is named when a value has more than one, which is what a config
+        // that declares one value twice gives
+        const message = try std.fmt.allocPrint(allocator, root.literal_duplicating_config_value, .{declared.owners.items[0]});
+        defer allocator.free(message);
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = literal.line,
+            .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
+}
+
+/// the row a config-value finding produces, built from the table's message so a wording
+/// change is one edit
+fn configValueRow(allocator: std.mem.Allocator, path: []const u8, line: u32, owner: []const u8) ![]const u8 {
+    const message = try std.fmt.allocPrint(allocator, root.literal_duplicating_config_value, .{owner});
+    defer allocator.free(message);
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, message });
+}
+
+test "a literal that retypes a value the surface's own config declares is reported, and a neighbour's value is not" {
+    // the config and the consumer are siblings BY NAME, which is the convention the rule is
+    // written on: `music.command.ts` reads `music.command.config.ts` and nothing else
+    // the shapes the config contributes:
+    //   a plain member, a member with a numeric value (no initializer literal), and a member
+    //     whose value only matches after the escape cooks
+    //   a member whose value is a backtick literal, which `StringLiteralLike` covers
+    //   a member whose initializer holds a nested comma, which is ONE member to TypeScript and
+    //     is the case that pins the split's depth test: a split at the nested comma would read
+    //     `Bogus = "bogus"` as a member of its own and report `bogus` below
+    //   a member separated from the previous one by a `;`, which is a parse error TypeScript
+    //     recovers from with both members intact, so `Odd` and `Tail` are both declared here
+    //   an enum inside a `declare module` block, which the detector reaches by recursion and
+    //     the token walk reaches wherever the keyword stands
+    // the shapes the consumer has that report nothing:
+    //   `sibling` is declared by `other.command.config.ts`, which belongs to another surface
+    //     entirely, so a directory neighbour's values never match
+    //   `absent` and `bogus` are declared nowhere
+    //   `legacy` is the value of an enum declared in the CONSUMER, and an enum outside a
+    //     `.config.ts` is no source of the surface's values at all: only the config's own
+    //     enums are indexed
+    const allocator = std.testing.allocator;
+    const play = try configValueRow(allocator, "src/commands/music.command.ts", 6, "MusicSubcommandName.Play");
+    defer allocator.free(play);
+    const skip = try configValueRow(allocator, "src/commands/music.command.ts", 10, "MusicSubcommandName.Skip");
+    defer allocator.free(skip);
+    const queue = try configValueRow(allocator, "src/commands/music.command.ts", 14, "MusicSubcommandName.Queue");
+    defer allocator.free(queue);
+    const joined = try configValueRow(allocator, "src/commands/music.command.ts", 18, "MusicSubcommandName.Joined");
+    defer allocator.free(joined);
+    const shared = try configValueRow(allocator, "src/commands/music.command.ts", 22, "Nested.Shared");
+    defer allocator.free(shared);
+    const odd = try configValueRow(allocator, "src/commands/music.command.ts", 38, "MusicSubcommandName.Odd");
+    defer allocator.free(odd);
+    const tail = try configValueRow(allocator, "src/commands/music.command.ts", 42, "MusicSubcommandName.Tail");
+    defer allocator.free(tail);
+
+    try probe.expectProject(.cosmetic, &.{
+        .{ .path = "src/commands/music.command.config.ts", .content =
+        \\export enum MusicSubcommandName {
+        \\  Play = "play",
+        \\  Skip = "skip",
+        \\  Count = 3,
+        \\  Joined = "j\u006f\u0069n",
+        \\  Queue = `queue`,
+        \\  Slow = pick("x", Bogus = "bogus"),
+        \\  Odd = "odd";
+        \\  Tail = "tail",
+        \\}
+        \\
+        \\declare module "./other" {
+        \\  export enum Nested {
+        \\    Shared = "shared",
+        \\  }
+        \\}
+        \\
+        },
+        .{ .path = "src/commands/music.command.ts", .content =
+        \\enum RetiredSubcommandName {
+        \\  Legacy = "legacy",
+        \\}
+        \\
+        \\export async function dispatch(subcommand: string): Promise<void> {
+        \\  if (subcommand === "play") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "skip") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "queue") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "join") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "shared") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "sibling") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "absent") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "bogus") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "odd") {
+        \\    return;
+        \\  }
+        \\
+        \\  if (subcommand === "tail") {
+        \\    return;
+        \\  }
+        \\}
+        \\
+        },
+        .{ .path = "src/commands/other.command.config.ts", .content =
+        \\export enum OtherSubcommandName {
+        \\  Sibling = "sibling",
+        \\}
+        \\
+        },
+    }, &.{ play, skip, queue, joined, shared, odd, tail });
+}
+
+test "the two files the detector skips whole are skipped here too, and a surface with no config reports nothing" {
+    // the config's own literal would match the value the same file declares, and the
+    // declaration file holds a copy of its config's value, so the two whole-file skips are
+    // here for the detector's sake and not for this pair's: `queries.config.ts` and
+    // `queries.d.ts` minus `.ts` are `queries.config` and `queries.d`, and no config declares
+    // those surfaces, so the mutation check found that removing either skip changes no row.
+    // what this test's `queries.ts` pins instead is the one lookup the rule is written on,
+    // and `plain.util.ts` pins the surface with no config of its own to read
+    try probe.expectProject(.cosmetic, &.{
+        .{ .path = "src/db/queries.config.ts", .content =
+        \\export enum Queries {
+        \\  List = "list\u0020all",
+        \\}
+        \\
+        \\export const Fallback = "list all";
+        \\
+        },
+        .{ .path = "src/db/queries.ts", .content =
+        \\export const listAll = "list all";
+        \\
+        },
+        .{ .path = "src/db/queries.d.ts", .content =
+        \\export declare const listAll: "list all";
+        \\
+        },
+        .{ .path = "src/lib/plain.util.ts", .content =
+        \\export const listAll = "list all";
+        \\
+        },
+    }, &.{
+        "src/db/queries.ts:1: This literal duplicates `Queries.List`, which the surface's own `.config.ts` already declares. Reference the enum member instead.",
+    });
+}

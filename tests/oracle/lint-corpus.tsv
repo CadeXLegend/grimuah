@@ -119,6 +119,9 @@ src/probe/let-noinit.ts:2: [resilience] do not use let; use const. only let at m
 src/probe/let-typed.ts:2: [hygiene] This let declares a variable that is only assigned once.
 src/probe/let-typed.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/let-var.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/literal-duplicating-config-value.config.ts:5: [structural] `MusicSubcommandName` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
+src/probe/literal-duplicating-config-value.ts:6: [cosmetic] This literal duplicates `MusicSubcommandName.Play`, which the surface's own `.config.ts` already declares. Reference the enum member instead.
+src/probe/literal-duplicating-config-value.ts:7: [cosmetic] This literal duplicates `MusicSubcommandName.Skip`, which the surface's own `.config.ts` already declares. Reference the enum member instead.
 src/probe/lowercase-copy.config.ts:12: [structural] `HiddenLabel` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/lowercase-copy.config.ts:14: [cosmetic] This copy starts lowercase. Capitalise the first letter of the sentence.
 src/probe/lowercase-copy.config.ts:14: [structural] `WholeLabel` is exported but no other module names it. Drop the `export` keyword, or have another module name it.

@@ -920,6 +920,194 @@ fn collectCopySites(
     }
 }
 
+/// every string value an enum of a `.config.ts` file declares
+///
+/// the values come off the TOKEN stream because the front-end models `enum` as a childless
+/// declaration: it keeps the keyword and the name and builds no member. the walk IS the
+/// detector's own `forEachChild` recursion in that respect: it finds the keyword wherever it
+/// stands, including inside a `declare module` block, and a member is read only when a
+/// top-level `=` is followed by a literal
+///
+/// the reader's limits are the detector's: a member whose value is an expression
+/// (`A = "a" + "b"`), one whose name is computed, and one with no initializer are all shapes
+/// the detector collects nothing from, and none of them appeared in the corpus the two
+/// readers were compared over
+/// one shape the detector REPORTS and this reader used to lose is a member separated from
+/// the previous one by a `;`: TypeScript flags that as a parse error and recovers from it
+/// with both members intact, so `node.members` holds both while a comma-only split held one,
+/// and the SECOND member's value went unreported. measured against the real detector over a
+/// two-member enum written that way: three rows from the detector against two from here
+fn collectConfigEnumValues(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    source: []const u8,
+    values: *std.ArrayList(rules.ConfigEnumValue),
+) !void {
+    for (tokens, 0..) |token, index| {
+        if (token.kind != .word or !token.isWord("enum")) continue;
+
+        const name_index = nextWord(tokens, index + 1) orelse continue;
+        const enum_name = tokens[name_index].text;
+        const open = nextPunct(tokens, name_index + 1, "{") orelse continue;
+        const close = rule_tokens.matchingBracket(tokens, open) orelse continue;
+
+        var member_start = open + 1;
+        // a comma inside the member's own parentheses, brackets or braces is not a boundary:
+        // `A = pick("x", B = "y")` is ONE member to TypeScript, whose initializer is a call the
+        // detector collects nothing from, while a split at the nested comma would read
+        // `B = "y"` as a member of its own and report a value no member declares
+        var depth: usize = 0;
+        var cursor = open + 1;
+        while (cursor < close) : (cursor += 1) {
+            const current = tokens[cursor];
+            if (current.kind != .punct) continue;
+            const text = current.text;
+            if (std.mem.eql(u8, text, "(") or std.mem.eql(u8, text, "[") or std.mem.eql(u8, text, "{")) depth += 1;
+            if (std.mem.eql(u8, text, ")") or std.mem.eql(u8, text, "]") or std.mem.eql(u8, text, "}")) depth -= 1;
+            if (!isEnumMemberSeparator(text) or depth != 0) continue;
+            try appendConfigValue(allocator, tokens, source, enum_name, member_start, cursor, values);
+            member_start = cursor + 1;
+        }
+        try appendConfigValue(allocator, tokens, source, enum_name, member_start, close, values);
+    }
+}
+
+/// whether the punctuation `text` separates two members of an enum body
+///
+/// TypeScript builds `node.members` from either a comma or a semicolon, which is what the
+/// detector reads, so both spell a member boundary here
+fn isEnumMemberSeparator(text: []const u8) bool {
+    return std.mem.eql(u8, text, ",") or std.mem.eql(u8, text, ";");
+}
+
+/// the value one member of an enum body declares, when it declares one
+/// the member's own name is the first token of its slice, which is what the detector reads
+/// with `declaration.name.getText()` for every member shape the corpus holds
+fn appendConfigValue(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    source: []const u8,
+    enum_name: []const u8,
+    start: usize,
+    end: usize,
+    values: *std.ArrayList(rules.ConfigEnumValue),
+) !void {
+    if (start >= end) return;
+    const equals = nextPunctBetween(tokens, start, end, "=") orelse return;
+    if (equals + 1 >= end) return;
+
+    const raw = rule_tokens.literalSite(tokens, source, equals + 1) orelse return;
+    const buffer = try allocator.alloc(u8, raw.len);
+    defer allocator.free(buffer);
+    const cooked = ts.decodeStringLiteral(buffer, raw);
+
+    const owner = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ enum_name, tokens[start].text });
+    errdefer allocator.free(owner);
+    try values.append(allocator, .{
+        .value = try allocator.dupe(u8, buffer[0..cooked.len]),
+        .owner = owner,
+    });
+}
+
+/// the first word at or after `from`, which is how an enum's own name is read
+fn nextWord(tokens: []const ts.Token, from: usize) ?usize {
+    var index = from;
+    while (index < tokens.len) : (index += 1) {
+        if (tokens[index].kind == .word) return index;
+    }
+    return null;
+}
+
+/// the first occurrence of the punctuation `text` at or after `from`
+fn nextPunct(tokens: []const ts.Token, from: usize, text: []const u8) ?usize {
+    var index = from;
+    while (index < tokens.len) : (index += 1) {
+        if (tokens[index].isPunct(text)) return index;
+    }
+    return null;
+}
+
+/// the first occurrence of the punctuation `text` in `start..end`
+fn nextPunctBetween(tokens: []const ts.Token, start: usize, end: usize, text: []const u8) ?usize {
+    var index = start;
+    while (index < end) : (index += 1) {
+        if (tokens[index].isPunct(text)) return index;
+    }
+    return null;
+}
+
+/// every string literal one file holds, in the order the literals appear, which is the order
+/// its rows are reported in
+///
+/// the detector walks every node of a file for these, so there is no gate but the shape: a
+/// quoted literal or a template with no substitution, and the value COOKED, because the two
+/// sides of the comparison are two JavaScript strings
+fn collectLiteralValues(
+    allocator: std.mem.Allocator,
+    tokens: []const ts.Token,
+    source: []const u8,
+    values: *std.ArrayList(rules.LiteralValue),
+) !void {
+    var index: usize = 0;
+    while (index < tokens.len) {
+        const line = tokens[index].line;
+        const raw = rule_tokens.literalSite(tokens, source, index) orelse {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        const buffer = try allocator.alloc(u8, raw.len);
+        defer allocator.free(buffer);
+        const cooked = ts.decodeStringLiteral(buffer, raw);
+        try values.append(allocator, .{
+            .value = try allocator.dupe(u8, buffer[0..cooked.len]),
+            .line = line,
+        });
+    }
+}
+
+/// the surface a config file declares, which is its own path minus the suffix
+/// the convention is the file's name rather than its directory: `afk.service.config.ts`
+/// declares the values of `afk.service.ts`, and a config beside it declares nothing it owns
+fn surfaceOfConfig(path: []const u8) []const u8 {
+    const suffix = ".config.ts";
+    if (std.mem.endsWith(u8, path, suffix)) return path[0 .. path.len - suffix.len];
+    return path;
+}
+
+/// the config values the run declares, keyed by the surface that declares them and then by
+/// the value's cooked text
+///
+/// the outer keys are views into the run's own path list, which outlives the index, while
+/// every value key and owner is the index's copy of what a file declared, because a file's
+/// declarations are freed as its rows are reported
+fn buildConfigValueIndex(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(rules.ConfigValues) {
+    var by_surface: std.StringHashMapUnmanaged(rules.ConfigValues) = .empty;
+    for (contributions) |contribution| {
+        if (contribution.project.config_values.items.len == 0) continue;
+
+        const entry = try by_surface.getOrPut(allocator, surfaceOfConfig(contribution.path));
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+
+        for (contribution.project.config_values.items) |declared| {
+            const owners = try entry.value_ptr.getOrPut(allocator, declared.value);
+            if (!owners.found_existing) {
+                // a lifetime guard rather than a tidiness one: the merge frees a file's
+                // declarations once its rows are reported, while the index answers for every
+                // file after it
+                owners.key_ptr.* = try allocator.dupe(u8, declared.value);
+                owners.value_ptr.* = .{};
+            }
+            try owners.value_ptr.owners.append(allocator, try allocator.dupe(u8, declared.owner));
+        }
+    }
+    return by_surface;
+}
+
 /// the run's fingerprints, built from every file's own contribution
 /// every allocation through the arena happens before the struct literal copies the arena,
 /// because the arena's state is a value: a copy taken mid-literal misses the buffers a
@@ -934,11 +1122,15 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
     // list when the rule is off and need no gate of their own
     const statement_occurrences = try countStatementOccurrences(index_allocator, contributions);
     const copy_files = try countCopyFiles(index_allocator, contributions);
+    // a family the run did not collect contributes no value, so this walk is over an empty
+    // map when the rule is off and needs no gate of its own
+    const config_values = try buildConfigValueIndex(index_allocator, contributions);
     return .{
         .arena = arena,
         .body_files = body_files,
         .statement_occurrences = statement_occurrences,
         .copy_files = copy_files,
+        .config_values = config_values,
     };
 }
 
@@ -1548,6 +1740,17 @@ pub fn lintContent(
     // stream's own literal sites, so it needs no parse either
     if (rules.needsCopyOwners(cfg, hygiene)) {
         try collectCopySites(finding_allocator, tokens, content, &contribution.project.copy_sites);
+    }
+
+    // the config values this file declares and the literals it holds, which the rule about a
+    // literal retyping a config value reads from both ends
+    // one gate for the two, because one rule needs both and neither is collected apart from
+    // the other
+    if (rules.needsConfigValues(cfg, hygiene)) {
+        if (std.mem.endsWith(u8, rel_path, ".config.ts")) {
+            try collectConfigEnumValues(finding_allocator, tokens, content, &contribution.project.config_values);
+        }
+        try collectLiteralValues(finding_allocator, tokens, content, &contribution.project.literal_values);
     }
 
     var context = rules.Context{

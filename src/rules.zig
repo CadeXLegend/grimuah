@@ -333,6 +333,35 @@ pub const CopySite = struct {
     line: u32,
 };
 
+/// one string value an enum of a `.config.ts` file declares
+pub const ConfigEnumValue = struct {
+    /// the COOKED value the member assigns, which is what a consumer's own literal has to
+    /// match
+    value: []const u8,
+    /// the member's name beside its enum's, as `EnumName.MemberName`, which is what a row
+    /// names
+    owner: []const u8,
+};
+
+/// one string literal of a file, which is what a config's values are compared against
+pub const LiteralValue = struct {
+    /// the COOKED value, because the detector compares two cooked literals
+    value: []const u8,
+    /// the line the literal starts on, which is where the detector reports
+    line: u32,
+};
+
+/// the enum members that declare one config value, in the order the configs were read
+pub const ConfigValueOwners = struct {
+    owners: std.ArrayListUnmanaged([]const u8) = .empty,
+};
+
+/// one surface's config values, keyed by the value's cooked text
+/// the surface is the config's own path minus `.config.ts`, which is a naming convention
+/// rather than a directory: `afk.service.config.ts` declares the values of `afk.service.ts`
+/// and of nothing else
+pub const ConfigValues = std.StringHashMapUnmanaged(ConfigValueOwners);
+
 /// the run's text fingerprints: what every file's declarations say, so a rule can ask
 /// whether one implementation is written in two files
 /// it is the run's rather than one file's, and it is built from every file's own
@@ -358,6 +387,12 @@ pub const FingerprintIndex = struct {
     /// this family reads the same `FingerprintFiles` shape the body family does: one file
     /// that writes a sentence twice holds one copy of the defect
     copy_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
+    /// the config values each surface declares, keyed by the surface and then by the value's
+    /// cooked text
+    /// the value key is the index's own copy of what a file declared, because the merge frees
+    /// a file's declarations as soon as its rows are reported, while the surface key is a view
+    /// into the run's own path list, which outlives the index
+    config_values: std.StringHashMapUnmanaged(ConfigValues) = .empty,
 
     pub fn deinit(self: *FingerprintIndex) void {
         self.arena.deinit();
@@ -401,6 +436,12 @@ pub const Project = struct {
     /// every user-facing copy literal this file offers to the run's copy index, in the order
     /// the literals appear, which is the order the rows are reported in
     copy_sites: std.ArrayList(CopySite) = .empty,
+    /// every string value an enum of this file declares, which is empty unless the file is a
+    /// `.config.ts`
+    config_values: std.ArrayList(ConfigEnumValue) = .empty,
+    /// every string literal this file holds, in the order the literals appear, which is the
+    /// order its rows are reported in
+    literal_values: std.ArrayList(LiteralValue) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -428,6 +469,13 @@ pub const Project = struct {
         self.statement_sites.deinit(allocator);
         for (self.copy_sites.items) |site| allocator.free(site.key);
         self.copy_sites.deinit(allocator);
+        for (self.config_values.items) |declared| {
+            allocator.free(declared.value);
+            allocator.free(declared.owner);
+        }
+        self.config_values.deinit(allocator);
+        for (self.literal_values.items) |literal| allocator.free(literal.value);
+        self.literal_values.deinit(allocator);
     }
 };
 
@@ -473,6 +521,10 @@ pub const Rule = struct {
     /// sentence before any verdict
     /// it is a family of its own for the same reason the statement's is
     needs_copy_owners: bool = false,
+    /// this rule's verdict needs every config file's declared values and every file's own
+    /// string literals, so the engine collects both as it reads each file
+    /// it is a family of its own for the same reason the others are
+    needs_config_values: bool = false,
     /// the verdict this rule reaches over the run's fingerprints
     /// its table entry must
     /// declare a family flag, or the collection it reads was never made
@@ -530,6 +582,7 @@ pub const duplicated_function_body = "`{s}` has a byte-identical body in another
 pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
 pub const duplicated_user_facing_copy = "This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.";
 pub const repeated_inline_copy = "This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.";
+pub const literal_duplicating_config_value = "This literal duplicates `{s}`, which the surface's own `.config.ts` already declares. Reference the enum member instead.";
 
 /// the shortest cooked copy the duplicate-copy rule counts, in UTF-16 code units, which is
 /// what a JavaScript string's own `length` reads. it is the detector's own gate, and the
@@ -880,6 +933,15 @@ pub const all = [_]Rule{
         .match = cosmetic.checkRepeatedInlineCopy,
     },
     .{
+        .layer = .cosmetic,
+        .severity = .warn,
+        .message = literal_duplicating_config_value,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_config_values = true,
+        .resolve_fingerprints = cosmetic.checkLiteralDuplicatingConfigValue,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -1011,11 +1073,22 @@ pub fn needsCopyOwners(cfg: *const config.Config, with_hygiene: bool) bool {
     return false;
 }
 
+/// whether an enabled rule needs the run's config values and the literals that might retype
+/// them, so the engine knows whether to collect both as it reads each file
+pub fn needsConfigValues(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_config_values) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
 /// whether a rule reads a family of the run's fingerprints
 /// the families are ported one at a time, and this is the one place a new one is declared:
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
-    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners;
+    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values;
 }
 
 /// reach every enabled graph rule's verdict for one file of the run
