@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("../ir.zig");
+const typecount = @import("typecount.zig");
 
 /// the TypeScript / JavaScript front-end
 ///
@@ -938,6 +939,150 @@ const type_continuation_words = [_][]const u8{
     "keyof", "typeof", "extends", "infer", "readonly", "in", "out", "is", "as", "asserts", "satisfies", "new", "import",
 };
 
+/// the TypeScript nodes the front-end deliberately does not build, one constant per
+/// shape it drops. each is recorded on the node that stands in for the TypeScript node
+/// around it, and `ir.Module.descendantsOf` sums them over the finished tree
+///
+/// they are named rather than inlined because several are recorded from more than one
+/// place, and a reader has to be able to tell a delta that counts dropped nodes from
+/// one that takes back a node the tree added
+/// a member access's name. `a.b` is a `PropertyAccessExpression` over the receiver and
+/// an `Identifier`, and the tree keeps the name as the member's own `name`
+const member_name_node: i32 = 1;
+
+/// the `QuestionDotToken` a `?.` stands for. no token rule may see it, so the tree
+/// drops it
+const question_dot_node: i32 = 1;
+
+/// a binary expression's operator token, which the tree keeps as the node's own
+/// `operator`
+const operator_token_node: i32 = 1;
+
+/// a conditional's `?` and `:`, the two tokens the tree keeps beside the branches
+const conditional_token_nodes: i32 = 2;
+
+/// `x!` is a `NonNullExpression` and `x++` a `PostfixUnaryExpression`: one node above
+/// the operand, and neither carries a token of its own
+const postfix_wrapper_node: i32 = 1;
+
+/// `new Foo(a)` is one `NewExpression` over the callee and the arguments, while the
+/// tree puts a `.call` between them. the construction takes that extra node back
+const construction_wrapper_node: i32 = -1;
+
+/// one object entry: the `PropertyAssignment` (or `ShorthandPropertyAssignment`) node
+/// and the key it holds, both of which the tree keeps in the literal's own source text
+const property_entry_nodes: i32 = 2;
+
+/// a key computed in brackets is that entry's node plus the `ComputedPropertyName` the
+/// brackets are
+const computed_key_nodes: i32 = 2;
+
+/// a hole in an array literal. typescript writes an `OmittedExpression`, and the tree
+/// writes nothing
+const omitted_element_node: i32 = 1;
+
+/// a substitution in a template literal: the `TemplateSpan` over it and the literal
+/// that closes it
+const template_span_nodes: i32 = 2;
+
+/// the `TemplateHead` a template with at least one substitution opens with
+const template_head_node: i32 = 1;
+
+/// the `...` of a rest parameter, the `?` of an optional one and the `readonly` of a
+/// constructor's, each one node of the `Parameter` beside the binding
+const parameter_token_node: i32 = 1;
+
+/// a comma expression between parentheses: one `BinaryExpression` and its `CommaToken`
+/// per operand past the first
+const comma_operand_nodes: i32 = 2;
+
+/// a dynamic `import("m")` is a `CallExpression` whose callee is the `import` keyword
+/// rather than a name, and the tree records neither the keyword nor the specifier
+const dynamic_import_nodes: i32 = 2;
+
+/// the `async` keyword and the `*` of a generator, each one node beside the parameters
+/// and the body
+const modifier_node: i32 = 1;
+
+/// a named callable's name, which the tree keeps as the node's own `name`
+const function_name_node: i32 = 1;
+
+/// an arrow's `=>`, the one token between its parameters and its body
+const arrow_token_node: i32 = 1;
+
+/// the `Parameter` node typescript wraps a bound name, an annotation and the `?` in,
+/// while the tree hangs the binding off the callable directly
+const parameter_node: i32 = 1;
+
+/// the `VariableDeclarationList` a declaration *statement* wraps, which the tree's
+/// own node stands in for. a `for` header holds the same list directly under the
+/// loop's node, where nothing wraps it
+const declaration_list_node: i32 = 1;
+
+/// the `VariableDeclaration` each declarator is: typescript puts the name, the
+/// annotation and the initializer under it, and the tree hangs all three off the
+/// declaration itself
+const declarator_node: i32 = 1;
+
+/// one entry of a binding pattern: the `BindingElement` node, the `PropertyName` a
+/// `{ a: b }` entry names its property with, the `DotDotDotToken` a `...rest`
+/// carries, and the `Identifier` of a nested pattern's brackets. the tree binds
+/// the names and keeps none of the four
+const binding_element_node: i32 = 1;
+const binding_property_name_node: i32 = 1;
+const binding_rest_token_node: i32 = 1;
+const binding_pattern_node: i32 = 1;
+
+/// the `Identifier` a name the tree declines to bind still is: `{ type }`, `{ a: type }`
+/// and a `type: T` parameter all name words the binding list leaves out, and typescript
+/// builds one node for each
+const declined_name_node: i32 = 1;
+
+/// the `Block` a `finally` clause is written as. typescript hangs that block off the
+/// `TryStatement` itself, while the tree wraps it in a node of its own beside the
+/// one it already builds for the body
+const finally_clause_node: i32 = -1;
+
+/// the initializer a pattern entry's `=` introduces, which the tree drops whole.
+/// the entry's own `Identifier` is one node of it, and the initializer's own nodes
+/// are recorded as a gap beside this one
+const binding_default_node: i32 = 1;
+
+/// the `VariableDeclaration` a `catch` clause wraps its caught binding in
+const catch_binding_node: i32 = 1;
+
+/// the `CaseBlock` a `switch` holds its clauses in, which the tree flattens
+const case_block_node: i32 = 1;
+
+/// the `AwaitKeyword` a `for await` carries
+const for_await_token_node: i32 = 1;
+
+/// a class's own name, which the tree keeps as the node's own `name`
+const class_name_node: i32 = 1;
+
+/// an `extends` clause: the `HeritageClause` node, and the
+/// `ExpressionWithTypeArguments` that wraps the base the tree already holds
+const extends_clause_nodes: i32 = 2;
+
+/// a modifier, wherever it is written: `abstract` on a declaration, `static` or
+/// `readonly` on a class member, and the `*` of a generator method. `get` and `set`
+/// are the accessor kinds typescript declares rather than modifiers, so neither is
+/// one of these
+const declaration_modifier_node: i32 = 1;
+
+/// a class member: the `PropertyDeclaration` node typescript wraps a field in, the
+/// name node that field or any method is declared under, and the `?` of an optional
+/// one. a method's own wrapper is the callable node the tree already builds
+const class_member_node: i32 = 1;
+const class_member_name_node: i32 = 1;
+const optional_member_token_node: i32 = 1;
+
+/// where a declaration is written, which decides what its node stands in for:
+/// typescript wraps a declaration *statement* in a `VariableStatement` over a
+/// `VariableDeclarationList`, while a `for` header holds the declaration list
+/// directly, with nothing between it and its declarators
+const DeclarationPosition = enum { statement, loop_header };
+
 const Parser = struct {
     tokens: []const Token,
     module: *ir.Module,
@@ -1360,7 +1505,25 @@ const Parser = struct {
         self.pos += 1;
         var depth: usize = 1;
         var brace_depth: usize = 0;
+        // the brackets of a destructuring parameter. they tell the `,` that separates
+        // two bindings inside a pattern from the one that ends the parameter, which is
+        // where the `Parameter` node's own count is recorded
+        var square_depth: usize = 0;
+        // whether the token under the cursor opens a parameter: typescript wraps every
+        // one in a `Parameter` node, and the tree hangs the binding off the callable
+        // instead
+        //
+        // ponytail: a parameter's name is read as the one identifier the tree binds,
+        // which is exact for a simple one and short by the pattern's own nodes for a
+        // destructuring pattern. measured over the corpus: 10 of 4944 sites hold a
+        // destructuring parameter, the smallest count among them is 22 against a gate
+        // of 7, and none is a reported row (measured, sleepy's src, lib and gateway)
+        var opens_parameter = !self.atPunct(")");
         while (!self.atEnd() and depth > 0) {
+            if (opens_parameter) {
+                opens_parameter = false;
+                if (!self.atPunct(")")) self.module.addDescendants(parent, parameter_node);
+            }
             if (self.atPunct("(")) depth += 1;
             if (self.atPunct(")")) {
                 depth -= 1;
@@ -1373,6 +1536,10 @@ const Parser = struct {
             if (self.atPunct("}")) {
                 if (brace_depth > 0) brace_depth -= 1;
             }
+            if (self.atPunct("[")) square_depth += 1;
+            if (self.atPunct("]")) {
+                if (square_depth > 0) square_depth -= 1;
+            }
             const token = self.peek().?;
             if (token.isPunct(":") or token.isPunct("=")) {
                 const is_default = token.isPunct("=");
@@ -1381,9 +1548,17 @@ const Parser = struct {
                     const value = try self.parseExpression();
                     self.module.appendChild(parent, value);
                 } else {
-                    self.skipType(.annotation_before_value);
+                    self.skipTypeCounting(parent, .annotation_before_value);
                 }
                 continue;
+            }
+            if (token.isPunct(",") and depth == 1 and brace_depth == 0 and square_depth == 0) {
+                opens_parameter = true;
+                self.pos += 1;
+                continue;
+            }
+            if (token.isPunct("...") or token.isPunct("?") or token.isWord("readonly")) {
+                self.module.addDescendants(parent, parameter_token_node);
             }
             if (token.kind == .word) {
                 const next = if (self.pos + 1 < self.tokens.len) self.tokens[self.pos + 1] else null;
@@ -1393,6 +1568,10 @@ const Parser = struct {
                     self.module.nodes.items[binding].name = token.text;
                     self.module.nodes.items[binding].binding = .parameter;
                     self.module.appendChild(parent, binding);
+                } else if (!is_key) {
+                    // a parameter typescript names and this list leaves out, because the
+                    // word is keyword-shaped: it is still the `Parameter`'s own `Identifier`
+                    self.module.addDescendants(parent, declined_name_node);
                 }
             }
             self.pos += 1;
@@ -1802,6 +1981,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         if (self.atPunct("?")) {
             self.pos += 1;
             const node = try self.addNode(.conditional, from);
+            self.module.addDescendants(node, conditional_token_nodes);
             self.module.appendChild(node, target);
             const when_true = try self.parseAssignment();
             self.module.appendChild(node, when_true);
@@ -1818,6 +1998,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         self.pos += 1;
         const node = try self.addNode(.assignment, from);
         self.module.nodes.items[node].operator = token.text;
+        self.module.addDescendants(node, operator_token_node);
         self.module.appendChild(node, target);
         const value = try self.parseAssignment();
         self.module.appendChild(node, value);
@@ -1830,6 +2011,13 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
 
         while (!self.atEnd()) {
             const token = self.peek().?;
+            // a recorded gap: `satisfies` is absent from `isBinaryOperator`, so
+            // `x satisfies T` splits here and the tail is read as a statement of its own.
+            // the site's subtree is then not the one typescript walks, and the count is
+            // short by the type it names. measured over the corpus: one site holds one
+            // (`src/services/xp.service.ts:120`, count 18) and it is not a reported row.
+            // taking it in means building a node typescript has and the tree does not,
+            // which is a tree change and can move a shipped rule's rows
             const is_operator = isBinaryOperator(token);
             const is_cast = token.isWord("as");
             if (!is_operator and !is_cast) break;
@@ -1840,7 +2028,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             if (is_cast) {
                 const cast = try self.addNode(.as_expr, from);
                 const type_from = self.begin();
-                self.skipType(.brace_starts_object);
+                self.module.addDescendants(cast, self.skipTypeNodes(.brace_starts_object));
                 if (type_from < self.pos) {
                     const slice = self.tokens[type_from..self.pos];
                     self.module.nodes.items[cast].name = self.source[slice[0].start..slice[slice.len - 1].end];
@@ -1854,6 +2042,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
 
             const node = try self.addNode(.binary, from);
             self.module.nodes.items[node].operator = token.text;
+            self.module.addDescendants(node, operator_token_node);
             self.module.appendChild(node, left);
             const right = try self.parsePostfix();
             self.module.appendChild(node, right);
@@ -1865,19 +2054,31 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
 
     fn parsePostfix(self: *Parser) anyerror!ir.NodeIndex {
         var expression = try self.parsePrimary();
+        // the type arguments of a `f<T>(x)` call and the `?.` of a `f?.(x)` or a
+        // `a?.[b]`: both are consumed here and belong to the node the next token
+        // builds rather than to the chain the cursor already holds
+        var type_arguments: i32 = 0;
+        var orphan_question_dot: i32 = 0;
 
         while (!self.atEnd()) {
             const token = self.peek().?;
 
             if (token.isPunct(".") or token.isPunct("?.")) {
+                const optional = token.isPunct("?.");
                 const from = if (self.pos > 0) self.pos - 1 else 0;
                 self.pos += 1;
-                if (self.atEnd() or (self.peek().?).kind != .word) continue;
+                if (self.atEnd() or (self.peek().?).kind != .word) {
+                    // a `?.` before a call or an index: typescript writes it as the
+                    // call's or the access's own token, and the tree drops it here
+                    orphan_question_dot += @intFromBool(optional);
+                    continue;
+                }
                 const name = self.peek().?.text;
                 self.pos += 1;
                 const member = try self.addNode(.member, from);
                 self.module.nodes.items[member].name = name;
                 self.module.appendChild(member, expression);
+                self.module.addDescendants(member, member_name_node + if (optional) question_dot_node else 0);
                 self.closeNode(member, from);
                 expression = member;
                 continue;
@@ -1887,6 +2088,9 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 const from = if (self.pos > 0) self.pos - 1 else 0;
                 self.pos += 1;
                 const call = try self.addNode(.call, from);
+                self.module.addDescendants(call, type_arguments + orphan_question_dot);
+                type_arguments = 0;
+                orphan_question_dot = 0;
                 self.module.appendChild(call, expression);
                 // parseExpression consumes every bracketed group it meets, so
                 // this loop must not track depth itself: counting the `(` of an
@@ -1912,6 +2116,8 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 const from = if (self.pos > 0) self.pos - 1 else 0;
                 self.pos += 1;
                 const index = try self.addNode(.member, from);
+                self.module.addDescendants(index, orphan_question_dot);
+                orphan_question_dot = 0;
                 self.module.appendChild(index, expression);
                 if (!self.atPunct("]")) {
                     const key = try self.parseExpression();
@@ -1923,8 +2129,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 continue;
             }
 
-            // `!` non-null assertion and `++` / `--` postfix
+            // `!` non-null assertion and `++` / `--` postfix. typescript wraps the
+            // operand in a `NonNullExpression` or a `PostfixUnaryExpression`, neither
+            // of which carries a token of its own, and the tree writes nothing
             if (token.isPunct("!") or token.isPunct("++") or token.isPunct("--")) {
+                self.module.addDescendants(expression, postfix_wrapper_node);
                 self.pos += 1;
                 continue;
             }
@@ -1939,6 +2148,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                         (after != null and
                             (after.?.isPunct("(") or after.?.isPunct(".") or after.?.isPunct("?.") or after.?.isPunct("[")));
                     if (is_type_arguments) {
+                        type_arguments += self.typeArgumentNodes(self.pos, close_index + 1);
                         self.pos = close_index + 1;
                         continue;
                     }
@@ -1947,6 +2157,9 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             }
             break;
         }
+        // a `<...>` list with no call or index after it is a heritage clause's type
+        // arguments, which belong to the base the chain already holds
+        self.module.addDescendants(expression, type_arguments);
         return expression;
     }
 
@@ -1964,6 +2177,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         if (token.kind == .template) {
             self.pos += 1;
             const node = try self.addNode(.template, from);
+            // a substitution is one `TemplateSpan` over its expression and the literal
+            // that closes it, above the `TemplateHead` the literal opens with. a
+            // template with no substitution is one token to typescript and an empty
+            // node to the tree
+            var substitutions: i32 = 0;
             while (!self.atEnd() and !self.atPunct("`")) {
                 if ((self.peek().?).kind == .template_end) {
                     self.pos += 1;
@@ -1971,7 +2189,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 }
                 const expression = try self.parseExpression();
                 self.module.appendChild(node, expression);
+                substitutions += 1;
                 if (self.pos == from + 1) self.pos += 1;
+            }
+            if (substitutions > 0) {
+                self.module.addDescendants(node, template_head_node + substitutions * template_span_nodes);
             }
             self.closeNode(node, from);
             return node;
@@ -1986,6 +2208,13 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             const node = try self.addNode(.array_literal, from);
             while (!self.atEnd() and !self.atPunct("]")) {
                 if (self.atPunct(",")) {
+                    // `[a, , b]` writes a hole typescript keeps as an `OmittedExpression`,
+                    // and the tree writes nothing. a `,` straight after the bracket or
+                    // after another `,` is what leaves one
+                    const previous = if (self.pos > 0) self.tokens[self.pos - 1] else null;
+                    if (previous != null and (previous.?.isPunct("[") or previous.?.isPunct(","))) {
+                        self.module.addDescendants(node, omitted_element_node);
+                    }
                     self.pos += 1;
                     continue;
                 }
@@ -2016,6 +2245,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             // assertion: the type parameter list is followed by a parameter
             // list whose paren group ends in `=>`
             if (self.matchingAngle(self.pos)) |angle_close| {
+                const angle_open = self.pos;
                 const after_angle = if (angle_close + 1 < self.tokens.len) self.tokens[angle_close + 1] else null;
                 if (after_angle != null and after_angle.?.isPunct("(")) {
                     if (self.matchingParen(angle_close + 1)) |params_close| {
@@ -2024,18 +2254,22 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                             (after_params.?.isPunct(":") and self.hasArrowAfter(params_close + 1)));
                         if (is_arrow) {
                             self.pos = angle_close + 1;
-                            return self.parseArrow(from, true);
+                            const arrow = try self.parseArrow(from, true, false);
+                            self.module.addDescendants(arrow, self.typeParameterNodes(angle_open, angle_close + 1));
+                            return arrow;
                         }
                     }
                 }
             }
 
-            // a type assertion `<T>value`
+            // a type assertion `<T>value`, which typescript calls a
+            // `TypeAssertionExpression` over the type and the operand
             self.pos += 1;
-            self.skipType(.brace_starts_object);
+            const asserted_type = self.skipTypeNodes(.brace_starts_object);
             const operand = try self.parsePostfix();
             const node = try self.addNode(.as_expr, from);
             self.module.nodes.items[node].operator = "asserts";
+            self.module.addDescendants(node, asserted_type);
             self.module.appendChild(node, operand);
             self.closeNode(node, from);
             return node;
@@ -2058,6 +2292,13 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 self.module.nodes.items[node].operator = token.text;
                 const operand = try self.parsePostfix();
                 self.module.appendChild(node, operand);
+                // `new Foo(a)` is one `NewExpression` over the callee and the arguments,
+                // while the tree puts a `.call` between them and hangs the arguments off
+                // it. `new Foo` and `new Foo.bar` build no call, so there is no extra
+                // node to take back
+                if (token.isWord("new") and self.constructionCall(operand)) {
+                    self.module.addDescendants(node, construction_wrapper_node);
+                }
                 self.closeNode(node, from);
                 return node;
             }
@@ -2065,16 +2306,26 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             if (token.isWord("function") or (token.isWord("async") and self.peekAt(1) != null and self.peekAt(1).?.isWord("function"))) {
                 // `async function` is the same expression, the modifier is
                 // consumed so the name lands on the node
-                if (token.isWord("async")) self.pos += 1;
+                const functions_async = token.isWord("async");
+                if (functions_async) self.pos += 1;
                 self.pos += 1;
                 const node = try self.addNode(.function_expr, from);
-                if (self.atPunct("*")) self.pos += 1;
-                if (!self.atEnd() and (self.peek().?).kind == .word) self.pos += 1;
-                if (self.atPunct("<")) self.skipType(.brace_starts_object);
+                // an `async` function expression, a named one and the `*` of a generator
+                // are each a node beside the parameters and the body
+                if (functions_async) self.module.addDescendants(node, modifier_node);
+                if (self.atPunct("*")) {
+                    self.module.addDescendants(node, modifier_node);
+                    self.pos += 1;
+                }
+                if (!self.atEnd() and (self.peek().?).kind == .word) {
+                    self.module.addDescendants(node, function_name_node);
+                    self.pos += 1;
+                }
+                if (self.atPunct("<")) self.skipTypeCounting(node, .brace_starts_object);
                 try self.parseParameterList(node);
                 if (self.atPunct(":")) {
                     self.pos += 1;
-                    self.skipType(.return_annotation);
+                    self.skipTypeCounting(node, .return_annotation);
                 }
                 if (self.atPunct("{")) {
                     const body = try self.parseBlock();
@@ -2089,10 +2340,15 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             }
 
             if (token.isWord("import")) {
-                // a dynamic `import(...)`
+                // a dynamic `import(...)`, whose callee is the `import` keyword rather
+                // than a name: typescript keeps the keyword and the specifier as the
+                // call's own children, and the tree keeps neither
                 self.pos += 1;
                 const node = try self.addNode(.call, from);
-                if (self.atPunct("(")) self.pos += 1;
+                if (self.atPunct("(")) {
+                    self.pos += 1;
+                    self.module.addDescendants(node, dynamic_import_nodes);
+                }
                 if (!self.atEnd() and (self.peek().?).kind == .string) self.pos += 1;
                 if (self.atPunct(")")) self.pos += 1;
                 self.closeNode(node, from);
@@ -2108,7 +2364,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.peekAt(2) != null and self.peekAt(2).?.isPunct("=>"))
                 {
                     self.pos += 1;
-                    return self.parseArrow(from, false);
+                    return self.parseArrow(from, false, true);
                 }
                 if (next != null and next.?.isPunct("(")) {
                     if (self.matchingParen(self.pos + 1)) |close_index| {
@@ -2117,13 +2373,14 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                             (after.?.isPunct(":") and self.hasArrowAfter(close_index + 1)));
                         if (is_arrow) {
                             self.pos += 1;
-                            return self.parseArrow(from, true);
+                            return self.parseArrow(from, true, true);
                         }
                     }
                 }
                 // `async <T>(x: T) => x`: the type parameters come first
                 if (next != null and next.?.isPunct("<")) {
                     if (self.matchingAngle(self.pos + 1)) |angle_close| {
+                        const angle_open = self.pos + 1;
                         const after_angle = if (angle_close + 1 < self.tokens.len) self.tokens[angle_close + 1] else null;
                         if (after_angle != null and after_angle.?.isPunct("(")) {
                             if (self.matchingParen(angle_close + 1)) |params_close| {
@@ -2132,7 +2389,9 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                                     (after_params.?.isPunct(":") and self.hasArrowAfter(params_close + 1)));
                                 if (is_arrow) {
                                     self.pos = angle_close + 1;
-                                    return self.parseArrow(from, true);
+                                    const arrow = try self.parseArrow(from, true, true);
+                                    self.module.addDescendants(arrow, self.typeParameterNodes(angle_open, angle_close + 1));
+                                    return arrow;
                                 }
                             }
                         }
@@ -2142,7 +2401,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
 
             // a single-parameter arrow: `x => ...`
             if (self.pos + 1 < self.tokens.len and self.tokens[self.pos + 1].isPunct("=>")) {
-                return self.parseArrow(from, false);
+                return self.parseArrow(from, false, false);
             }
 
             if (isNonReference(token.text)) {
@@ -2170,11 +2429,12 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             const after = if (close_index + 1 < self.tokens.len) self.tokens[close_index + 1] else null;
             const is_arrow = after != null and (after.?.isPunct("=>") or
                 (after.?.isPunct(":") and self.hasArrowAfter(close_index + 1)));
-            if (is_arrow) return self.parseArrow(from, true);
+            if (is_arrow) return self.parseArrow(from, true, false);
         }
 
         self.pos += 1;
         const node = try self.addNode(.paren, from);
+        var operands: i32 = 0;
         while (!self.atEnd() and !self.atPunct(")")) {
             if (self.atPunct(",")) {
                 self.pos += 1;
@@ -2182,8 +2442,12 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             }
             const inner = try self.parseExpression();
             self.module.appendChild(node, inner);
+            operands += 1;
         }
         if (self.atPunct(")")) self.pos += 1;
+        // `(a, b)` is a `ParenthesizedExpression` over a comma expression, and one
+        // `BinaryExpression` and its `CommaToken` sit between each pair of operands
+        if (operands > 1) self.module.addDescendants(node, (operands - 1) * comma_operand_nodes);
         self.closeNode(node, from);
         return node;
     }
@@ -2275,8 +2539,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         return false;
     }
 
-    fn parseArrow(self: *Parser, from: usize, parenthesised: bool) anyerror!ir.NodeIndex {
+    fn parseArrow(self: *Parser, from: usize, parenthesised: bool, is_async: bool) anyerror!ir.NodeIndex {
         const node = try self.addNode(.arrow, from);
+        // an arrow carries the `=>` itself, and an `async` in front of it is a modifier
+        self.module.addDescendants(node, arrow_token_node);
+        if (is_async) self.module.addDescendants(node, modifier_node);
 
         if (parenthesised) {
             try self.parseParameterList(node);
@@ -2285,12 +2552,14 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             self.module.nodes.items[parameter].name = self.peek().?.text;
             self.module.nodes.items[parameter].binding = .parameter;
             self.module.appendChild(node, parameter);
+            // a bare parameter is a `Parameter` node in typescript too
+            self.module.addDescendants(node, parameter_node);
             self.pos += 1;
         }
 
         if (self.atPunct(":")) {
             self.pos += 1;
-            self.skipType(.brace_starts_object);
+            self.skipTypeCounting(node, .brace_starts_object);
         }
         if (self.atPunct("=>")) self.pos += 1;
 
@@ -2309,6 +2578,11 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         const from = self.begin();
         self.pos += 1;
         const node = try self.addNode(.object_literal, from);
+        // the `async` and `*` an entry is written with, consumed one turn of the loop
+        // apart: typescript keeps each as a node beside the method's name, the tree keeps
+        // neither, and the loop takes `property_from` again after the `continue`, so the
+        // count has to be carried across the turn that consumed it
+        var method_modifiers: i32 = 0;
 
         while (!self.atEnd() and !self.atPunct("}")) {
             if (self.atPunct(",")) {
@@ -2335,14 +2609,21 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 const leads_a_member = next != null and
                     (next.?.kind == .word or next.?.isLiteral() or next.?.isPunct("[") or next.?.isPunct("*"));
                 if (leads_a_member) {
+                    // `get` and `set` are the accessor's own kind rather than a node
+                    if (self.peek().?.isWord("async")) method_modifiers += modifier_node;
                     self.pos += 1;
                     continue;
                 }
             }
             if (self.atPunct("*")) {
+                method_modifiers += modifier_node;
                 self.pos += 1;
                 continue;
             }
+
+            // whatever this entry carried is settled here, method or not
+            const entry_modifiers = method_modifiers;
+            method_modifiers = 0;
 
             const key = self.peek().?;
 
@@ -2356,6 +2637,8 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.pos += 1;
                     const value = try self.parseExpression();
                     self.module.appendChild(node, value);
+                    // the entry's node and the `ComputedPropertyName` the brackets are
+                    self.module.addDescendants(node, computed_key_nodes);
                 }
                 continue;
             }
@@ -2365,12 +2648,15 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 const is_method = next != null and next.?.isPunct("(");
                 self.pos += 1;
                 if (is_method) {
+                    // `async run() {}` and `*gen() {}` are `MethodDeclaration`s whose
+                    // modifier is a node beside the name
                     const method = try self.addNode(.function_expr, property_from);
+                    self.module.addDescendants(method, function_name_node + entry_modifiers);
                     self.module.appendChild(node, method);
                     try self.parseParameterList(method);
                     if (self.atPunct(":")) {
                         self.pos += 1;
-                        self.skipType(.return_annotation);
+                        self.skipTypeCounting(method, .return_annotation);
                     }
                     if (self.atPunct("{")) {
                         const body = try self.parseBlock();
@@ -2383,6 +2669,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.pos += 1;
                     const value = try self.parseExpression();
                     self.module.appendChild(node, value);
+                    self.module.addDescendants(node, property_entry_nodes);
                     continue;
                 }
                 if (self.atPunct("=")) {
@@ -2390,8 +2677,12 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.pos += 1;
                     const value = try self.parseExpression();
                     self.module.appendChild(node, value);
+                    self.module.addDescendants(node, property_entry_nodes);
                     continue;
                 }
+                // a shorthand `{ a }`, whose name and its `ShorthandPropertyAssignment`
+                // node the tree keeps only in the literal's own source text
+                self.module.addDescendants(node, property_entry_nodes);
                 continue;
             }
 
@@ -2401,6 +2692,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.pos += 1;
                     const value = try self.parseExpression();
                     self.module.appendChild(node, value);
+                    self.module.addDescendants(node, property_entry_nodes);
                     continue;
                 }
                 continue;
@@ -2416,6 +2708,64 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
 
     // -----------------------------------------------------------------------
     // types
+
+    /// whether a `new` operand's chain holds the call its callee's argument list built.
+    /// the chain below a `new` runs down its first child: `new Set(x).size` puts the
+    /// member above the `new` and the call below it, and `new Foo.bar` builds no call at
+    /// all
+    fn constructionCall(self: *const Parser, operand: ir.NodeIndex) bool {
+        var current = operand;
+        while (true) {
+            switch (self.module.kindOf(current)) {
+                .call => return true,
+                .member => current = self.module.firstChildOf(current) orelse return false,
+                else => return false,
+            }
+        }
+    }
+
+    /// consume a type expression and return the TypeScript nodes it stands for: the
+    /// tree keeps a type as an extent, and the count the gate compares includes every
+    /// node inside it
+    fn skipTypeNodes(self: *Parser, stop: TypeStop) i32 {
+        const type_from = self.pos;
+        self.skipType(stop);
+        if (type_from == self.pos) return 0;
+        return @intCast(typecount.subtreeSize(self.source, self.tokens, type_from, self.pos));
+    }
+
+    /// consume a type expression and record its nodes on the node that owns it
+    fn skipTypeCounting(self: *Parser, owner: ir.NodeIndex, stop: TypeStop) void {
+        self.module.addDescendants(owner, self.skipTypeNodes(stop));
+    }
+
+    /// the nodes a `<...>` type-argument list stands for, which no node wraps: the
+    /// list is the callee's own `typeArguments`, and the tree drops it whole
+    fn typeArgumentNodes(self: *Parser, open: usize, limit: usize) i32 {
+        return @intCast(typecount.typeArgumentCount(self.source, self.tokens, open, limit));
+    }
+
+    /// the `TypeParameter` nodes a `<...>` list stands for. the extent `skipType` walks
+    /// is bounded by the tokens that follow it, while a type-parameter list is bounded
+    /// by its own `>`, so the closer is found from the `<` here instead
+    fn typeParameterNodes(self: *Parser, open: usize, limit: usize) i32 {
+        return @intCast(typecount.typeParameterCount(self.source, self.tokens, open, limit));
+    }
+
+    /// the nodes a `<...>` list at the cursor stands for, for the callers that then walk
+    /// the extent `skipType` sees: that extent runs on past the `>` into whatever
+    /// follows, so the closer is found from the `<` and never from the extent
+    fn typeParameterNodesAt(self: *Parser, open: usize) i32 {
+        const close = self.matchingAngle(open) orelse return 0;
+        return self.typeParameterNodes(open, close + 1);
+    }
+
+    /// the nodes an `implements` clause stands for: the `HeritageClause` over one
+    /// `ExpressionWithTypeArguments` per type, which is the count the type counter
+    /// reads from the clause's own extent
+    fn heritageNodes(self: *Parser, from: usize, to: usize) i32 {
+        return @intCast(typecount.heritageCount(self.source, self.tokens, from, to));
+    }
 
     /// consume a type expression, stopping at a terminator at nesting depth 0.
     /// types are not modelled: their extent is all a rule needs
@@ -3629,4 +3979,117 @@ fn firstUncoveredByte(source: []const u8, end: u32) ?usize {
         return i;
     }
     return null;
+}
+
+/// the descendants typescript reports for one expression, read from typescript 6.0.3
+/// with the detector's own `countNodes`, which is `ts.forEachChild` over the node. the
+/// front-end has to report the same number for the node it builds in the expression's
+/// place, because the rule's gate is a floor over that count
+const subtree_rows = [_]struct { expression: []const u8, count: u32 }{
+    .{ .expression = "a", .count = 0 },
+    .{ .expression = "1", .count = 0 },
+    .{ .expression = "\"s\"", .count = 0 },
+    .{ .expression = "true", .count = 0 },
+    .{ .expression = "this", .count = 0 },
+    .{ .expression = "null", .count = 0 },
+    .{ .expression = "/x/", .count = 0 },
+    .{ .expression = "a.b", .count = 2 },
+    .{ .expression = "a?.b", .count = 3 },
+    .{ .expression = "a[b]", .count = 2 },
+    .{ .expression = "a[b.c]", .count = 4 },
+    .{ .expression = "a.b.c", .count = 4 },
+    .{ .expression = "a.b!.c", .count = 5 },
+    .{ .expression = "a!", .count = 1 },
+    .{ .expression = "a++", .count = 1 },
+    .{ .expression = "++a", .count = 1 },
+    .{ .expression = "-a", .count = 1 },
+    .{ .expression = "!a", .count = 1 },
+    .{ .expression = "typeof a", .count = 1 },
+    .{ .expression = "void a", .count = 1 },
+    .{ .expression = "delete a.b", .count = 3 },
+    .{ .expression = "await a", .count = 1 },
+    .{ .expression = "f()", .count = 1 },
+    .{ .expression = "f(a)", .count = 2 },
+    .{ .expression = "f(a, b)", .count = 3 },
+    .{ .expression = "a.b(c)", .count = 4 },
+    .{ .expression = "f<T>(a)", .count = 4 },
+    .{ .expression = "f<Map<string, number>>(a)", .count = 6 },
+    .{ .expression = "import(\"m\")", .count = 2 },
+    .{ .expression = "new Foo", .count = 1 },
+    .{ .expression = "new Foo(1)", .count = 2 },
+    .{ .expression = "new Foo<T>(1)", .count = 4 },
+    .{ .expression = "a + b", .count = 3 },
+    .{ .expression = "a = b", .count = 3 },
+    .{ .expression = "a += b", .count = 3 },
+    .{ .expression = "a ?? b", .count = 3 },
+    .{ .expression = "a instanceof b", .count = 3 },
+    .{ .expression = "a ? b : c", .count = 5 },
+    .{ .expression = "a as T", .count = 3 },
+    .{ .expression = "a as Map<string, number>", .count = 5 },
+    .{ .expression = "a as const", .count = 3 },
+    .{ .expression = "`a${b}c`", .count = 4 },
+    .{ .expression = "`${a}${b}`", .count = 7 },
+    .{ .expression = "`abc`", .count = 0 },
+    .{ .expression = "(a)", .count = 1 },
+    .{ .expression = "((a))", .count = 2 },
+    .{ .expression = "(a, b)", .count = 4 },
+    .{ .expression = "(a, b, c)", .count = 7 },
+    .{ .expression = "[a, b]", .count = 2 },
+    .{ .expression = "[]", .count = 0 },
+    .{ .expression = "[a, ...b]", .count = 3 },
+    .{ .expression = "[, a]", .count = 2 },
+    .{ .expression = "[a, , b]", .count = 3 },
+    .{ .expression = "f(...a)", .count = 3 },
+    .{ .expression = "({ a: 1 })", .count = 4 },
+    .{ .expression = "({ a })", .count = 3 },
+    .{ .expression = "({ a, b })", .count = 5 },
+    .{ .expression = "({ a: b, c: d })", .count = 7 },
+    .{ .expression = "({ ...a })", .count = 3 },
+    .{ .expression = "({ [a]: b })", .count = 5 },
+    .{ .expression = "({ [a.b]: c })", .count = 7 },
+    .{ .expression = "({ a() {} })", .count = 4 },
+    .{ .expression = "({ get x() { return 1; } })", .count = 6 },
+    .{ .expression = "({ async run() {} })", .count = 5 },
+    .{ .expression = "({ *gen() {} })", .count = 5 },
+    .{ .expression = "({ async *gen() {} })", .count = 6 },
+    .{ .expression = "({ async() {} })", .count = 4 },
+    .{ .expression = "({ a: () => b })", .count = 6 },
+    .{ .expression = "a => a", .count = 4 },
+    .{ .expression = "(a) => a", .count = 4 },
+    .{ .expression = "() => a", .count = 2 },
+    .{ .expression = "(a: T) => a", .count = 6 },
+    .{ .expression = "(a: T, b: U) => a", .count = 10 },
+    .{ .expression = "(...a: T[]) => a", .count = 8 },
+    .{ .expression = "(a = 1) => a", .count = 5 },
+    .{ .expression = "(a?: T) => a", .count = 7 },
+    .{ .expression = "(a): T => a", .count = 6 },
+    .{ .expression = "async (a) => a", .count = 5 },
+    .{ .expression = "async a => a", .count = 5 },
+    .{ .expression = "<T>(a: T) => a", .count = 8 },
+    .{ .expression = "function () {}", .count = 1 },
+    .{ .expression = "function named() {}", .count = 2 },
+    .{ .expression = "function (a) { return a; }", .count = 5 },
+    .{ .expression = "function (a: T): U { return a; }", .count = 9 },
+    .{ .expression = "async function () {}", .count = 2 },
+
+};
+
+test "a node's count is the one typescript reports for its subtree" {
+    for (subtree_rows) |row| try expectCount(row.expression, row.count);
+}
+
+fn expectCount(expression: []const u8, expected: u32) !void {
+    const source = try std.fmt.allocPrint(testing.allocator, "const __x = {s};", .{expression});
+    defer testing.allocator.free(source);
+
+    var module = try parse(testing.allocator, source);
+    defer module.deinit();
+
+    const declaration = module.firstChildOf(module.root) orelse return error.TestUnexpectedResult;
+    const initializer = module.lastChildOf(declaration) orelse return error.TestUnexpectedResult;
+    const actual = module.descendantsOf(initializer);
+    if (actual != expected) {
+        std.debug.print("count '{s}': want {d}, got {d}\n", .{ expression, expected, actual });
+        return error.TestUnexpectedResult;
+    }
 }
