@@ -22,7 +22,6 @@ const typecount = @import("typecount.zig");
 /// anything it does not recognise. unrecognised input becomes an `.unknown`
 /// node and bumps `Module.unsupported`, so a caller can tell "linted and clean"
 /// from "did not understand it" and the corpus test asserts it never happens
-
 /// identifiers and keywords are both `.word`, exactly as the token rules expect
 pub const TokenKind = enum { word, number, string, template, template_end, regex, punct };
 
@@ -836,10 +835,10 @@ const member_modifiers = [_][]const u8{
 /// reference to a binding of the same name
 pub const non_reference_words = [_][]const u8{
     "true", "false", "null", "undefined", "this", "super", "typeof", "void", "delete", "await", "yield",
-    "new", "in", "of", "instanceof", "as", "return", "throw", "if", "else", "for", "while", "do", "switch",
-    "case", "default", "break", "continue", "try", "catch", "finally", "function", "class", "const", "let",
-    "var", "import", "export", "from", "extends", "implements", "interface", "type", "enum", "namespace",
-    "declare", "async", "abstract", "keyof", "infer", "satisfies", "is", "asserts",
+    "new",       "in",      "of",    "instanceof", "as",     "return",   "throw",     "if",         "else",      "for",      "while",
+    "do",        "switch",  "case",  "default",    "break",  "continue", "try",       "catch",      "finally",   "function", "class",
+    "const",     "let",     "var",   "import",     "export", "from",     "extends",   "implements", "interface", "type",     "enum",
+    "namespace", "declare", "async", "abstract",   "keyof",  "infer",    "satisfies", "is",         "asserts",
 };
 
 /// the same set as a comptime lookup. the parser asks whether a word token is a
@@ -1364,29 +1363,36 @@ const Parser = struct {
     }
 
     fn parseConst(self: *Parser) !ir.NodeIndex {
-        return self.parseVariableDeclaration(.@"const", true);
+        return self.parseVariableDeclaration(.@"const", .statement);
     }
 
     fn parseLet(self: *Parser) !ir.NodeIndex {
-        return self.parseVariableDeclaration(.@"let", true);
+        return self.parseVariableDeclaration(.let, .statement);
     }
 
     fn parseVar(self: *Parser) !ir.NodeIndex {
-        return self.parseVariableDeclaration(.@"var", true);
+        return self.parseVariableDeclaration(.@"var", .statement);
     }
 
-    fn parseVariableDeclaration(self: *Parser, declaration_kind: ir.DeclKind, consume_semicolon: bool) !ir.NodeIndex {
+    fn parseVariableDeclaration(self: *Parser, declaration_kind: ir.DeclKind, position: DeclarationPosition) !ir.NodeIndex {
         const from = self.begin();
         const keyword = self.advance();
         const node = try self.addNode(.variable_decl, from);
         self.module.nodes.items[node].decl_kind = declaration_kind;
         self.module.nodes.items[node].operator = keyword.text;
+        // a statement's own node stands in for the `VariableStatement`, and a `for`
+        // header's for the declaration list itself: only the statement has a list
+        // between it and its declarators
+        if (position == .statement) self.module.addDescendants(node, declaration_list_node);
 
         while (!self.atEnd()) {
+            // every declarator is one `VariableDeclaration` over its name, its
+            // annotation and its initializer
+            self.module.addDescendants(node, declarator_node);
             try self.parseBindingTarget(node);
             if (self.atPunct(":")) {
                 self.pos += 1;
-                self.skipType(.annotation_before_value);
+                self.skipTypeCounting(node, .annotation_before_value);
             }
             if (self.atPunct("=")) {
                 const value_from = self.begin();
@@ -1402,7 +1408,7 @@ const Parser = struct {
             break;
         }
 
-        if (consume_semicolon and self.atPunct(";")) self.pos += 1;
+        if (position == .statement and self.atPunct(";")) self.pos += 1;
         self.closeNode(node, from);
         return node;
     }
@@ -1432,6 +1438,18 @@ const Parser = struct {
             self.pos += 1;
             var depth: usize = 1;
             var previous_was_key = false;
+            // whether the cursor stands at the head of an entry, where a bracket pair
+            // opens a nested pattern rather than continuing the one above it: after the
+            // opener, after a `,` and after the `:` that introduces a `{ a: { b } }`
+            var at_entry_start = true;
+            // a default's value is an expression, and the loop reads it as bare names
+            // like the rest of the pattern: nothing inside it is a `BindingElement`, a
+            // key or a nested pattern, and the brackets the value opens are what tell
+            // the `,` between two members from the one that ends the entry. all three
+            // kinds are counted, not only the parentheses: `depth` sees one bracket kind
+            // alone, so it reads the comma inside `{ a = [1, 2] }` as the entry's own
+            var in_default = false;
+            var default_brackets: usize = 0;
             while (!self.atEnd() and depth > 0) {
                 const current = self.peek().?;
                 if (current.kind == .punct and std.mem.eql(u8, current.text, opener)) depth += 1;
@@ -1442,18 +1460,84 @@ const Parser = struct {
                         break;
                     }
                 }
+                // a default's value is an expression the loop reads as bare names, and the
+                // nodes inside it are the tree's business: what the value holds beyond the
+                // names the tree binds is the recorded gap below, so nothing inside it is
+                // counted as an entry, a key or a pattern
+                if (in_default and (current.isPunct("(") or current.isPunct("[") or current.isPunct("{"))) default_brackets += 1;
+                if (in_default and (current.isPunct(")") or current.isPunct("]") or current.isPunct("}")) and default_brackets > 0) default_brackets -= 1;
+                if (in_default and current.isPunct(",") and depth == 1 and default_brackets == 0) in_default = false;
+                const counting = !in_default;
+
                 if (current.kind == .word) {
                     const next = if (self.pos + 1 < self.tokens.len) self.tokens[self.pos + 1] else null;
                     const is_key = next != null and next.?.isPunct(":");
-                    if (!is_key and !previous_was_key and !isNonReference(current.text)) {
+                    if (counting and is_key) {
+                        // a `{ a: b }` entry names its property as well as its binding
+                        self.module.addDescendants(pattern, binding_property_name_node);
+                    } else if (!is_key and !previous_was_key and !isNonReference(current.text)) {
                         const binding = try self.addNode(.identifier, self.begin());
                         self.module.nodes.items[binding].name = current.text;
                         self.module.nodes.items[binding].binding = .variable;
                         self.module.appendChild(pattern, binding);
+                        // every bound name is one `BindingElement`
+                        if (counting) self.module.addDescendants(pattern, binding_element_node);
+                    } else if (counting) {
+                        // a name typescript binds and this list leaves out, because the word
+                        // is keyword-shaped: it is still an entry's own `Identifier`
+                        self.module.addDescendants(pattern, binding_element_node + declined_name_node);
                     }
                     previous_was_key = is_key;
+                    at_entry_start = false;
                 } else {
                     previous_was_key = false;
+                }
+                if (counting and current.isPunct("...")) self.module.addDescendants(pattern, binding_rest_token_node);
+                if (counting and current.isPunct("=")) {
+                    // the initializer node, which the tree drops whole. a value that is one
+                    // bare name is the node the tree already counts, because the loop binds
+                    // that word, while a value with anything above its names (`= ""`,
+                    // `= f(x)`, `= a + b`) is a node it does not build
+                    //
+                    // ponytail: a value with more than one node above its names
+                    // (`= f(x).b`, `= { x: 1 }`, `= [1, 2]`) is counted short by the rest.
+                    // measured over the corpus: one pattern default in 246 files, and it is
+                    // `= ""`, which this counts
+                    const value = if (self.pos + 1 < self.tokens.len) self.tokens[self.pos + 1] else null;
+                    const after_value = if (self.pos + 2 < self.tokens.len) self.tokens[self.pos + 2] else null;
+                    const bare_name = value != null and value.?.kind == .word and !isNonReference(value.?.text) and
+                        (after_value == null or after_value.?.isPunct(",") or after_value.?.isPunct(closer));
+                    self.module.addDescendants(pattern, binding_default_node - @as(i32, @intFromBool(bare_name)));
+                    in_default = true;
+                    default_brackets = 0;
+                } else if (current.isPunct(":")) {
+                    at_entry_start = true;
+                } else if (current.isPunct(",")) {
+                    // `[a, , b]` writes a hole typescript keeps as an `OmittedExpression`
+                    const previous = if (self.pos > 0) self.tokens[self.pos - 1] else null;
+                    if (counting and previous != null and (previous.?.isPunct("[") or previous.?.isPunct(","))) {
+                        self.module.addDescendants(pattern, omitted_element_node);
+                    }
+                    at_entry_start = true;
+                } else if (counting and (current.isPunct("{") or current.isPunct("[")) and at_entry_start) {
+                    // a nested pattern is a node of its own, and the entry that holds it is
+                    // a `BindingElement` beside the bound names rather than above one
+                    self.module.addDescendants(pattern, binding_pattern_node + binding_element_node);
+                    // ponytail: an object pattern's brackets hold a computed name rather
+                    // than a nested pattern, and this counts them as the two a nested
+                    // pattern and its entry would take. measured: `{ [k]: v }` reads 2
+                    // over typescript's count and `{ [f(a)]: v }` 2 over, because the tree
+                    // reads the brackets' expression as bare names. closing it needs the
+                    // entry's `BindingElement` counted once per entry and the
+                    // `ComputedPropertyName` beside it, which is the state machine this
+                    // reads instead of
+                    // measured over the corpus: no object pattern holds a computed name at
+                    // all, 0 of 246 files and 0 of the 5126 differential cases
+                } else if (counting and at_entry_start and current.isLiteral()) {
+                    // a literal key, which is a `PropertyName` and never a name this list
+                    // could bind: `{ "s": v }` and `{ 1: v }`
+                    self.module.addDescendants(pattern, binding_property_name_node);
+                    at_entry_start = false;
                 }
                 self.pos += 1;
             }
@@ -1466,22 +1550,40 @@ const Parser = struct {
 
     fn parseFunctionDeclaration(self: *Parser) !ir.NodeIndex {
         const from = self.begin();
-        if (self.atWord("abstract")) self.pos += 1;
-        if (self.atWord("async")) self.pos += 1;
+        // `abstract` and `async` are each one node beside the declaration
+        var declaration_modifiers: i32 = 0;
+        if (self.atWord("abstract")) {
+            declaration_modifiers += declaration_modifier_node;
+            self.pos += 1;
+        }
+        if (self.atWord("async")) {
+            declaration_modifiers += declaration_modifier_node;
+            self.pos += 1;
+        }
         const node = try self.addNode(.function_decl, from);
         if (self.atWord("function")) {
             self.pos += 1;
-            if (self.atPunct("*")) self.pos += 1;
+            if (self.atPunct("*")) {
+                declaration_modifiers += declaration_modifier_node;
+                self.pos += 1;
+            }
             if (!self.atEnd() and self.peek().?.kind == .word) {
                 self.module.nodes.items[node].name = self.peek().?.text;
+                declaration_modifiers += function_name_node;
                 self.pos += 1;
             }
         }
-        if (self.atPunct("<")) self.skipType(.brace_starts_object);
+        if (declaration_modifiers != 0) self.module.addDescendants(node, declaration_modifiers);
+        if (self.atPunct("<")) {
+            self.module.addDescendants(node, self.typeParameterNodesAt(self.pos));
+            // the extent this skips runs past the `>` into the parameter list that
+            // follows, and that list is a recorded gap below
+            self.skipType(.brace_starts_object);
+        }
         try self.parseParameterList(node);
         if (self.atPunct(":")) {
             self.pos += 1;
-            self.skipType(.return_annotation);
+            self.skipTypeCounting(node, .return_annotation);
         }
         if (self.atPunct("{")) {
             const body = try self.parseBlock();
@@ -1580,8 +1682,14 @@ const Parser = struct {
 
     fn parseClassDeclaration(self: *Parser) !ir.NodeIndex {
         const from = self.begin();
-        if (self.atWord("abstract") or self.atWord("declare")) self.pos += 1;
+        // `abstract` and `declare` are each one node beside the declaration
+        var declaration_modifiers: i32 = 0;
+        if (self.atWord("abstract") or self.atWord("declare")) {
+            declaration_modifiers = declaration_modifier_node;
+            self.pos += 1;
+        }
         const node = try self.addNode(.class_decl, from);
+        if (declaration_modifiers != 0) self.module.addDescendants(node, declaration_modifiers);
         if (self.atWord("class")) {
             self.pos += 1;
             // a class expression may have no name at all, so `extends` and
@@ -1592,10 +1700,14 @@ const Parser = struct {
                 !self.atWord("extends") and !self.atWord("implements"))
             {
                 self.module.nodes.items[node].name = (self.peek().?).text;
+                self.module.addDescendants(node, class_name_node);
                 self.pos += 1;
             }
         }
-        if (self.atPunct("<")) self.skipType(.brace_starts_object);
+        if (self.atPunct("<")) {
+            self.module.addDescendants(node, self.typeParameterNodesAt(self.pos));
+            self.skipType(.brace_starts_object);
+        }
         if (self.atWord("extends")) {
             self.pos += 1;
             // the base is a type reference (`Base`, `ns.Base`) or a call that
@@ -1608,10 +1720,15 @@ const Parser = struct {
 
             const base = try self.parseExpression();
             self.module.appendChild(node, base);
+            // the clause, and the wrapper the base is held in: the tree puts the base's
+            // own node where both of them are
+            self.module.addDescendants(node, extends_clause_nodes);
         }
         if (self.atWord("implements")) {
             self.pos += 1;
+            const heritage_from = self.pos;
             self.skipType(.brace_starts_body);
+            self.module.addDescendants(node, self.heritageNodes(heritage_from, self.pos));
         }
         if (self.atPunct("{")) try self.parseClassBody(node);
         self.closeNode(node, from);
@@ -1626,33 +1743,56 @@ const Parser = struct {
                 continue;
             }
             const from = self.begin();
-            while (!self.atEnd() and self.peek().?.kind == .word and isModifier(self.peek().?.text)) self.pos += 1;
-            while (!self.atEnd() and self.peek().?.isPunct("*")) self.pos += 1;
+            // every modifier a member is written with is a node of its own, and `get`
+            // and `set` are not modifiers at all
+            while (!self.atEnd() and self.peek().?.kind == .word and isModifier(self.peek().?.text)) {
+                if (isModifierNode(self.peek().?.text)) self.module.addDescendants(parent, declaration_modifier_node);
+                self.pos += 1;
+            }
+            while (!self.atEnd() and self.peek().?.isPunct("*")) {
+                self.module.addDescendants(parent, declaration_modifier_node);
+                self.pos += 1;
+            }
 
             if (self.atEnd() or self.atPunct("}")) break;
 
+            // the name the member is declared under. a computed one is a
+            // `ComputedPropertyName` over the expression the tree keeps, a plain one an
+            // `Identifier` the tree drops, and `constructor` is the one member
+            // typescript declares with no name node at all
             if (self.atPunct("[")) {
+                self.module.addDescendants(parent, class_member_name_node);
                 self.pos += 1;
                 const computed = try self.parseExpression();
                 self.module.appendChild(parent, computed);
                 if (self.atPunct("]")) self.pos += 1;
             } else if (self.peek().?.kind == .word or (self.peek().?).isLiteral()) {
+                if (!self.peek().?.isWord("constructor")) self.module.addDescendants(parent, class_member_name_node);
                 self.pos += 1;
             } else {
                 _ = try self.parseUnknown();
                 continue;
             }
 
-            if (self.atPunct("?")) self.pos += 1;
-            if (self.atPunct("<")) self.skipType(.brace_starts_object);
+            if (self.atPunct("?")) {
+                self.module.addDescendants(parent, optional_member_token_node);
+                self.pos += 1;
+            }
+            if (self.atPunct("<")) {
+                self.module.addDescendants(parent, self.typeParameterNodesAt(self.pos));
+                self.skipType(.brace_starts_object);
+            }
 
             if (self.atPunct("(")) {
+                // a method, an accessor or a constructor: the callable node the tree
+                // builds is what stands in for the `MethodDeclaration`, `GetAccessor`,
+                // `SetAccessor` or `Constructor` wrapper, so only the name is missing
                 const member = try self.addNode(.function_decl, from);
                 self.module.appendChild(parent, member);
                 try self.parseParameterList(member);
                 if (self.atPunct(":")) {
                     self.pos += 1;
-                    self.skipType(.return_annotation);
+                    self.skipTypeCounting(member, .return_annotation);
                 }
                 if (self.atPunct("{")) {
                     const body = try self.parseBlock();
@@ -1662,9 +1802,12 @@ const Parser = struct {
                 continue;
             }
 
+            // a field: typescript wraps it in a `PropertyDeclaration` over its name and
+            // its initializer, and the tree hangs the initializer off the class itself
+            self.module.addDescendants(parent, class_member_node);
             if (self.atPunct(":")) {
                 self.pos += 1;
-                self.skipType(.annotation_before_value);
+                self.skipTypeCounting(parent, .annotation_before_value);
             }
             if (self.atPunct("=")) {
                 self.pos += 1;
@@ -1716,7 +1859,11 @@ const Parser = struct {
         const next = if (self.pos + 1 < self.tokens.len) self.tokens[self.pos + 1] else null;
         if (next != null and next.?.isWord("function")) {
             self.pos += 1;
-            return self.parseFunctionDeclaration();
+            const declaration = try self.parseFunctionDeclaration();
+            // the `async` this handler consumed is the declaration's own modifier node,
+            // and the handler is where the token left the stream
+            self.module.addDescendants(declaration, declaration_modifier_node);
+            return declaration;
         }
         return self.parseExpressionStatement();
     }
@@ -1751,7 +1898,6 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
     .{ "declare", parseTypeDeclaration },
     .{ "async", parseAsyncDeclaration },
 });
-
 
     fn parseIf(self: *Parser) !ir.NodeIndex {
         const from = self.begin();
@@ -1815,15 +1961,18 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
     fn parseFor(self: *Parser) !ir.NodeIndex {
         const from = self.begin();
         self.pos += 1;
-        if (self.atWord("await")) self.pos += 1;
+        const is_await = self.atWord("await");
+        if (is_await) self.pos += 1;
         const node = try self.addNode(.for_stmt, from);
+        // `for await` carries the `AwaitKeyword` beside the declaration and the iterable
+        if (is_await) self.module.addDescendants(node, for_await_token_node);
 
         if (self.atPunct("(")) {
             self.pos += 1;
 
             if (self.atWord("const") or self.atWord("let") or self.atWord("var")) {
                 const declaration_kind = ir.DeclKind.fromKeyword(self.peek().?.text);
-                const declaration = try self.parseVariableDeclaration(declaration_kind, false);
+                const declaration = try self.parseVariableDeclaration(declaration_kind, .loop_header);
                 self.module.appendChild(node, declaration);
             } else if (!self.atPunct(";")) {
                 const initializer = try self.parseExpression();
@@ -1861,6 +2010,9 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
         const from = self.begin();
         self.pos += 1;
         const node = try self.addNode(.switch_stmt, from);
+        // typescript holds every clause in a `CaseBlock` above them, and the tree hangs
+        // the clauses off the statement itself
+        self.module.addDescendants(node, case_block_node);
 
         if (self.atPunct("(")) {
             self.pos += 1;
@@ -1911,12 +2063,17 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
             self.pos += 1;
             const clause = try self.addNode(if (is_catch) .catch_clause else .block, clause_from);
             self.module.appendChild(node, clause);
+            // `finally` is not a clause typescript declares: the block after the keyword
+            // is the `try`'s own `finallyBlock`, and the tree wraps it in one more node
+            if (!is_catch) self.module.addDescendants(clause, finally_clause_node);
             if (is_catch and self.atPunct("(")) {
                 self.pos += 1;
+                // typescript wraps the caught binding in a `VariableDeclaration`
+                self.module.addDescendants(clause, catch_binding_node);
                 try self.parseBindingTarget(clause);
                 if (self.atPunct(":")) {
                     self.pos += 1;
-                    self.skipType(.brace_starts_object);
+                    self.skipTypeCounting(clause, .brace_starts_object);
                 }
                 if (self.atPunct(")")) self.pos += 1;
             }
@@ -3267,6 +3424,12 @@ fn isModifier(text: []const u8) bool {
     return contains(&member_modifiers, text);
 }
 
+/// which member modifiers are nodes of their own: `get` and `set` are the accessor kinds
+/// rather than modifiers, so neither adds a node
+fn isModifierNode(text: []const u8) bool {
+    return !std.mem.eql(u8, text, "get") and !std.mem.eql(u8, text, "set");
+}
+
 /// whether a word token is a keyword rather than a name. the parser asks this to
 /// tell a reference from a modifier, and the project pass asks it to tell the
 /// names a file mentions from the keywords it is written with
@@ -4072,10 +4235,103 @@ const subtree_rows = [_]struct { expression: []const u8, count: u32 }{
     .{ .expression = "function (a: T): U { return a; }", .count = 9 },
     .{ .expression = "async function () {}", .count = 2 },
 
+    // statements and declarations. these are the shapes a site's subtree reaches only
+    // through a callable body, and the deltas they need are checked by the same rows
+    .{ .expression = "f(() => { const x = 1; return x; })", .count = 11 },
+    .{ .expression = "(() => { const x = 1; return x; })", .count = 10 },
+    .{ .expression = "(() => { const x = 1, y = 2; return x + y; })", .count = 16 },
+    .{ .expression = "(() => { let x: string = \"a\"; return x; })", .count = 11 },
+    .{ .expression = "(() => { const { a, b } = c; return a; })", .count = 14 },
+    .{ .expression = "(() => { const { a: c } = d; return c; })", .count = 13 },
+    .{ .expression = "(() => { const { type } = c; return 1; })", .count = 12 },
+    .{ .expression = "((type: T) => g(type))", .count = 9 },
+    .{ .expression = "(() => { const { a: type } = c; return a; })", .count = 13 },
+    .{ .expression = "(() => { const { a: { b } } = c; return b; })", .count = 15 },
+    .{ .expression = "(() => { const [a, b] = c; return a; })", .count = 14 },
+    .{ .expression = "(() => { const [a, , b] = c; return a; })", .count = 15 },
+    .{ .expression = "(() => { const [a, ...rest] = c; return a; })", .count = 15 },
+    .{ .expression = "(() => { const { a = 1 } = c; return a; })", .count = 13 },
+    .{ .expression = "(() => { const { ...rest } = c; return rest; })", .count = 13 },
+    .{ .expression = "(() => { const { \"s\": v } = c; return v; })", .count = 13 },
+    .{ .expression = "(() => { const [a, [b]] = c; return b; })", .count = 16 },
+    .{ .expression = "(() => { try { g(); } catch (error) { return error; } })", .count = 14 },
+    .{ .expression = "(() => { try { g(); } catch (error: unknown) { return error; } })", .count = 15 },
+    .{ .expression = "(() => { try { g(); } catch ({ message }) { return message; } finally { h(); } })", .count = 20 },
+    .{ .expression = "(() => { try { g(); } finally { h(); } })", .count = 12 },
+    .{ .expression = "(() => { for (const item of items) { g(item); } })", .count = 13 },
+    .{ .expression = "(() => { for (let i = 0; i < n; i++) { g(i); } })", .count = 19 },
+    .{ .expression = "(() => { for (const key in record) { g(key); } })", .count = 13 },
+    .{ .expression = "(() => { for await (const item of items) { g(item); } })", .count = 14 },
+    .{ .expression = "(() => { for (const { id } of items) { g(id); } })", .count = 15 },
+    .{ .expression = "(() => { switch (x) { case 1: return 1; default: return 2; } })", .count = 13 },
+    .{ .expression = "(() => { if (x) { g(); } else { h(); } })", .count = 13 },
+    .{ .expression = "(() => { while (x) { g(); } })", .count = 9 },
+    .{ .expression = "(() => { do { g(); } while (x); })", .count = 9 },
+    .{ .expression = "(() => { function g(a) { return a; } return g(1); })", .count = 14 },
+    .{ .expression = "(() => { async function g() { return 1; } return g(); })", .count = 12 },
+    .{ .expression = "(() => { function* g() { yield 1; } return g(); })", .count = 13 },
+
+    // classes, their heritage and the members a body holds
+    .{ .expression = "(() => { class K {} return K; })", .count = 7 },
+    .{ .expression = "(() => { class K { x = 1; } return K; })", .count = 10 },
+    .{ .expression = "(() => { class K { m() { return 1; } } return K; })", .count = 12 },
+    .{ .expression = "(() => { class K extends Base {} return K; })", .count = 10 },
+    .{ .expression = "(() => { class K implements I {} return K; })", .count = 10 },
+    .{ .expression = "(class K extends Base implements I { x = 1; m() {} })", .count = 14 },
+    .{ .expression = "(class K extends Base<T> implements I {})", .count = 10 },
+    .{ .expression = "(class K { constructor() {} static y = 3; readonly z = 1; })", .count = 12 },
+    .{ .expression = "(class K { [k] = 1; [j]() {} })", .count = 10 },
+    .{ .expression = "(class K { get z() { return 4; } set z(v) {} })", .count = 12 },
+    .{ .expression = "(class K { async m() {} *gen() {} })", .count = 10 },
+    .{ .expression = "(class K { x?: number; \"s\": number = 1; })", .count = 10 },
+    .{ .expression = "(class K { m(a, b) { return a; } })", .count = 11 },
 };
 
 test "a node's count is the one typescript reports for its subtree" {
     for (subtree_rows) |row| try expectCount(row.expression, row.count);
+}
+
+test "a pattern default's value is read for its names, not built" {
+    const allocator = testing.allocator;
+    // the loop walks a default's tokens because a value holds references that a scope pass
+    // wants, and HEAD's walk binds a name only where its own entry structure says so: `x`
+    // here is a key of an object literal inside the default, and no name comes of it
+    const source = "const { a = { x: 1 } } = o;\nconst [b = c ? y : 1] = p;\n";
+    var module = try parse(allocator, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+
+    // every name the walk binds, which is the tree's own reading of the two declarations:
+    // `a`, `b`, `o` and `p` are the names the entries declare, and `c` is the default's own
+    // reference, which this walk binds because that is what it has always done
+    var bound: [6][]const u8 = undefined;
+    var found: usize = 0;
+    var walker = module.iterator();
+    while (walker.next()) |index| {
+        if (module.kindOf(index) != .identifier) continue;
+        try testing.expect(found < bound.len);
+        bound[found] = module.nodeOf(index).name;
+        found += 1;
+    }
+    try testing.expectEqual(bound.len - 1, found);
+    var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(allocator);
+    for (bound[0..found]) |name| try names.append(allocator, name);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+            return std.mem.lessThan(u8, left, right);
+        }
+    }.lessThan);
+    try testing.expectEqualStrings("a", names.items[0]);
+    try testing.expectEqualStrings("b", names.items[1]);
+    try testing.expectEqualStrings("c", names.items[2]);
+    try testing.expectEqualStrings("o", names.items[3]);
+    try testing.expectEqualStrings("p", names.items[4]);
+
+    // and `x` is the key of the object literal inside the first default: no entry reads it,
+    // so no name comes of it, which is the tree this slice must leave alone
+    for (names.items) |name| try testing.expect(!std.mem.eql(u8, name, "x"));
 }
 
 fn expectCount(expression: []const u8, expected: u32) !void {
