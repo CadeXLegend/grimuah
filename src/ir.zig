@@ -194,6 +194,29 @@ pub const Node = struct {
 pub const Module = struct {
     arena: std.heap.ArenaAllocator,
     nodes: std.ArrayList(Node),
+    /// the TypeScript descendants each node carries that are not one of its IR children,
+    /// indexed exactly as `nodes` is
+    ///
+    /// the IR is deliberately shallow in expression position, and the front-end drops what
+    /// this records: a member access's name, a binary expression's operator token, an object
+    /// entry's key, every type annotation's nodes, and the whole of a postfix `!`. a positive
+    /// count is such a dropped child. two counts are negative, both of them a node the
+    /// tree adds where TypeScript has none: the `new` unary, because TypeScript writes a
+    /// construction as a single `NewExpression` over the callee and the arguments rather
+    /// than as a node wrapping them, and the `finally` clause, because TypeScript hangs
+    /// the block after the keyword off the `try` itself
+    ///
+    /// it is a delta rather than a finished count because the front-end links a node under
+    /// its parent before that node's own children land: a class member, a catch clause and an
+    /// object method all attach first and are populated after, so folding a child's subtree in
+    /// at the link would freeze short and never be revisited. `descendantsOf` sums the
+    /// finished tree instead, which cannot go stale
+    ///
+    /// it is maintained on every parse rather than behind a rule flag: it is one `i32` per
+    /// node, read only by the collector that needs it and by none of the seven per-file walks,
+    /// and a gate would need a `Module` whose array may be empty, which turns a missing count
+    /// into a plausible zero. if a profile ever shows the four bytes, the gate is the fix
+    extra_descendants: std.ArrayList(i32),
     root: NodeIndex,
     source: []const u8,
     /// constructs the front-end skipped, so callers can report coverage instead
@@ -204,6 +227,7 @@ pub const Module = struct {
         var module = Module{
             .arena = std.heap.ArenaAllocator.init(child_allocator),
             .nodes = .empty,
+            .extra_descendants = .empty,
             .root = none,
             .source = source,
         };
@@ -213,13 +237,18 @@ pub const Module = struct {
 
     pub fn deinit(self: *Module) void {
         self.nodes.deinit(self.arena.child_allocator);
+        self.extra_descendants.deinit(self.arena.child_allocator);
         self.arena.deinit();
     }
 
     /// all nodes live in one list, keyed by index
     pub fn add(self: *Module, kind: Kind, span: Span) !NodeIndex {
         const index: NodeIndex = @intCast(self.nodes.items.len);
+        // the deltas are indexed by node, so the two lists grow together: the capacity that
+        // can fail is reserved first, which leaves the append that cannot fail last
+        try self.extra_descendants.ensureUnusedCapacity(self.arena.child_allocator, 1);
         try self.nodes.append(self.arena.child_allocator, .{ .kind = kind, .span = span });
+        self.extra_descendants.appendAssumeCapacity(0);
         return index;
     }
 
@@ -235,6 +264,37 @@ pub const Module = struct {
             self.nodes.items[parent_node.last_child].next_sibling = child;
         }
         parent_node.last_child = child;
+    }
+
+    /// record the TypeScript descendants this node carries beyond its IR children: the
+    /// dropped name `Identifier`, an operator token, a type extent's nodes, or a wrapper
+    /// TypeScript has and the IR flattens away
+    ///
+    /// the delta is signed because two shapes are negative, each of them a node the tree
+    /// adds where TypeScript has none: the `new` unary owes the one its operand would
+    /// otherwise add, since TypeScript's `NewExpression` and the IR's `.call` share a child
+    /// set, and a `finally` clause owes the block wrapper the tree puts beside the block it
+    /// already builds, since TypeScript hangs that block off the `try` itself
+    pub fn addDescendants(self: *Module, index: NodeIndex, delta: i32) void {
+        self.extra_descendants.items[index] += delta;
+    }
+
+    /// the TypeScript descendants the node at `index` stands for, which is the number a gate
+    /// over `ts.forEachChild` compares
+    ///
+    /// the sum is over the subtree: what this node carries beyond its children, plus one for
+    /// each child and everything below it. it is summed rather than stored because the
+    /// front-end attaches a node before populating it, so an incremental total cannot be
+    /// kept. a caller that asks it of the outermost node of each expression pays the file
+    /// once, because a site's subtree holds no other site
+    pub fn descendantsOf(self: *const Module, index: NodeIndex) u32 {
+        var total: i64 = self.extra_descendants.items[index];
+        var child = self.firstChildOf(index);
+        while (child) |current| : (child = self.nextSiblingOf(current)) {
+            total += 1 + @as(i64, self.descendantsOf(current));
+        }
+        std.debug.assert(total >= 0);
+        return @intCast(total);
     }
 
     pub fn kindOf(self: *const Module, index: NodeIndex) Kind {
@@ -574,4 +634,94 @@ test "isInside finds an enclosing node" {
 
     try testing.expect(module.isInside(statement, .block));
     try testing.expect(!module.isInside(module.root, .block));
+}
+
+test "a node's count is its whole subtree, deltas included" {
+    var module = try Module.init(testing.allocator, "a.b(c)");
+    defer module.deinit();
+
+    // `a.b` carries its receiver plus the name the front-end drops
+    const call = try module.add(.call, .{ .start = 0, .end = 6, .line = 1 });
+    const member = try module.add(.member, .{ .start = 0, .end = 3, .line = 1 });
+    const receiver = try module.add(.identifier, .{ .start = 0, .end = 1, .line = 1 });
+    const argument = try module.add(.identifier, .{ .start = 4, .end = 5, .line = 1 });
+    module.addDescendants(member, 1);
+    module.appendChild(member, receiver);
+    module.appendChild(call, member);
+    module.appendChild(call, argument);
+
+    try testing.expectEqual(@as(u32, 0), module.descendantsOf(receiver));
+    // two: the receiver and the dropped name
+    try testing.expectEqual(@as(u32, 2), module.descendantsOf(member));
+    // four: the member's two, the member itself, and the argument
+    try testing.expectEqual(@as(u32, 4), module.descendantsOf(call));
+    try testing.expectEqual(@as(u32, 0), module.descendantsOf(module.root));
+}
+
+test "a negative delta takes back the node a wrapper would add" {
+    var module = try Module.init(testing.allocator, "new Foo(1)");
+    defer module.deinit();
+
+    // `new Foo(1)` is one NewExpression to TypeScript, so the `new` unary carries the call's
+    // children rather than one more than them
+    const unary = try module.add(.unary, .{ .start = 0, .end = 10, .line = 1 });
+    const call = try module.add(.call, .{ .start = 4, .end = 10, .line = 1 });
+    const callee = try module.add(.identifier, .{ .start = 4, .end = 7, .line = 1 });
+    const argument = try module.add(.literal, .{ .start = 8, .end = 9, .line = 1 });
+    module.addDescendants(unary, -1);
+    module.appendChild(call, callee);
+    module.appendChild(call, argument);
+    module.appendChild(unary, call);
+
+    try testing.expectEqual(@as(u32, 2), module.descendantsOf(call));
+    try testing.expectEqual(@as(u32, 2), module.descendantsOf(unary));
+}
+
+test "a count survives a child that is linked before its own children land" {
+    var module = try Module.init(testing.allocator, "");
+    defer module.deinit();
+
+    // the front-end links a class member to its class before the member's parameter list and
+    // body are built (`src/lang/ts.zig:1472` links, `:1473` and `:1480` populate), which is
+    // the order a fold at the link would count short: the sum comes off the finished tree, so
+    // the order the links were made in cannot matter
+    const class_node = try module.add(.class_decl, .{ .start = 0, .end = 40, .line = 1 });
+    const method = try module.add(.function_decl, .{ .start = 10, .end = 38, .line = 1 });
+    module.appendChild(class_node, method);
+    const parameter = try module.add(.identifier, .{ .start = 13, .end = 14, .line = 1 });
+    module.appendChild(method, parameter);
+
+    try testing.expectEqual(@as(u32, 2), module.descendantsOf(class_node));
+    try testing.expectEqual(@as(u32, 1), module.descendantsOf(method));
+}
+
+test "a node with no children carries only its own delta" {
+    var module = try Module.init(testing.allocator, "");
+    defer module.deinit();
+
+    const plain = try module.add(.identifier, .{ .start = 0, .end = 1, .line = 1 });
+    const dropped = try module.add(.member, .{ .start = 0, .end = 3, .line = 1 });
+    module.addDescendants(dropped, 1);
+
+    try testing.expectEqual(@as(u32, 0), module.descendantsOf(plain));
+    try testing.expectEqual(@as(u32, 1), module.descendantsOf(dropped));
+}
+
+test "the delta list stays in lockstep with the node list" {
+    var module = try Module.init(testing.allocator, "const total = 1;");
+    defer module.deinit();
+
+    const before = module.extra_descendants.items.len;
+    const first = try module.add(.literal, .{ .start = 0, .end = 1, .line = 1 });
+    const second = try module.add(.literal, .{ .start = 2, .end = 3, .line = 1 });
+    module.appendChild(module.root, first);
+    module.appendChild(module.root, second);
+
+    // every accessor is indexed by node, so a walk order is only meaningful while the two
+    // lists agree
+    try testing.expectEqual(module.nodes.items.len, module.extra_descendants.items.len);
+    try testing.expectEqual(before + 2, module.extra_descendants.items.len);
+    const walk = try module.walkOrder(testing.allocator);
+    defer testing.allocator.free(walk);
+    try testing.expectEqual(module.nodes.items.len, walk.len);
 }
