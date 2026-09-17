@@ -20,7 +20,6 @@ const scope = @import("scope.zig");
 /// `src/lint.zig` is the token-level engine this one was moved out of. it is kept
 /// as the differential oracle: `.auto/rule-parity.sh` runs both over the bench
 /// repos and fails on any difference in (line, layer, severity, message)
-
 pub const Finding = rules.Finding;
 pub const Severity = rules.Severity;
 
@@ -271,8 +270,7 @@ fn lintWorker(batch: *Batch, arena: *std.heap.ArenaAllocator) void {
         _ = arena.reset(.retain_capacity);
 
         const content = readSource(batch.io, arena.allocator(), batch.project_root, batch.paths[index]);
-        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &batch.contributions[index], batch.paths[index], content, batch.paths, batch.hygiene, .reclaimed)) |_| {
-        } else |err| {
+        if (lintContent(arena.allocator(), shared_finding_allocator, batch.cfg, &batch.contributions[index], batch.paths[index], content, batch.paths, batch.hygiene, .reclaimed)) |_| {} else |err| {
             batch.failures[index] = err;
         }
     }
@@ -648,7 +646,118 @@ fn appendBodyFingerprint(
         .name = key[0..name.len],
         .key = key,
         .line = tokens[typemodel.tokenAtOrAfter(tokens, @intCast(start))].line,
+        .body = body,
     });
+}
+
+/// a smoke module is out of the computation rule's scope twice over: the detector skips one
+/// when it builds the run's index and again when it produces rows, so excluding it at the
+/// collection covers both, because the sites a file contributes are its own rows and the
+/// run's count alike
+const smoke_module_suffix = ".smoke.ts";
+
+/// every computation expression one file offers to the run's computation index, in the order
+/// the expressions appear, which is the order their rows are reported in
+///
+/// the walk is the detector's own, and both of its halves matter: only a call, a construction
+/// and a template are asked about, and a counted expression is not descended into, because a
+/// sub-expression of a counted expression is not a site. the second half is what makes the
+/// walk affordable as well: a site's count is a sum over its whole subtree, so asking it of
+/// every nested expression would sum the same nodes once per nesting level
+///
+/// a construction is a `.call` under a `new` unary rather than a node of its own, while the
+/// detector's `ts.isCallExpression` excludes a `NewExpression`, so the unary is the site and
+/// its count is the `NewExpression`'s. a call inside such a unary needs no test of its own:
+/// the unary is visited first, a counted one ends the walk above it, and an uncounted one
+/// carries the call's own count, so the call could never clear the gate
+fn collectComputationSites(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    rel_path: []const u8,
+    bodies: []const rules.BodyFingerprint,
+    sites: *std.ArrayList(rules.ComputationSite),
+) !void {
+    if (std.mem.endsWith(u8, rel_path, smoke_module_suffix)) return;
+    try appendComputationSites(allocator, module, tokens, bodies, module.root, sites);
+}
+
+fn appendComputationSites(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    bodies: []const rules.BodyFingerprint,
+    index: ir.NodeIndex,
+    sites: *std.ArrayList(rules.ComputationSite),
+) !void {
+    if (computationCount(module, index)) |count| {
+        if (count >= rules.minimum_computation_nodes) {
+            try appendComputationSite(allocator, module, tokens, bodies, index, sites);
+            return;
+        }
+    }
+
+    var child = module.firstChildOf(index);
+    while (child) |current| : (child = module.nextSiblingOf(current)) {
+        try appendComputationSites(allocator, module, tokens, bodies, current, sites);
+    }
+}
+
+/// the TypeScript descendants of `index` when it is one of the detector's three computation
+/// shapes, and null for every other kind
+/// a template with no substitution is a `NoSubstitutionTemplateLiteral` rather than a
+/// `TemplateExpression`, and it has no children, so the gate is what keeps it out: a test of
+/// its own would be one no mutation can catch
+fn computationCount(module: *const ir.Module, index: ir.NodeIndex) ?u32 {
+    return switch (module.kindOf(index)) {
+        .call, .template => module.descendantsOf(index),
+        .unary => if (std.mem.eql(u8, module.nodeOf(index).operator, "new")) module.descendantsOf(index) else null,
+        else => null,
+    };
+}
+
+/// the site one counted expression offers: its own collapsed text, the line its leftmost
+/// token sits on, and the body the file collects around it
+///
+/// the text and the line both come from the expression's own start rather than from the
+/// node's span, which is what the detector reads: a chain's node begins at the token before
+/// its `(` while the expression begins at the value the chain hangs off
+fn appendComputationSite(
+    allocator: std.mem.Allocator,
+    module: *const ir.Module,
+    tokens: []const ts.Token,
+    bodies: []const rules.BodyFingerprint,
+    index: ir.NodeIndex,
+    sites: *std.ArrayList(rules.ComputationSite),
+) !void {
+    const start = module.expressionStart(index);
+    const raw = module.expressionText(index);
+    const key = try allocator.alloc(u8, raw.len);
+    errdefer allocator.free(key);
+    const collapsed = collapseWhitespace(key, raw);
+    try sites.append(allocator, .{
+        .key = try allocator.realloc(key, collapsed.len),
+        .line = tokens[typemodel.tokenAtOrAfter(tokens, @intCast(start))].line,
+        .enclosing_body = enclosingBodyKey(module, bodies, index),
+    });
+}
+
+/// the key of the innermost body of `bodies` around `index`, or null when none of them
+/// encloses it
+///
+/// the walk starts at the site's PARENT, which is what makes it strict: a site that is an
+/// arrow's own expression body is not inside that body, and the detector does not suppress
+/// that shape either. only a body the file actually collects is a match, so a class method's
+/// body is transparent here exactly as it is to the detector, which collects no method
+fn enclosingBodyKey(module: *const ir.Module, bodies: []const rules.BodyFingerprint, index: ir.NodeIndex) ?[]const u8 {
+    var current = module.parentOf(index);
+    while (current) |ancestor| {
+        for (bodies) |fingerprint| {
+            if (fingerprint.body == ancestor) return fingerprint.key;
+        }
+        current = module.parentOf(ancestor);
+    }
+    return null;
 }
 
 /// `name|collapsed body text`, allocated at the length the run keeps, or null when the
@@ -739,6 +848,34 @@ fn countBodyFingerprintFiles(
                 // tidiness one: the merge frees a file's fingerprints once its rows are
                 // reported, while the index answers for every file after it
                 entry.key_ptr.* = try allocator.dupe(u8, fingerprint.key);
+                entry.value_ptr.* = .{};
+            }
+            if (entry.value_ptr.last_file == current) continue;
+            entry.value_ptr.last_file = current;
+            entry.value_ptr.files += 1;
+        }
+    }
+    return counts;
+}
+
+/// how many distinct files of the run write each computation
+/// the count is of files rather than sites, which is the detector's own test
+/// (`entry.files.size >= 2`), so one file that writes the same expression twice holds one
+/// copy of the defect, which makes the per-file guard a verdict guard rather than a
+/// tidiness one
+/// the keys are the index's own copies, because a file's sites are freed as soon as its rows
+/// are reported while the index answers for every file after it
+fn countComputationFiles(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+) !std.StringHashMapUnmanaged(rules.FingerprintFiles) {
+    var counts: std.StringHashMapUnmanaged(rules.FingerprintFiles) = .empty;
+    for (contributions, 0..) |contribution, file| {
+        const current: u32 = @intCast(file);
+        for (contribution.project.computation_sites.items) |site| {
+            const entry = try counts.getOrPut(allocator, site.key);
+            if (!entry.found_existing) {
+                entry.key_ptr.* = try allocator.dupe(u8, site.key);
                 entry.value_ptr.* = .{};
             }
             if (entry.value_ptr.last_file == current) continue;
@@ -1125,12 +1262,16 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
     // a family the run did not collect contributes no value, so this walk is over an empty
     // map when the rule is off and needs no gate of its own
     const config_values = try buildConfigValueIndex(index_allocator, contributions);
+    // a family the run did not collect contributes no site, so this walk is over an empty
+    // list when the rule is off and needs no gate of its own
+    const computation_files = try countComputationFiles(index_allocator, contributions);
     return .{
         .arena = arena,
         .body_files = body_files,
         .statement_occurrences = statement_occurrences,
         .copy_files = copy_files,
         .config_values = config_values,
+        .computation_files = computation_files,
     };
 }
 
@@ -1753,6 +1894,19 @@ pub fn lintContent(
         try collectLiteralValues(finding_allocator, tokens, content, &contribution.project.literal_values);
     }
 
+    // the computation expressions this file offers to the run's fingerprints
+    // the family is
+    // gated apart from the others for the same reason, and it reads the tree rather than the
+    // token stream: the count a site carries is a sum over its own subtree
+    // it comes after the
+    // bodies' gate because a site resolves the body around it against the file's own
+    // fingerprints, which that gate collected
+    if (rules.needsComputationSites(cfg, hygiene)) {
+        if (parsed) |*module| {
+            try collectComputationSites(finding_allocator, module, tokens, rel_path, contribution.project.body_fingerprints.items, &contribution.project.computation_sites);
+        }
+    }
+
     var context = rules.Context{
         .allocator = finding_allocator,
         .cfg = cfg,
@@ -1876,7 +2030,16 @@ const foldable_spaces = [_]u21{
     0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x0020, // the ASCII whitespace
     0x00a0, // the no-break space
     0x1680, // the ogham space
-    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009,
+    0x2000,
+    0x2001,
+    0x2002,
+    0x2003,
+    0x2004,
+    0x2005,
+    0x2006,
+    0x2007,
+    0x2008,
+    0x2009,
     0x200a, // the en-to-hair space run, which is a range rather than a list
     0x2028, 0x2029, // the two line separators
     0x202f, 0x205f, 0x3000, // the narrow no-break, medium mathematical and ideographic spaces

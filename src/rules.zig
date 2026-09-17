@@ -25,7 +25,6 @@ const scope = @import("scope.zig");
 ///
 /// the messages are the ones the shipped plugin files carried, and
 /// `tests/oracle/` freezes the findings they produced
-
 pub const Severity = enum { err, warn };
 
 pub const Finding = struct {
@@ -299,6 +298,10 @@ pub const BodyFingerprint = struct {
     key: []const u8,
     /// the line the body starts on, which is where the detector reports
     line: u32,
+    /// the node the body is, which is what a rule that has to tell whether a site sits
+    /// inside this body walks against: the key is text, and the tree is gone by the time a
+    /// verdict runs
+    body: ir.NodeIndex,
 };
 
 /// how many distinct files of the run hold one fingerprint, and which file was counted last
@@ -331,6 +334,24 @@ pub const CopySite = struct {
     key: []const u8,
     /// the line the literal starts on, which is where the detector reports
     line: u32,
+};
+
+/// one computation expression a file offers to the run's computation index
+pub const ComputationSite = struct {
+    /// the expression's own text with every run of whitespace folded to one space and both
+    /// ends trimmed, which is the detector's own key: two copies wrapped differently are one
+    /// computation
+    key: []const u8,
+    /// the line the expression's leftmost token sits on, which is where the detector reports
+    /// a front-end span begins each member and call of a chain at the token before it, so
+    /// the node's own span starts lower down than the expression does
+    line: u32,
+    /// the key of the innermost collected function body around this site, or null when no
+    /// collected body encloses it
+    /// it is a view into the file's own `body_fingerprints`, which outlives the verdict that
+    /// reads it, and it is what keeps this rule quiet where the sibling duplicate-body rule
+    /// already reports the same line
+    enclosing_body: ?[]const u8 = null,
 };
 
 /// one string value an enum of a `.config.ts` file declares
@@ -393,6 +414,12 @@ pub const FingerprintIndex = struct {
     /// a file's declarations as soon as its rows are reported, while the surface key is a view
     /// into the run's own path list, which outlives the index
     config_values: std.StringHashMapUnmanaged(ConfigValues) = .empty,
+    /// the distinct files that write each computation, keyed by the expression's collapsed
+    /// text
+    /// the count is of files rather than occurrences, which is the detector's own test, so
+    /// this family reads the same `FingerprintFiles` shape the body family does: one file
+    /// that writes the same expression twice holds one copy of the defect
+    computation_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
 
     pub fn deinit(self: *FingerprintIndex) void {
         self.arena.deinit();
@@ -442,6 +469,9 @@ pub const Project = struct {
     /// every string literal this file holds, in the order the literals appear, which is the
     /// order its rows are reported in
     literal_values: std.ArrayList(LiteralValue) = .empty,
+    /// every computation expression this file offers to the run's computation index, in the
+    /// order the expressions appear, which is the order the rows are reported in
+    computation_sites: std.ArrayList(ComputationSite) = .empty,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -476,6 +506,8 @@ pub const Project = struct {
         self.config_values.deinit(allocator);
         for (self.literal_values.items) |literal| allocator.free(literal.value);
         self.literal_values.deinit(allocator);
+        for (self.computation_sites.items) |site| allocator.free(site.key);
+        self.computation_sites.deinit(allocator);
     }
 };
 
@@ -525,6 +557,11 @@ pub const Rule = struct {
     /// string literals, so the engine collects both as it reads each file
     /// it is a family of its own for the same reason the others are
     needs_config_values: bool = false,
+    /// this rule's verdict needs every computation expression the run holds, so the engine
+    /// collects them as it reads each file and the merge counts the files that write each
+    /// one before any verdict
+    /// it is a family of its own for the same reason the others are
+    needs_computation_sites: bool = false,
     /// the verdict this rule reaches over the run's fingerprints
     /// its table entry must
     /// declare a family flag, or the collection it reads was never made
@@ -583,6 +620,7 @@ pub const duplicated_statement_text = "This statement is written more than once 
 pub const duplicated_user_facing_copy = "This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.";
 pub const repeated_inline_copy = "This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.";
 pub const literal_duplicating_config_value = "This literal duplicates `{s}`, which the surface's own `.config.ts` already declares. Reference the enum member instead.";
+pub const duplicated_computation = "This computation `{s}` is written in {d} other file{s}. Extract it into a shared function both call sites import.";
 
 /// the shortest cooked copy the duplicate-copy rule counts, in UTF-16 code units, which is
 /// what a JavaScript string's own `length` reads. it is the detector's own gate, and the
@@ -594,6 +632,12 @@ pub const minimum_duplicated_copy_length: u32 = 24;
 /// the collection and the verdict read the same number, because a body the
 /// collection skipped is not a group any verdict can find
 pub const minimum_body_length: u32 = 30;
+
+/// the fewest TypeScript descendants a computation must have to be a site, which is the
+/// detector's own gate (`MINIMUM_NODES = 7`)
+/// the count is what `Module.descendantsOf` reports, so this constant is the one place the
+/// rule and the counter have to agree
+pub const minimum_computation_nodes: u32 = 7;
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -942,6 +986,15 @@ pub const all = [_]Rule{
         .resolve_fingerprints = cosmetic.checkLiteralDuplicatingConfigValue,
     },
     .{
+        .layer = .resilience,
+        .severity = .warn,
+        .message = duplicated_computation,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_computation_sites = true,
+        .resolve_fingerprints = resilience.checkDuplicatedComputation,
+    },
+    .{
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -1084,11 +1137,22 @@ pub fn needsConfigValues(cfg: *const config.Config, with_hygiene: bool) bool {
     return false;
 }
 
+/// whether an enabled rule needs every computation expression of the run, so the engine
+/// knows whether to collect them as it reads each file
+pub fn needsComputationSites(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (all) |rule| {
+        if (!rule.needs_computation_sites) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule.layer)) return true;
+    }
+    return false;
+}
+
 /// whether a rule reads a family of the run's fingerprints
 /// the families are ported one at a time, and this is the one place a new one is declared:
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
-    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values;
+    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values or rule.needs_computation_sites;
 }
 
 /// reach every enabled graph rule's verdict for one file of the run

@@ -84,13 +84,13 @@ of the declaration crosses a boundary. the declaration module is the one judged,
 its row names `shared-type-placement.types.ts`, the file name minus its kind
 
 `no-import-cycles-a.repo.ts` and `no-import-cycles-b.repo.ts` are one of the corpus's
-two pairs: a cycle needs two files, and the two import each other so the run has to read
+three pairs: a cycle needs two files, and the two import each other so the run has to read
 both before either can be judged. each one's row lands on its own import statement,
 and the pair is the only place the corpus reaches the project pass from a fixture
 rather than from a single file
 
-`duplicate-function-body/first.ts` and `duplicate-function-body/second.ts` are the
-other pair, and the boundary the duplicate-body rule needs: it keys on a declaration's
+`duplicate-function-body/first.ts` and `duplicate-function-body/second.ts` are
+another pair, and the boundary the duplicate-body rule needs: it keys on a declaration's
 name beside its collapsed body, so it can only fire across two files that declare the
 same thing. the first writes the body on one line and the second splits it and puts the
 `{` on a line of its own, which pins both the whitespace collapse and the body's own
@@ -149,3 +149,18 @@ a config is read as the sibling of the one module whose name it shares, so a dir
 neighbour's values never match. the pair also carries three rows between them, not two: the
 config's enum is exported and the consumer does not name it yet, which is the defect the
 rule describes rather than a separate one
+
+`duplicated-computation/first.ts` and `second.ts` are the corpus's third pair, and the gate is
+what needs two files: the rule asks a call, a `new` or a template for the number of TypeScript
+descendants below it and reports from seven, which the pair clears at exactly seven
+
+the two halves break the chain before `.slice` and indent the continuation differently, which
+pins the reader's two halves at once: the reported line is `remainder`'s, where the detector's
+`getStart()` lands rather than where the front-end's span of the call begins, and the
+indentation the halves disagree about is what the collapse folds into the one key both rows
+carry
+
+the pair reports nothing beyond those two rows, and the sites `duplicate-function-body/first.ts`
+and `second.ts` hold between them (`Math.round(amount * rate)` and `Math.floor(amount / rate)`,
+both over the gate) report nothing either, because the body they sit in is one the duplicate-body
+rule already owns: that is this fixture's half of the suppression

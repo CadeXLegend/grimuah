@@ -29,7 +29,7 @@ pub fn checkLetDeclaration(context: *const root.Context) !void {
     const module = context.module orelse return;
     for (context.walk) |entry| {
         if (entry.kind != .variable_decl) continue;
-        if (module.nodeOf(entry.index).decl_kind != .@"let") continue;
+        if (module.nodeOf(entry.index).decl_kind != .let) continue;
         try context.report(module.spanOf(entry.index).line, .resilience, root.let_decl, .err);
     }
 }
@@ -414,9 +414,6 @@ fn firstChildOr(module: *const ir.Module, index: ir.NodeIndex) ir.NodeIndex {
     return module.firstChildOf(index) orelse index;
 }
 
-
-
-
 /// a `.all()` read whose `prepare` chain carries no LIMIT
 ///
 /// the chain is walked down from the `.all()` call rather than up from the
@@ -752,6 +749,12 @@ fn isScalarPromise(tokens: []const Token, declared: typemodel.Extent) bool {
 /// twice, which is the whole rule
 const DUPLICATE_BODY_FILE_THRESHOLD = 2;
 
+/// the number of distinct files that must write one computation for the copies to be a
+/// defect
+/// one other file is enough: the same expression in two modules is one decision
+/// written twice, which is the whole rule
+const DUPLICATE_COMPUTATION_FILE_THRESHOLD = 2;
+
 /// how many times one statement must be written before the copies are a defect
 /// the detector counts OCCURRENCES rather than distinct files, so one file that writes the
 /// same statement twice holds the whole defect
@@ -821,6 +824,60 @@ pub fn checkDuplicatedStatementText(
             .severity = rule.severity,
         });
     }
+}
+
+/// a computation written into another file
+/// the run's index holds one count per collapsed expression text, so the verdict is one
+/// lookup per site rather than a walk of the run. the count is of distinct files and the
+/// writing file always counts itself, so a count under the threshold is an expression
+/// nothing outside this file writes
+/// the reported line is the expression's own start, which is where the detector's
+/// `node.getStart()` lands rather than where the outermost node's span begins
+///
+/// the site stays quiet where the sibling duplicate-body rule already reports the same line:
+/// that rule names the body, and a reader who fixes the body has fixed this computation too
+pub fn checkDuplicatedComputation(
+    allocator: std.mem.Allocator,
+    index: *const root.FingerprintIndex,
+    project: *const root.Project,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    for (project.computation_sites.items) |site| {
+        const owners = index.computation_files.get(site.key) orelse continue;
+        if (owners.files < DUPLICATE_COMPUTATION_FILE_THRESHOLD) continue;
+
+        // a body the run writes in two files is the body rule's finding, and this site is the
+        // same line of the same code. a body the run collects in this file alone is not, and
+        // the site is reported
+        if (site.enclosing_body) |body_key| {
+            if (index.body_files.get(body_key)) |body_owners| {
+                if (body_owners.files >= DUPLICATE_BODY_FILE_THRESHOLD) continue;
+            }
+        }
+
+        // the message names the expression and how many OTHER files write it, so it is
+        // formatted rather than taken from the table as a finished string
+        const others = owners.files - 1;
+        const message = try duplicatedComputationMessage(allocator, site.key, others);
+        defer allocator.free(message);
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = site.line,
+            .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
+}
+
+/// the row's message: the expression's text and how many other files write it
+/// the table's format takes the plural as its third argument, because one other file and
+/// several are both ordinary cases for this rule
+fn duplicatedComputationMessage(allocator: std.mem.Allocator, expression: []const u8, others: u32) ![]u8 {
+    const plural = if (others == 1) "" else "s";
+    return std.fmt.allocPrint(allocator, root.duplicated_computation, .{ expression, others, plural });
 }
 
 const probe = @import("probe.zig");
@@ -1374,6 +1431,28 @@ test "a body written into another file under the same name is reported, and the 
     const arrow_charge = try duplicateBodyRow(allocator, "src/b.service.ts", 13, "makeCharge");
     defer allocator.free(arrow_charge);
 
+    // the computations those two files hold. `alpha` and `beta` are the renamed pair and
+    // `Ledger.charge` is a method, and the body family collects neither, so those sites are
+    // reported: the body family's own rows do not cover them
+    // the sites inside `charge`, `settle` and `makeCharge` are silent, because those bodies ARE
+    // written in two files and the body rule reports them
+    const alpha_round_here = try duplicatedComputationRow(allocator, "src/a.service.ts", 25, "Math.round(amount / rate)", 1);
+    defer allocator.free(alpha_round_here);
+    const alpha_floor_here = try duplicatedComputationRow(allocator, "src/a.service.ts", 25, "Math.floor(amount * rate)", 1);
+    defer allocator.free(alpha_floor_here);
+    const ledger_round_here = try duplicatedComputationRow(allocator, "src/a.service.ts", 32, "Math.round(amount * rate)", 1);
+    defer allocator.free(ledger_round_here);
+    const ledger_floor_here = try duplicatedComputationRow(allocator, "src/a.service.ts", 32, "Math.floor(amount / rate)", 1);
+    defer allocator.free(ledger_floor_here);
+    const alpha_round_there = try duplicatedComputationRow(allocator, "src/b.service.ts", 18, "Math.round(amount / rate)", 1);
+    defer allocator.free(alpha_round_there);
+    const alpha_floor_there = try duplicatedComputationRow(allocator, "src/b.service.ts", 18, "Math.floor(amount * rate)", 1);
+    defer allocator.free(alpha_floor_there);
+    const ledger_round_there = try duplicatedComputationRow(allocator, "src/b.service.ts", 25, "Math.round(amount * rate)", 1);
+    defer allocator.free(ledger_round_there);
+    const ledger_floor_there = try duplicatedComputationRow(allocator, "src/b.service.ts", 25, "Math.floor(amount / rate)", 1);
+    defer allocator.free(ledger_floor_there);
+
     try probe.expectProject(.resilience, &.{
         // `shadow` is declared twice in this file under one name and one body, so the count
         // of FILES is one and neither declaration is a site
@@ -1451,7 +1530,22 @@ test "a body written into another file under the same name is reported, and the 
         \\}
         \\
         },
-    }, &.{ charge, settle, make_charge, split_charge, split_settle, arrow_charge });
+    }, &.{
+        charge,
+        settle,
+        make_charge,
+        alpha_round_here,
+        alpha_floor_here,
+        ledger_round_here,
+        ledger_floor_here,
+        split_charge,
+        split_settle,
+        arrow_charge,
+        alpha_round_there,
+        alpha_floor_there,
+        ledger_round_there,
+        ledger_floor_there,
+    });
 }
 
 test "a body's text and its line come from its leftmost token, not from its own span" {
@@ -1463,6 +1557,14 @@ test "a body's text and its line come from its leftmost token, not from its own 
     defer allocator.free(first);
     const second = try duplicateBodyRow(allocator, "src/b.service.ts", 2, "escapeText");
     defer allocator.free(second);
+
+    // the chain is the arrow's own expression body, so the site IS the body: the walk from the
+    // site's parent never reaches it, and the detector does not suppress that shape either, so
+    // the body rule and this rule both report it (measured)
+    const escape_here = try duplicatedComputationRow(allocator, "src/a.service.ts", 2, "text .replaceAll(\"&\", \"&amp;\") .replaceAll(\"<\", \"&lt;\")", 1);
+    defer allocator.free(escape_here);
+    const escape_there = try duplicatedComputationRow(allocator, "src/b.service.ts", 2, "text .replaceAll(\"&\", \"&amp;\") .replaceAll(\"<\", \"&lt;\")", 1);
+    defer allocator.free(escape_there);
 
     // the two files write the same bytes, so the text the keys hold is the same however the
     // body is read, and the line is the only thing this test can be about
@@ -1483,7 +1585,7 @@ test "a body's text and its line come from its leftmost token, not from its own 
         \\    .replaceAll("<", "&lt;");
         \\
         },
-    }, &.{ first, second });
+    }, &.{ first, escape_here, second, escape_there });
 }
 
 test "the body gate is the detector's own, and a body at it is a site" {
@@ -1598,4 +1700,229 @@ test "a statement written twice is reported at every copy, and the literals the 
         "src/db/b.repo.ts:7: " ++ message,
         "src/db/b.repo.ts:8: " ++ message,
     });
+}
+
+/// the row a duplicated-computation finding produces, built from the table's message so a
+/// wording change is one edit
+fn duplicatedComputationRow(allocator: std.mem.Allocator, path: []const u8, line: u32, expression: []const u8, others: u32) ![]const u8 {
+    const message = try duplicatedComputationMessage(allocator, expression, others);
+    defer allocator.free(message);
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, message });
+}
+
+test "a computation written in two files is reported at each copy, at the expression's own line, and one under the gate is not" {
+    const allocator = std.testing.allocator;
+    // a chain's reported line is its leftmost token: the call's node begins at `slice` on
+    // line 3 while the detector reports `remainder` on line 2. the two files write the chain
+    // with different indentation, which the collapse folds into one key, and that key carries
+    // the space the newline became
+    const audit = try duplicatedComputationRow(allocator, "src/db/audit.repo.ts", 2, "remainder .slice(separatorIndex + 1)", 1);
+    defer allocator.free(audit);
+    const token = try duplicatedComputationRow(allocator, "src/db/token.repo.ts", 2, "remainder .slice(separatorIndex + 1)", 1);
+    defer allocator.free(token);
+    // three files writing one expression is two OTHER files on each row
+    const first = try duplicatedComputationRow(allocator, "src/db/first.repo.ts", 1, "cursor.slice(offset + 1)", 2);
+    defer allocator.free(first);
+    const second = try duplicatedComputationRow(allocator, "src/db/second.repo.ts", 1, "cursor.slice(offset + 1)", 2);
+    defer allocator.free(second);
+    const third = try duplicatedComputationRow(allocator, "src/db/third.repo.ts", 1, "cursor.slice(offset + 1)", 2);
+    defer allocator.free(third);
+
+    try probe.expectProject(.resilience, &.{
+        // every pair here writes its expression under a different name, so the sibling
+        // duplicate-body family cannot own the row
+        .{ .path = "src/db/audit.repo.ts", .content =
+        \\export const tail = (remainder: string, separatorIndex: number): string =>
+        \\  remainder
+        \\    .slice(separatorIndex + 1);
+        \\
+        },
+        .{ .path = "src/db/token.repo.ts", .content =
+        \\export const rest = (remainder: string, separatorIndex: number): string =>
+        \\  remainder
+        \\        .slice(separatorIndex + 1);
+        \\
+        },
+        .{ .path = "src/db/first.repo.ts", .content =
+        \\export const first = (cursor: string, offset: number): string => cursor.slice(offset + 1);
+        \\
+        },
+        .{ .path = "src/db/second.repo.ts", .content =
+        \\export const second = (cursor: string, offset: number): string => cursor.slice(offset + 1);
+        \\
+        },
+        .{ .path = "src/db/third.repo.ts", .content =
+        \\export const third = (cursor: string, offset: number): string => cursor.slice(offset + 1);
+        \\
+        },
+        // four descendants against a gate of seven, so the pair is no defect
+        .{ .path = "src/services/tick.service.ts", .content =
+        \\export const tick = (clock: Clock): number => clock.tick(limit);
+        \\
+        },
+        .{ .path = "src/services/tock.service.ts", .content =
+        \\export const tock = (clock: Clock): number => clock.tick(limit);
+        \\
+        },
+    }, &.{ audit, token, first, second, third });
+}
+
+test "a construction and a template are sites of their own kind, and the walk counts the largest expression only" {
+    const allocator = std.testing.allocator;
+    // `new Foo(a)` is one `NewExpression` to typescript and a `call` under a `new` unary in
+    // the tree, and the detector's `ts.isCallExpression` excludes it: the unary is the site
+    const panel = try duplicatedComputationRow(allocator, "src/db/panel.repo.ts", 2, "new Panel(bounds.clamp(lower + 1))", 1);
+    defer allocator.free(panel);
+    const frame = try duplicatedComputationRow(allocator, "src/db/frame.repo.ts", 2, "new Panel(bounds.clamp(lower + 1))", 1);
+    defer allocator.free(frame);
+    // a template with substitutions is a `TemplateExpression`, and this one clears the gate
+    const label = try duplicatedComputationRow(allocator, "src/gateway/label.service.ts", 1, "`${path}:${line}`", 1);
+    defer allocator.free(label);
+    const tag = try duplicatedComputationRow(allocator, "src/gateway/tag.service.ts", 1, "`${path}:${line}`", 1);
+    defer allocator.free(tag);
+
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/db/panel.repo.ts", .content =
+        \\export const panel = (bounds: Bounds, lower: number): Panel =>
+        \\  new Panel(bounds.clamp(lower + 1));
+        \\
+        },
+        .{ .path = "src/db/frame.repo.ts", .content =
+        \\export const frame = (bounds: Bounds, lower: number): Panel =>
+        \\  new Panel(bounds.clamp(lower + 1));
+        \\
+        },
+        .{ .path = "src/gateway/label.service.ts", .content =
+        \\export const label = (path: string, line: number): string => `${path}:${line}`;
+        \\
+        },
+        .{ .path = "src/gateway/tag.service.ts", .content =
+        \\export const tag = (path: string, line: number): string => `${path}:${line}`;
+        \\
+        },
+        // the outer call clears the gate and so does the one inside it, which is therefore no
+        // site: the second file's own copy is then the only one the run sees, and one file is
+        // no defect
+        .{ .path = "src/db/outer.repo.ts", .content =
+        \\export const mark = (offset: string, index: number): string =>
+        \\  wrap(offset.slice(index + 1));
+        \\
+        },
+        .{ .path = "src/db/inner.repo.ts", .content =
+        \\export const inner = (offset: string, index: number): string =>
+        \\  offset.slice(index + 1);
+        \\
+        },
+    }, &.{ panel, frame, label, tag });
+}
+
+test "a site inside a body the duplicate-body rule already reports is silent, and a site that is the body itself is not" {
+    const allocator = std.testing.allocator;
+    // the block body is written in two files, so the body rule owns it: the computation inside
+    // is the same line of the same code and this rule stays quiet about both copies
+    const trim_here = try duplicateBodyRow(allocator, "src/services/tail.service.ts", 1, "trim");
+    defer allocator.free(trim_here);
+    const trim_there = try duplicateBodyRow(allocator, "src/services/rest.service.ts", 1, "trim");
+    defer allocator.free(trim_there);
+    // and a body the run collects in this file ALONE is no reason to stay quiet
+    const audit_site = try duplicatedComputationRow(allocator, "src/services/audit.service.ts", 2, "marker.slice(offset + 1)", 1);
+    defer allocator.free(audit_site);
+    const ledger_site = try duplicatedComputationRow(allocator, "src/services/ledger.service.ts", 2, "marker.slice(offset + 1)", 1);
+    defer allocator.free(ledger_site);
+    // an expression body IS the site, so the walk from the site's parent never reaches it and
+    // the detector does not suppress that shape either: this pair reports both rules' rows
+    const rate_here = try duplicateBodyRow(allocator, "src/services/rate.service.ts", 2, "rate");
+    defer allocator.free(rate_here);
+    const rate_there = try duplicateBodyRow(allocator, "src/services/pace.service.ts", 2, "rate");
+    defer allocator.free(rate_there);
+    const rate_site_here = try duplicatedComputationRow(allocator, "src/services/rate.service.ts", 2, "position.slice(anchorIndexValue + 1)", 1);
+    defer allocator.free(rate_site_here);
+    const rate_site_there = try duplicatedComputationRow(allocator, "src/services/pace.service.ts", 2, "position.slice(anchorIndexValue + 1)", 1);
+    defer allocator.free(rate_site_there);
+
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/services/tail.service.ts", .content =
+        \\export const trim = (pointer: string, segment: number): string => {
+        \\  return pointer.slice(segment + 1);
+        \\};
+        \\
+        },
+        .{ .path = "src/services/rest.service.ts", .content =
+        \\export const trim = (pointer: string, segment: number): string => {
+        \\  return pointer.slice(segment + 1);
+        \\};
+        \\
+        },
+        .{ .path = "src/services/audit.service.ts", .content =
+        \\export const audit = (marker: string, offset: number): string => {
+        \\  return marker.slice(offset + 1);
+        \\};
+        \\
+        },
+        .{ .path = "src/services/ledger.service.ts", .content =
+        \\export const ledger = (marker: string, offset: number): string => {
+        \\  return marker.slice(offset + 1);
+        \\};
+        \\
+        },
+        .{ .path = "src/services/rate.service.ts", .content =
+        \\export const rate = (position: string, anchorIndexValue: number): string =>
+        \\  position.slice(anchorIndexValue + 1);
+        \\
+        },
+        .{ .path = "src/services/pace.service.ts", .content =
+        \\export const rate = (position: string, anchorIndexValue: number): string =>
+        \\  position.slice(anchorIndexValue + 1);
+        \\
+        },
+    }, &.{
+        trim_here,
+        trim_there,
+        audit_site,
+        ledger_site,
+        rate_here,
+        rate_site_here,
+        rate_there,
+        rate_site_there,
+    });
+}
+
+test "a smoke module is no site to the run or to itself, and one file counts once" {
+    const allocator = std.testing.allocator;
+    const lower = try duplicatedComputationRow(allocator, "src/db/window.repo.ts", 1, "window.slice(offset + 1)", 1);
+    defer allocator.free(lower);
+    const upper = try duplicatedComputationRow(allocator, "src/db/upper.repo.ts", 1, "window.slice(offset + 1)", 1);
+    defer allocator.free(upper);
+
+    try probe.expectProject(.resilience, &.{
+        // the detector skips a `.smoke.ts` module when it builds the index and again when it
+        // produces rows, so this pair is silent: were the smoke module's site counted, the
+        // other file's own copy would be a second file and the row would appear
+        .{ .path = "src/db/quiet.repo.smoke.ts", .content =
+        \\export const silent = (span: string, segment: number): string =>
+        \\  span.slice(segment + 1);
+        \\
+        },
+        .{ .path = "src/db/quiet.repo.ts", .content =
+        \\export const audible = (span: string, segment: number): string =>
+        \\  span.slice(segment + 1);
+        \\
+        },
+        // one file that writes the same expression twice holds one copy of the defect, not
+        // two: the count is of files
+        .{ .path = "src/db/repeat.repo.ts", .content =
+        \\export const alpha = (handle: string, index: number): string => handle.slice(index + 1);
+        \\export const beta = (handle: string, index: number): string => handle.slice(index + 1);
+        \\
+        },
+        // the control pair, so a run that reached no site at all cannot pass this test
+        .{ .path = "src/db/window.repo.ts", .content =
+        \\export const lower = (window: string, offset: number): string => window.slice(offset + 1);
+        \\
+        },
+        .{ .path = "src/db/upper.repo.ts", .content =
+        \\export const upper = (window: string, offset: number): string => window.slice(offset + 1);
+        \\
+        },
+    }, &.{ lower, upper });
 }
