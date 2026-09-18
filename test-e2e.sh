@@ -88,6 +88,9 @@ jq -e '.compilerOptions.noImplicitReturns' "$P1/tsconfig.json"         >/dev/nul
 jq -e '.compilerOptions.noFallthroughCasesInSwitch' "$P1/tsconfig.json">/dev/null && ok "tsconfig noFallthroughCasesInSwitch" || fail "tsconfig missing"
 jq -e '.compilerOptions.forceConsistentCasingInFileNames' "$P1/tsconfig.json" >/dev/null && ok "tsconfig forceConsistentCasingInFileNames" || fail "tsconfig missing"
 jq -e '.compilerOptions.esModuleInterop' "$P1/tsconfig.json"          >/dev/null && ok "tsconfig esModuleInterop"      || fail "tsconfig esModuleInterop missing"
+# exactOptionalPropertyTypes is not part of the strict default, so it is stated
+# here: a fresh scaffold of every preset typechecks clean with it on
+jq -e '.compilerOptions.exactOptionalPropertyTypes' "$P1/tsconfig.json" >/dev/null && ok "tsconfig exactOptionalPropertyTypes" || fail "tsconfig exactOptionalPropertyTypes missing"
 # strict should not be explicitly set (it is default in TS 6.0)
 jq '.compilerOptions | has("strict")' "$P1/tsconfig.json" | grep -q false && ok "tsconfig strict not explicit" || fail "tsconfig strict is explicit"
 

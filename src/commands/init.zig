@@ -23,6 +23,7 @@ const tsconfig_template: []const u8 =
     \\    "resolveJsonModule": true,
     \\    "isolatedModules": true,
     \\    "allowImportingTsExtensions": true,
+    \\    "exactOptionalPropertyTypes": true,
     \\    "noImplicitOverride": true,
     \\    "noPropertyAccessFromIndexSignature": true,
     \\    "noImplicitReturns": true,
