@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 rm -rf examples
 mkdir examples
-for preset in $(ls presets/*.json | xargs -n1 basename -s .json); do
+for preset in $(ls src/preset_data/*.json | xargs -n1 basename -s .json); do
   ./zig-out/bin/grimuah init "examples/$preset" --preset "$preset" 2>/dev/null <<< ""
 done
 echo "regenerated examples/ for all presets"
