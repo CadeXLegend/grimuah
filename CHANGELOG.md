@@ -43,6 +43,7 @@ All notable changes to this project will be documented in this file. See [commit
 * add `no-for-of-push-accumulation`: a `for..of` loop may not build an array by pushing into it
 * add `config-declares-data-only`: a `.config.ts` file may declare data, never a function
 * add `no-if-chain-dispatch`: a run of three or more branches over one subject is a dispatch table
+* turn a single rule off by name: every rule of the table carries a name (`em-dash`, `switch-statement`, `prefer-const`), and `architecture.config.json` gains a flat `rules` object that silences one rule without giving up the rest of its layer, where the layer toggle was the only switch before. a rule the object omits runs, so a config lists only what it silences. the layer stays the gate rather than the rule: a rule named on inside a layer that is off stays off. a name the table does not have stops the run with the name it could not match, because a typo would otherwise leave the rule it meant to silence reporting. `grimuah rules` prints every name grouped by layer with its severity and the sentence it reports, and `architecture.schema.json` lists the same names, so an editor autocompletes the key and marks a typo before the run does. the surface and edge model is not a rule: the suffix list, the import firewall, the dag order and the innate member scoping are the declaration a project makes about itself, and their layer is the only switch over them. the lookup is a bit set resolved once at startup rather than a name per rule per file, because the engine's gate functions walk all fifty rules on every file and a string compare there would land on the scan's hot path. every rule still runs by default, so a project that names nothing reports exactly what it reported before
 
 ### Bug Fixes
 
@@ -54,6 +55,7 @@ All notable changes to this project will be documented in this file. See [commit
 * read JSX files again: a self-closing element consumed every byte after it, and a binding referenced only by a tag looked unreferenced, so `noUnusedImports` and `noUnusedVariables` now work on `.tsx` and `.jsx`
 * report the escapes from two shipped bans: `as any[]` (and `as any | T`) is a `as any` cast, and `export * from` is a proxy re-export
 * warn when a configured surface's directory is absent, where a typo in `architecture.config.json` used to disable the whole surface in silence
+* keep a project's declared `sourceRoots` when a surface is removed: `grimuah remove` rebuilds `architecture.config.json` by hand and wrote the surfaces and the layers while leaving the roots behind, so a project that names its roots lost the declaration the first time it removed a surface. `add`, `remove` and `upgrade` now write every section they do not own, and the e2e suite asserts a rewrite keeps both the roots and the rule toggles
 
 ## [0.1.2](https://github.com/CadeXLegend/grimuah/compare/v0.1.1...v0.1.2) (2026-09-01)
 

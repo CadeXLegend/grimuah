@@ -190,7 +190,57 @@ jq '.surfaces = [.surfaces[] | if .name == "components" then .allowedImports = [
 mv tmp.json architecture.config.json
 achk | grep -q "which the dag already permits" && fail "check: redundant entry survived its removal" || ok "check: clean again after the entry is removed"
 
-# ── 26. frozen oracle ──
+# ── 26. per-rule toggles ──
+# a layer is a category and every rule inside it has its own name, so the config
+# turns one rule off without touching the rest of its layer
+cd "$P1"
+printf 'export const label = "before \xe2\x80\x94 after";\nexport function toggled(): string { let value = "x"; return value; }\n' > src/utils/toggled.util.ts
+achk | grep -q "do not use em-dashes" && ok "toggles: the rule reports while it is on" || fail "toggles: the rule did not report"
+
+jq '.rules = {"em-dash": false}' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+achk > "$TMPDIR/toggled.log" 2>&1 || true
+grep -q "do not use em-dashes" "$TMPDIR/toggled.log" && fail "toggles: the rule still reports after being named off" || ok "toggles: the named rule stops reporting"
+grep -q "do not use let" "$TMPDIR/toggled.log" && ok "toggles: the rules beside it keep reporting" || fail "toggles: the rest of the layer stopped too"
+
+# a rule named on inside a layer that is off stays off, because the layer is the
+# gate and the rule only narrows it
+jq '.layers.cosmetic = false | .rules = {"em-dash": true}' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+achk | grep -q "do not use em-dashes" && fail "toggles: a rule outlived its disabled layer" || ok "toggles: a disabled layer still wins"
+jq '.layers.cosmetic = true' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+
+# a name the table does not have is a typo that would leave the rule it meant to
+# silence running, so the run stops with the name it could not match
+jq '.rules = {"em-dashes": false}' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+achk | grep -q "has no rule for" && ok "toggles: a name with no rule stops the run" || fail "toggles: an unknown rule name was accepted"
+
+# the commands that rewrite the config have to carry the section, or a user's
+# toggles disappear the first time they add a surface
+jq '.rules = {"em-dash": false}' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+"$GRIMUAH" add toggled-surface >/dev/null 2>&1 || true
+"$GRIMUAH" remove toggled-surface >/dev/null 2>&1 || true
+jq -e '.rules == {"em-dash": false}' architecture.config.json >/dev/null && ok "toggles: a rewrite of the config keeps the section" || fail "toggles: the rewrite dropped the section"
+jq -e '.sourceRoots == ["src"]' architecture.config.json >/dev/null && ok "toggles: the rewrite keeps the declared source roots" || fail "toggles: the rewrite dropped the source roots"
+jq 'del(.rules)' architecture.config.json > tmp.json && mv tmp.json architecture.config.json
+rm -f src/utils/toggled.util.ts
+# the scaffold carries surfaces of one file each, so the run is never clean here:
+# what has to be gone is every finding the fixture produced
+achk | grep -q "toggled.util.ts" && fail "toggles: a finding outlived the removed fixture" || ok "toggles: no finding is left over the removed fixture"
+
+# ── 27. rule listing ──
+# the listing is the discovery path for the config keys, and it reads no config,
+# so it answers the same question in any directory
+cd "$TMPDIR"
+"$GRIMUAH" rules 2>&1 | grep -q "em-dash" && ok "rules: lists a rule name" || fail "rules: name missing"
+"$GRIMUAH" rules 2>&1 | grep -q "^hygiene" && ok "rules: groups by layer" || fail "rules: no layer heading"
+"$GRIMUAH" rules 2>&1 | grep -q '"rules": { "<name>": false }' && ok "rules: says how a name is used" || fail "rules: no usage line"
+# every rule of the table has to appear, or a name nobody can find is a rule
+# nobody can turn off. the schema lists the same set, so the two count against
+# each other rather than against a number that goes stale
+listed=$("$GRIMUAH" rules 2>&1 | grep -cE '^  [a-z][a-z-]+ +[a-z]+ +')
+schema_rows=$(jq '.properties.rules.properties | length' "$SCRIPT_DIR/src/architecture.schema.json")
+test "$listed" -eq "$schema_rows" && ok "rules: lists all $listed rules" || fail "rules: listed $listed of $schema_rows rows"
+
+# ── 28. frozen oracle ──
 oracle_log="$TMPDIR/oracle.log"
 if bash "$SCRIPT_DIR/tests/oracle/check.sh" >"$oracle_log" 2>&1; then
   ok "frozen oracle: corpus findings unchanged"

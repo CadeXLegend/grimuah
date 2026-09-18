@@ -4,6 +4,7 @@ const checkCmd = @import("commands/check.zig");
 const addCmd = @import("commands/add.zig");
 const removeCmd = @import("commands/remove.zig");
 const upgradeCmd = @import("commands/upgrade.zig");
+const rulesCmd = @import("commands/rules.zig");
 
 /// no per-thread alternate signal stack
 ///
@@ -37,6 +38,7 @@ test {
     _ = @import("commands/check.zig");
     _ = @import("commands/init.zig");
     _ = @import("commands/remove.zig");
+    _ = @import("commands/rules.zig");
     _ = @import("commands/upgrade.zig");
 }
 
@@ -74,6 +76,8 @@ pub fn main(init: std.process.Init) !void {
         try removeCmd.run(allocator, io, surface_name);
     } else if (std.mem.eql(u8, command, "upgrade")) {
         try upgradeCmd.run(allocator, io);
+    } else if (std.mem.eql(u8, command, "rules")) {
+        rulesCmd.run();
     } else {
         std.debug.print("unknown command: {s}\n", .{command});
         printUsage();
@@ -104,9 +108,12 @@ fn printUsage() void {
         \\  grimuah add <surface> [--path <dir>]
         \\  grimuah remove <surface>
         \\  grimuah upgrade
+        \\  grimuah rules
         \\
         \\check runs grimuah's architecture rules and its built-in hygiene rules
         \\in-process, with no subprocess and no other linter involved
+        \\
+        \\rules lists every rule name architecture.config.json can turn off
         \\
         \\presets: default, webapp, cli, backend, bot
         \\

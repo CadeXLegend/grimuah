@@ -30,6 +30,68 @@ pub const Layers = struct {
     behavioural: bool,
 };
 
+/// one per-rule toggle the config names, keyed by the rule's own name so a user
+/// writes the key the table declares rather than an index into it
+pub const RuleToggle = struct {
+    name: []const u8,
+    enabled: bool,
+};
+
+/// the per-rule toggles a config names, as the json object a user writes:
+/// a rule's own name maps to whether that rule runs
+/// the object shape is why this parses itself, a name is the key and only the
+/// rule table knows the names, so an array of `{name, enabled}` pairs would make
+/// the user spell every key twice
+/// a rule the object omits keeps the table's own default, which is on
+pub const RuleToggles = struct {
+    /// the toggles in the order the config declared them, so a rewrite of the
+    /// file keeps the user's ordering
+    entries: []const RuleToggle = &.{},
+
+    pub fn deinit(self: *const RuleToggles, allocator: std.mem.Allocator) void {
+        for (self.entries) |toggle| allocator.free(toggle.name);
+        if (self.entries.len > 0) allocator.free(self.entries);
+    }
+
+    /// parse `{"rule-name": true, ...}` itself, one entry per key
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!RuleToggles {
+        if (.object_begin != try source.next()) return error.UnexpectedToken;
+
+        var entries: std.ArrayList(RuleToggle) = .empty;
+        errdefer {
+            for (entries.items) |toggle| allocator.free(toggle.name);
+            entries.deinit(allocator);
+        }
+
+        while (.object_end != try source.peekNextTokenType()) {
+            // the key is allocated for us, so either outcome has to hand it back
+            const name = try std.json.innerParse([]const u8, allocator, source, options);
+            const enabled = std.json.innerParse(bool, allocator, source, options) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+            entries.append(allocator, .{ .name = name, .enabled = enabled }) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+        }
+        if (.object_end != try source.next()) return error.UnexpectedToken;
+
+        return .{ .entries = try entries.toOwnedSlice(allocator) };
+    }
+};
+
+/// how many rules a config's toggle mask can address, one bit each
+/// the rule table asserts its own length against this, so a table that outgrows
+/// the mask fails the build rather than dropping a toggle in silence
+pub const rule_mask_capacity = 64;
+
+/// the rules a config turned off, indexed by the rule table's own order
+/// a bit per rule is what the scan reads: the engine asks whether a rule is on
+/// once per rule per file, so a name resolved there would put a string compare
+/// on the hot path beside every `cheap` one the scan already has
+pub const DisabledRules = std.StaticBitSet(rule_mask_capacity);
+
 /// optional root-level lib/ surface at depth 0
 pub const RootLib = struct {
     enabled: bool,
@@ -52,11 +114,19 @@ pub const Config = struct {
     sourceRoots: []const []const u8 = &.{},
     surfaces: []Surface,
     layers: Layers,
+    /// the per-rule toggles the config names
+    /// a rule the config omits keeps the table's own default, which is on, so a
+    /// config that names nothing runs every rule its enabled layers carry
+    rules: RuleToggles = .{},
+    /// the same toggles as the bits the scan reads, resolved once from `rules`
+    /// by `rules.resolveToggles` at startup
+    disabledRules: DisabledRules = DisabledRules.empty,
     rootLib: RootLib = .{ .enabled = false, .path = "lib" },
 
     pub fn deinit(self: *const Config, allocator: std.mem.Allocator) void {
         for (self.sourceRoots) |root| allocator.free(root);
         if (self.sourceRoots.len > 0) allocator.free(self.sourceRoots);
+        self.rules.deinit(allocator);
         for (self.surfaces) |*surface| surface.deinit(allocator);
         allocator.free(self.surfaces);
         self.rootLib.deinit(allocator);
@@ -486,6 +556,29 @@ pub const Formatter = struct {
     }
 };
 
+/// append the `rules` section of a config, so every command that rewrites
+/// architecture.config.json keeps the toggles the user set
+/// the section is omitted when the config names no rule, which keeps a default
+/// config byte-identical across the commands that rewrite one
+pub fn appendRuleToggles(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, rules: []const RuleToggle) !void {
+    if (rules.len == 0) return;
+    try buf.appendSlice(allocator, ",\n  \"rules\": {");
+    for (rules, 0..) |toggle, toggle_index| {
+        if (toggle_index > 0) try buf.appendSlice(allocator, ",");
+        try buf.appendSlice(allocator, "\n    ");
+        // the name is a user's own key rather than one the table minted, because a
+        // command that rewrites the config runs without resolving the names, so it
+        // is json-encoded: a key carrying a quote would otherwise leave a config
+        // nothing can read
+        const encoded_name = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(toggle.name, .{})});
+        defer allocator.free(encoded_name);
+        try buf.appendSlice(allocator, encoded_name);
+        try buf.appendSlice(allocator, ": ");
+        try buf.appendSlice(allocator, if (toggle.enabled) "true" else "false");
+    }
+    try buf.appendSlice(allocator, "\n  }");
+}
+
 /// the width a generated config wraps at, so the layout stays stable across
 /// regeneration
 const LINE_WIDTH = 80;
@@ -681,4 +774,83 @@ test "formatter writes a declared source root and omits a derived one" {
     const derived = Config{ .surfaces = &derived_surfaces, .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true } };
     const derived_json = try std.fmt.bufPrint(&buf, "{f}", .{Formatter{ .value = &derived }});
     try testing.expect(std.mem.startsWith(u8, derived_json, "{\n  \"surfaces\": ["));
+}
+
+test "the rule toggles parse from the object a user writes, in file order" {
+    const allocator = testing.allocator;
+    const source =
+        \\{
+        \\  "surfaces": [
+        \\    { "name": "utils", "path": "src/utils", "depth": 1, "dagOrder": 0, "suffixes": [".util.ts"] }
+        \\  ],
+        \\  "layers": { "cosmetic": true, "structural": true, "resilience": true, "behavioural": true },
+        \\  "rules": { "em-dash": false, "switch-statement": true }
+        \\}
+    ;
+
+    const parsed = try std.json.parseFromSlice(Config, allocator, source, .{ .allocate = .alloc_always, .ignore_unknown_fields = false });
+    defer parsed.deinit();
+    const cfg = parsed.value;
+
+    try testing.expectEqual(@as(usize, 2), cfg.rules.entries.len);
+    try testing.expectEqualStrings("em-dash", cfg.rules.entries[0].name);
+    try testing.expect(!cfg.rules.entries[0].enabled);
+    try testing.expectEqualStrings("switch-statement", cfg.rules.entries[1].name);
+    try testing.expect(cfg.rules.entries[1].enabled);
+    // parsing a name is not resolving one: the mask stays empty until the rule
+    // table has matched every name, which is `rules.resolveToggles`
+    try testing.expect(!cfg.disabledRules.isSet(0));
+}
+
+test "a config that names no rule parses with no toggles" {
+    const allocator = testing.allocator;
+    const source =
+        \\{
+        \\  "surfaces": [
+        \\    { "name": "utils", "path": "src/utils", "depth": 1, "dagOrder": 0, "suffixes": [".util.ts"] }
+        \\  ],
+        \\  "layers": { "cosmetic": true, "structural": true, "resilience": true, "behavioural": true }
+        \\}
+    ;
+
+    const parsed = try std.json.parseFromSlice(Config, allocator, source, .{ .allocate = .alloc_always, .ignore_unknown_fields = false });
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 0), parsed.value.rules.entries.len);
+}
+
+test "appendRuleToggles writes the section, and nothing when the config names no rule" {
+    const allocator = testing.allocator;
+    const toggles = [_]RuleToggle{
+        .{ .name = "em-dash", .enabled = false },
+        .{ .name = "max-file-lines", .enabled = true },
+    };
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try appendRuleToggles(&buf, allocator, &toggles);
+    try testing.expectEqualStrings(",\n  \"rules\": {\n    \"em-dash\": false,\n    \"max-file-lines\": true\n  }", buf.items);
+
+    // a default config carries no section, so a command that rewrites one leaves
+    // the file byte-identical
+    var empty_buf: std.ArrayList(u8) = .empty;
+    defer empty_buf.deinit(allocator);
+    try appendRuleToggles(&empty_buf, allocator, &.{});
+    try testing.expectEqual(@as(usize, 0), empty_buf.items.len);
+}
+
+test "appendRuleToggles encodes a name the user spelled, rather than copying it" {
+    const allocator = testing.allocator;
+    // a rewrite runs without resolving the names, so the section can hold a key the
+    // rule table has no rule for. one carrying a quote has to stay readable json or
+    // the command that rewrote the config leaves a file nothing can parse
+    const awkward = [_]RuleToggle{
+        .{ .name = "bad\"name", .enabled = false },
+        .{ .name = "back\\slash", .enabled = true },
+    };
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try appendRuleToggles(&buf, allocator, &awkward);
+    try testing.expectEqualStrings(",\n  \"rules\": {\n    \"bad\\\"name\": false,\n    \"back\\\\slash\": true\n  }", buf.items);
 }

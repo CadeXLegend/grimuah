@@ -149,6 +149,10 @@ fn rewriteConfig(
         \\  }}
     , .{ cfg.layers.cosmetic, cfg.layers.structural, cfg.layers.resilience, cfg.layers.behavioural }));
 
+    // write the rules the config names on or off, so a rewrite of the file keeps
+    // the toggles the user set
+    try config.appendRuleToggles(&json_buf, allocator, cfg.rules.entries);
+
     // write rootLib if enabled
     if (cfg.rootLib.enabled) {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,

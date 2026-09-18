@@ -214,6 +214,9 @@ fn rewriteConfig(io: std.Io, allocator: std.mem.Allocator, cfg: *const config.Co
         \\  }}
     , .{ cfg.layers.cosmetic, cfg.layers.structural, cfg.layers.resilience, cfg.layers.behavioural }));
 
+    // write the rules the config names on or off, alongside the layer choices
+    try config.appendRuleToggles(&json_buf, allocator, cfg.rules.entries);
+
     if (cfg.rootLib.enabled) {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,
             \\,

@@ -38,7 +38,19 @@ fn rewriteConfigWithout(io: std.Io, allocator: std.mem.Allocator, cfg: *config.C
     const removed_surface = cfg.getSurface(remove_name).?;
     const removed_dag_order = removed_surface.dagOrder;
 
-    try json_buf.appendSlice(allocator, "{\n  \"surfaces\": [\n");
+    // a declared source root is written first, matching the order the config
+    // formatter uses, and is omitted when the project derives it from the
+    // surfaces so an older config round-trips unchanged
+    try json_buf.appendSlice(allocator, "{");
+    if (cfg.sourceRoots.len > 0) {
+        try json_buf.appendSlice(allocator, "\n  \"sourceRoots\": [");
+        for (cfg.sourceRoots, 0..) |root, root_index| {
+            if (root_index > 0) try json_buf.appendSlice(allocator, ", ");
+            try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator, "\"{s}\"", .{root}));
+        }
+        try json_buf.appendSlice(allocator, "],");
+    }
+    try json_buf.appendSlice(allocator, "\n  \"surfaces\": [\n");
 
     var written: usize = 0;
     for (cfg.surfaces) |surface| {
@@ -91,6 +103,10 @@ fn rewriteConfigWithout(io: std.Io, allocator: std.mem.Allocator, cfg: *config.C
         \\    "behavioural": {}
         \\  }}
     , .{ cfg.layers.cosmetic, cfg.layers.structural, cfg.layers.resilience, cfg.layers.behavioural }));
+
+    // write the rules the config names on or off, so a rewrite of the file keeps
+    // the toggles the user set
+    try config.appendRuleToggles(&json_buf, allocator, cfg.rules.entries);
 
     if (cfg.rootLib.enabled) {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,

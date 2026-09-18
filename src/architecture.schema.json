@@ -93,6 +93,264 @@
         }
       }
     },
+    "rules": {
+      "type": "object",
+      "description": "per-rule toggles, a rule runs unless the config names it false. every rule of the table the enabled layers carry is on by default, and the surface and edge model itself is not a rule: it cannot be turned off here",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "em-dash": {
+          "type": "boolean",
+          "default": true,
+          "description": "cosmetic layer: do not use em-dashes; use commas, colons, or sentence breaks instead"
+        },
+        "null-literal": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: do not use null; use undefined. null only at third-party boundaries (DB, RegExp)"
+        },
+        "let-declaration": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: do not use let; use const. only let at module-level mutable caches"
+        },
+        "switch-statement": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: do not use switch; use a dispatch table (Record/Map) instead"
+        },
+        "imperative-for-loop": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: do not use imperative for loops; use map, filter, reduce, or for..of instead"
+        },
+        "loose-equality": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: use === instead of == to avoid type coercion bugs"
+        },
+        "as-any": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: 'as any' bypasses type safety entirely; use a proper type instead"
+        },
+        "any-type": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This `any` type bypasses type safety. Write the type you mean instead."
+        },
+        "chained-cast": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: chained 'as' casts bypass type safety; use a single cast only"
+        },
+        "proxy-reexport": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: do not proxy re-export; every export must originate from the file that defines it"
+        },
+        "as-const": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: use enum instead of const + as const; enum gives you both value and type in one declaration"
+        },
+        "throw-statement": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts"
+        },
+        "bare-catch": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: do not use bare catch with silent failure; log the error or return an Outcome"
+        },
+        "silent-catch": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: catch block must handle or log the error, not silently discard it"
+        },
+        "max-nesting-depth": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This block is nested N levels deep. Return early or extract a helper."
+        },
+        "max-parameters": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This function takes N parameters. Group them into a named readonly type, or split the function."
+        },
+        "lowercase-copy": {
+          "type": "boolean",
+          "default": true,
+          "description": "cosmetic layer: This copy starts lowercase. Capitalise the first letter of the sentence."
+        },
+        "boolean-flag-argument": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This call passes a bare boolean literal. Name the behaviour instead, or pass a named enum value."
+        },
+        "max-function-lines": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This function body is N lines long. Extract each distinct job into a named function."
+        },
+        "nested-ternary": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This conditional expression contains another conditional expression. Extract the inner decision into a named helper or a lookup."
+        },
+        "max-file-lines": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This file is N lines long. Split it along the responsibilities its sections already show."
+        },
+        "await-in-loop": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: This loop awaits inside its body, so every iteration runs in sequence. Map the items to promises and await Promise.all once."
+        },
+        "max-cyclomatic-complexity": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This function has a cyclomatic complexity of N. Extract each decision into a named predicate or a lookup."
+        },
+        "unbounded-collection-read": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything."
+        },
+        "for-of-accumulation": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This for..of loop builds an array by pushing into it. Use map, filter, flatMap or reduce instead."
+        },
+        "config-behaviour": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: This .config.ts file declares a function. Move the behaviour into the surface's own module."
+        },
+        "if-chain-dispatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: These N branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler."
+        },
+        "literal-union-enum": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This union of N string literals carries no runtime value. Declare a string enum and use its members as the discriminant."
+        },
+        "optional-property": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union."
+        },
+        "readonly-collection-signature": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`."
+        },
+        "readonly-type-member": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy."
+        },
+        "scalar-failure-return": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason."
+        },
+        "discarded-outcome": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: This call returns an Outcome and nothing reads the result, so its failure branch is unreachable. Assign the result and narrow `succeeded`, or log the failure where the call is best effort."
+        },
+        "unread-scalar-result": {
+          "type": "boolean",
+          "default": true,
+          "description": "behavioural layer: This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result."
+        },
+        "enum-placement": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file."
+        },
+        "import-cycle": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback."
+        },
+        "redundant-allowed-import": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: Surface 'name' (dagOrder N) grants 'name' (dagOrder N), which the dag already permits. Delete the entry from its allowedImports list."
+        },
+        "shared-type-placement": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in name.types.ts instead."
+        },
+        "export-without-consumer": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: `name` is exported but no other module names it. Drop the `export` keyword, or have another module name it."
+        },
+        "duplicated-function-body": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: `name` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites."
+        },
+        "duplicated-statement-text": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call."
+        },
+        "duplicated-user-facing-copy": {
+          "type": "boolean",
+          "default": true,
+          "description": "cosmetic layer: This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it."
+        },
+        "repeated-inline-copy": {
+          "type": "boolean",
+          "default": true,
+          "description": "cosmetic layer: This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites."
+        },
+        "literal-duplicating-config-value": {
+          "type": "boolean",
+          "default": true,
+          "description": "cosmetic layer: This literal duplicates `name`, which the surface's own `.config.ts` already declares. Reference the enum member instead."
+        },
+        "duplicated-computation": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This computation is written in N other files. Extract it into a shared function both call sites import."
+        },
+        "unused-import": {
+          "type": "boolean",
+          "default": true,
+          "description": "hygiene layer: This import is unused."
+        },
+        "unused-variable": {
+          "type": "boolean",
+          "default": true,
+          "description": "hygiene layer: This variable name is unused."
+        },
+        "prefer-const": {
+          "type": "boolean",
+          "default": true,
+          "description": "hygiene layer: This let declares a variable that is only assigned once."
+        },
+        "constant-condition": {
+          "type": "boolean",
+          "default": true,
+          "description": "hygiene layer: This condition always evaluates to the same value."
+        },
+        "unreachable-code": {
+          "type": "boolean",
+          "default": true,
+          "description": "hygiene layer: This code will never be reached."
+        }
+      }
+    },
     "rootLib": {
       "type": "object",
       "description": "optional root-level lib/ surface at depth 0, shallower than everything in src/",

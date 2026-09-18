@@ -512,6 +512,12 @@ pub const Project = struct {
 };
 
 pub const Rule = struct {
+    /// the name a config turns this rule on or off with, so the key a user types
+    /// is the table's own declaration rather than a spelling in the docs or the
+    /// schema beside it
+    /// `architecture.schema.json` lists every one of these, and the test below
+    /// keeps the two from drifting
+    name: []const u8,
     layer: Layer,
     severity: Severity,
     message: []const u8,
@@ -652,18 +658,21 @@ pub const unreachable_code = "This code will never be reached.";
 /// every rule, in the order findings are reported
 pub const all = [_]Rule{
     .{
+        .name = "em-dash",
         .layer = .cosmetic,
         .severity = .err,
         .message = em_dash,
         .match = cosmetic.checkEmDash,
     },
     .{
+        .name = "null-literal",
         .layer = .resilience,
         .severity = .err,
         .message = null_literal,
         .match = resilience.checkNullLiteral,
     },
     .{
+        .name = "let-declaration",
         .layer = .resilience,
         .severity = .err,
         .message = let_decl,
@@ -671,6 +680,7 @@ pub const all = [_]Rule{
         .match = resilience.checkLetDeclaration,
     },
     .{
+        .name = "switch-statement",
         .layer = .resilience,
         .severity = .err,
         .message = switch_stmt,
@@ -678,6 +688,7 @@ pub const all = [_]Rule{
         .match = resilience.checkSwitchStatement,
     },
     .{
+        .name = "imperative-for-loop",
         .layer = .resilience,
         .severity = .err,
         .message = imperative_for,
@@ -685,18 +696,21 @@ pub const all = [_]Rule{
         .match = resilience.checkImperativeFor,
     },
     .{
+        .name = "loose-equality",
         .layer = .resilience,
         .severity = .err,
         .message = double_equals,
         .match = resilience.checkDoubleEquals,
     },
     .{
+        .name = "as-any",
         .layer = .resilience,
         .severity = .err,
         .message = as_any,
         .match = resilience.checkAsAny,
     },
     .{
+        .name = "any-type",
         .layer = .resilience,
         .severity = .err,
         .message = any_type,
@@ -704,42 +718,49 @@ pub const all = [_]Rule{
         .match = resilience.checkAnyType,
     },
     .{
+        .name = "chained-cast",
         .layer = .resilience,
         .severity = .err,
         .message = chained_cast,
         .match = resilience.checkChainedCast,
     },
     .{
+        .name = "proxy-reexport",
         .layer = .resilience,
         .severity = .err,
         .message = reexport,
         .match = resilience.checkReexport,
     },
     .{
+        .name = "as-const",
         .layer = .resilience,
         .severity = .err,
         .message = as_const,
         .match = resilience.checkAsConst,
     },
     .{
+        .name = "throw-statement",
         .layer = .behavioural,
         .severity = .err,
         .message = throw_stmt,
         .match = behavioural.checkThrow,
     },
     .{
+        .name = "bare-catch",
         .layer = .behavioural,
         .severity = .err,
         .message = bare_catch,
         .match = behavioural.checkBareCatch,
     },
     .{
+        .name = "silent-catch",
         .layer = .behavioural,
         .severity = .warn,
         .message = silent_catch,
         .match = behavioural.checkSilentCatch,
     },
     .{
+        .name = "max-nesting-depth",
         .layer = .resilience,
         .severity = .warn,
         .message = max_nesting_depth,
@@ -748,6 +769,7 @@ pub const all = [_]Rule{
         .match = complexity.checkMaxNestingDepth,
     },
     .{
+        .name = "max-parameters",
         .layer = .resilience,
         .severity = .warn,
         .message = max_parameters,
@@ -756,6 +778,7 @@ pub const all = [_]Rule{
         .match = complexity.checkMaxParameters,
     },
     .{
+        .name = "lowercase-copy",
         .layer = .cosmetic,
         .severity = .warn,
         .message = lowercase_copy,
@@ -763,6 +786,7 @@ pub const all = [_]Rule{
         .match = cosmetic.checkLowercaseCopy,
     },
     .{
+        .name = "boolean-flag-argument",
         .layer = .resilience,
         .severity = .warn,
         .message = boolean_flag_argument,
@@ -771,6 +795,7 @@ pub const all = [_]Rule{
         .match = resilience.checkBooleanFlagArgument,
     },
     .{
+        .name = "max-function-lines",
         .layer = .resilience,
         .severity = .warn,
         .message = max_function_lines,
@@ -779,6 +804,7 @@ pub const all = [_]Rule{
         .match = complexity.checkMaxFunctionLines,
     },
     .{
+        .name = "nested-ternary",
         .layer = .resilience,
         .severity = .warn,
         .message = nested_ternary,
@@ -787,6 +813,7 @@ pub const all = [_]Rule{
         .match = complexity.checkNestedTernary,
     },
     .{
+        .name = "max-file-lines",
         .layer = .resilience,
         .severity = .warn,
         .message = max_file_lines,
@@ -794,6 +821,7 @@ pub const all = [_]Rule{
         .match = complexity.checkMaxFileLines,
     },
     .{
+        .name = "await-in-loop",
         .layer = .behavioural,
         .severity = .warn,
         .message = await_in_loop,
@@ -802,6 +830,7 @@ pub const all = [_]Rule{
         .match = behavioural.checkAwaitInLoop,
     },
     .{
+        .name = "max-cyclomatic-complexity",
         .layer = .resilience,
         .severity = .warn,
         .message = max_cyclomatic_complexity,
@@ -810,6 +839,7 @@ pub const all = [_]Rule{
         .match = complexity.checkMaxCyclomaticComplexity,
     },
     .{
+        .name = "unbounded-collection-read",
         .layer = .resilience,
         .severity = .warn,
         .message = unbounded_collection_read,
@@ -818,6 +848,7 @@ pub const all = [_]Rule{
         .match = resilience.checkUnboundedCollectionRead,
     },
     .{
+        .name = "for-of-accumulation",
         .layer = .resilience,
         .severity = .err,
         .message = for_of_accumulation,
@@ -826,6 +857,7 @@ pub const all = [_]Rule{
         .match = resilience.checkForOfAccumulation,
     },
     .{
+        .name = "config-behaviour",
         .layer = .structural,
         .severity = .warn,
         .message = config_behaviour,
@@ -834,6 +866,7 @@ pub const all = [_]Rule{
         .match = structural.checkConfigBehaviour,
     },
     .{
+        .name = "if-chain-dispatch",
         .layer = .resilience,
         .severity = .warn,
         .message = if_chain_dispatch,
@@ -842,6 +875,7 @@ pub const all = [_]Rule{
         .match = resilience.checkIfChainDispatch,
     },
     .{
+        .name = "literal-union-enum",
         .layer = .resilience,
         .severity = .warn,
         .message = literal_union_enum,
@@ -850,6 +884,7 @@ pub const all = [_]Rule{
         .match = resilience.checkLiteralUnionEnum,
     },
     .{
+        .name = "optional-property",
         .layer = .resilience,
         .severity = .warn,
         .message = optional_property,
@@ -858,6 +893,7 @@ pub const all = [_]Rule{
         .match = resilience.checkOptionalProperties,
     },
     .{
+        .name = "readonly-collection-signature",
         .layer = .resilience,
         .severity = .warn,
         .message = readonly_collection_signature,
@@ -866,6 +902,7 @@ pub const all = [_]Rule{
         .match = resilience.checkReadonlyCollectionSignatures,
     },
     .{
+        .name = "readonly-type-member",
         .layer = .resilience,
         .severity = .warn,
         .message = readonly_type_member,
@@ -874,6 +911,7 @@ pub const all = [_]Rule{
         .match = resilience.checkReadonlyTypeMembers,
     },
     .{
+        .name = "scalar-failure-return",
         .layer = .resilience,
         .severity = .warn,
         .message = scalar_failure_return,
@@ -882,6 +920,7 @@ pub const all = [_]Rule{
         .match = resilience.checkScalarFailureReturn,
     },
     .{
+        .name = "discarded-outcome",
         .layer = .behavioural,
         .severity = .warn,
         .message = discarded_outcome,
@@ -891,6 +930,7 @@ pub const all = [_]Rule{
         .match = behavioural.checkDiscardedOutcome,
     },
     .{
+        .name = "unread-scalar-result",
         .layer = .behavioural,
         .severity = .warn,
         .message = unread_scalar_result,
@@ -900,6 +940,7 @@ pub const all = [_]Rule{
         .match = behavioural.checkUnreadScalarResult,
     },
     .{
+        .name = "enum-placement",
         .layer = .structural,
         .severity = .warn,
         .message = enum_placement,
@@ -908,6 +949,7 @@ pub const all = [_]Rule{
         .match = structural.checkEnumPlacement,
     },
     .{
+        .name = "import-cycle",
         .layer = .structural,
         .severity = .err,
         .message = import_cycle,
@@ -917,6 +959,7 @@ pub const all = [_]Rule{
         .resolve_index = structural.resolveImportCycle,
     },
     .{
+        .name = "redundant-allowed-import",
         .layer = .structural,
         .severity = .warn,
         .message = redundant_allowed_import,
@@ -924,6 +967,7 @@ pub const all = [_]Rule{
         .match = structural.checkRedundantAllowedImport,
     },
     .{
+        .name = "shared-type-placement",
         .layer = .structural,
         .severity = .warn,
         .message = shared_type_placement,
@@ -933,6 +977,7 @@ pub const all = [_]Rule{
         .resolve_index = structural.checkSharedTypePlacement,
     },
     .{
+        .name = "export-without-consumer",
         .layer = .structural,
         .severity = .warn,
         .message = export_without_consumer,
@@ -942,6 +987,7 @@ pub const all = [_]Rule{
         .resolve_index = structural.checkExportWithoutConsumer,
     },
     .{
+        .name = "duplicated-function-body",
         .layer = .resilience,
         .severity = .warn,
         .message = duplicated_function_body,
@@ -951,6 +997,7 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedFunctionBody,
     },
     .{
+        .name = "duplicated-statement-text",
         .layer = .resilience,
         .severity = .warn,
         .message = duplicated_statement_text,
@@ -960,6 +1007,7 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedStatementText,
     },
     .{
+        .name = "duplicated-user-facing-copy",
         .layer = .cosmetic,
         .severity = .warn,
         .message = duplicated_user_facing_copy,
@@ -969,6 +1017,7 @@ pub const all = [_]Rule{
         .resolve_fingerprints = cosmetic.checkDuplicatedUserFacingCopy,
     },
     .{
+        .name = "repeated-inline-copy",
         .layer = .cosmetic,
         .severity = .warn,
         .message = repeated_inline_copy,
@@ -977,6 +1026,7 @@ pub const all = [_]Rule{
         .match = cosmetic.checkRepeatedInlineCopy,
     },
     .{
+        .name = "literal-duplicating-config-value",
         .layer = .cosmetic,
         .severity = .warn,
         .message = literal_duplicating_config_value,
@@ -986,6 +1036,7 @@ pub const all = [_]Rule{
         .resolve_fingerprints = cosmetic.checkLiteralDuplicatingConfigValue,
     },
     .{
+        .name = "duplicated-computation",
         .layer = .resilience,
         .severity = .warn,
         .message = duplicated_computation,
@@ -995,6 +1046,7 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedComputation,
     },
     .{
+        .name = "unused-import",
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_import,
@@ -1002,6 +1054,7 @@ pub const all = [_]Rule{
         .match = hygiene.checkUnusedImports,
     },
     .{
+        .name = "unused-variable",
         .layer = .hygiene,
         .severity = .warn,
         .message = unused_variable,
@@ -1009,6 +1062,7 @@ pub const all = [_]Rule{
         .match = hygiene.checkUnusedVariables,
     },
     .{
+        .name = "prefer-const",
         .layer = .hygiene,
         .severity = .warn,
         .message = use_const,
@@ -1016,6 +1070,7 @@ pub const all = [_]Rule{
         .match = hygiene.checkUseConst,
     },
     .{
+        .name = "constant-condition",
         .layer = .hygiene,
         .severity = .err,
         .message = constant_condition,
@@ -1023,6 +1078,7 @@ pub const all = [_]Rule{
         .match = hygiene.checkConstantCondition,
     },
     .{
+        .name = "unreachable-code",
         .layer = .hygiene,
         .severity = .err,
         .message = unreachable_code,
@@ -1034,10 +1090,10 @@ pub const all = [_]Rule{
 /// whether an enabled rule needs the parsed tree, so the engine knows whether
 /// paying for the parse can produce anything
 pub fn needsTree(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (rule.syntax != .ir) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1053,10 +1109,10 @@ pub fn lintsEveryFile(cfg: *const config.Config, with_hygiene: bool) bool {
 /// whether an enabled rule needs the whole project's declared return types, so the
 /// engine knows to collect them as it reads each file
 pub fn needsProject(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_project) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1068,10 +1124,10 @@ pub fn needsProject(cfg: *const config.Config, with_hygiene: bool) bool {
 /// a component pass over the graph, so a project that enables no graph rule must
 /// not pay it
 pub fn needsProjectIndex(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_project_index) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1079,10 +1135,10 @@ pub fn needsProjectIndex(cfg: *const config.Config, with_hygiene: bool) bool {
 /// whether an enabled rule reads a family of the run's fingerprints, so the merge knows
 /// whether to build the fingerprint index
 pub fn needsFingerprints(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
-        if (!declaresFingerprintFamily(rule)) continue;
+    for (&all, 0..) |*rule, rule_index| {
+        if (!declaresFingerprintFamily(rule.*)) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1093,10 +1149,10 @@ pub fn needsFingerprints(cfg: *const config.Config, with_hygiene: bool) bool {
 /// project that enables only the statement or the copy rules builds the index without ever
 /// walking a body
 pub fn needsBodyFingerprints(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_body_fingerprints) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1107,10 +1163,10 @@ pub fn needsBodyFingerprints(cfg: *const config.Config, with_hygiene: bool) bool
 /// separate from `needsBodyFingerprints` because the statement sites come off the token
 /// stream rather than out of a parsed body, which is the cheap half of the two
 pub fn needsStatementText(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_statement_text) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1118,10 +1174,10 @@ pub fn needsStatementText(cfg: *const config.Config, with_hygiene: bool) bool {
 /// whether an enabled rule needs every user-facing copy literal of the run, so the engine
 /// knows whether to collect them as it reads each file
 pub fn needsCopyOwners(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_copy_owners) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1129,10 +1185,10 @@ pub fn needsCopyOwners(cfg: *const config.Config, with_hygiene: bool) bool {
 /// whether an enabled rule needs the run's config values and the literals that might retype
 /// them, so the engine knows whether to collect both as it reads each file
 pub fn needsConfigValues(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_config_values) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1140,10 +1196,10 @@ pub fn needsConfigValues(cfg: *const config.Config, with_hygiene: bool) bool {
 /// whether an enabled rule needs every computation expression of the run, so the engine
 /// knows whether to collect them as it reads each file
 pub fn needsComputationSites(cfg: *const config.Config, with_hygiene: bool) bool {
-    for (all) |rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_computation_sites) continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (enabled(cfg, rule.layer)) return true;
+        if (enabled(cfg, rule_index)) return true;
     }
     return false;
 }
@@ -1153,6 +1209,56 @@ pub fn needsComputationSites(cfg: *const config.Config, with_hygiene: bool) bool
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
     return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values or rule.needs_computation_sites;
+}
+
+comptime {
+    @setEvalBranchQuota(20_000);
+    // the table is the one place a rule is declared, so the config keys are checked
+    // where they are written: a duplicate name would make one rule unreachable by
+    // name, a name that is not kebab case would not autocomplete from the schema
+    // as it is spelled here, and a table wider than the config's mask would drop
+    // a toggle in silence
+    if (all.len > config.rule_mask_capacity) @compileError("the rule table is wider than the config's toggle mask");
+    for (all, 0..) |rule, rule_index| {
+        if (rule.name.len == 0) @compileError("a rule needs a name, because that is the key a config turns it off with");
+        for (rule.name) |character| {
+            const is_kebab_character = (character >= 'a' and character <= 'z') or character == '-';
+            if (!is_kebab_character) @compileError("a rule name is lower case letters and dashes");
+        }
+        for (all[rule_index + 1 ..]) |other| {
+            if (std.mem.eql(u8, rule.name, other.name)) @compileError("two rules share a name, so one of them is unreachable by name");
+        }
+    }
+}
+
+/// the index of the rule a config names, or null when the table has no such rule
+fn ruleIndexNamed(name: []const u8) ?usize {
+    for (&all, 0..) |*rule, rule_index| {
+        if (std.mem.eql(u8, rule.name, name)) return rule_index;
+    }
+    return null;
+}
+
+/// turn the config's named toggles into the mask the scan reads, once per run
+///
+/// returns the first name the table does not have, or null when every name
+/// resolved. a name that matches nothing is a typo that would leave the rule it
+/// meant to silence running, so it is the caller's to report rather than a silent
+/// no-op
+pub fn resolveToggles(cfg: *config.Config) ?[]const u8 {
+    // the mask is derived state rather than a second source of truth, so the
+    // resolver owns it whole: a config that reached it some other way keeps only
+    // the bits the names here set
+    cfg.disabledRules = config.DisabledRules.empty;
+    for (cfg.rules.entries) |toggle| {
+        const rule_index = ruleIndexNamed(toggle.name) orelse return toggle.name;
+        if (toggle.enabled) {
+            cfg.disabledRules.unset(rule_index);
+        } else {
+            cfg.disabledRules.set(rule_index);
+        }
+    }
+    return null;
 }
 
 /// reach every enabled graph rule's verdict for one file of the run
@@ -1169,11 +1275,11 @@ pub fn resolveIndex(
     with_hygiene: bool,
     findings: *std.ArrayList(Finding),
 ) std.mem.Allocator.Error!void {
-    for (&all) |*rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (!rule.needs_project_index) continue;
         const verdict = rule.resolve_index orelse continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (!enabled(cfg, rule.layer)) continue;
+        if (!enabled(cfg, rule_index)) continue;
         try verdict(allocator, graph, file, path, rule, findings);
     }
 }
@@ -1191,15 +1297,17 @@ pub fn resolveFingerprints(
     with_hygiene: bool,
     findings: *std.ArrayList(Finding),
 ) std.mem.Allocator.Error!void {
-    for (&all) |*rule| {
+    for (&all, 0..) |*rule, rule_index| {
         const verdict = rule.resolve_fingerprints orelse continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
-        if (!enabled(cfg, rule.layer)) continue;
+        if (!enabled(cfg, rule_index)) continue;
         try verdict(allocator, index, project, path, rule, findings);
     }
 }
 
-pub fn enabled(cfg: *const config.Config, layer: Layer) bool {
+/// whether the config runs a layer. the four layer toggles carry one layer each,
+/// and the hygiene layer is on wherever the caller asked for hygiene at all
+fn layerEnabled(cfg: *const config.Config, layer: Layer) bool {
     return switch (layer) {
         .cosmetic => cfg.layers.cosmetic,
         .structural => cfg.layers.structural,
@@ -1209,19 +1317,32 @@ pub fn enabled(cfg: *const config.Config, layer: Layer) bool {
     };
 }
 
+/// whether the config runs the rule at `rule_index` of the table: its layer must
+/// be on, and the config must not have named it off
+///
+/// the index is the table's own order, which is what `resolveToggles` writes into
+/// the mask, so this is a shift and a test rather than a lookup by name on the
+/// path every file walks 50 times
+pub fn enabled(cfg: *const config.Config, rule_index: usize) bool {
+    if (!layerEnabled(cfg, all[rule_index].layer)) return false;
+    return !cfg.disabledRules.isSet(rule_index);
+}
+
 /// run every enabled rule over one file, in table order
 ///
 /// the context is copied per rule so the rule's own table entry travels with the
 /// dispatch: `Context.deferToProject` reads the layer, the severity and the
 /// message from it rather than from the rule's own restatement of them
 pub fn run(context: *const Context) !void {
-    for (&all) |*rule| {
+    for (&all, 0..) |*rule, rule_index| {
         if (rule.layer == .hygiene and !context.hygiene) continue;
-        if (!enabled(context.cfg, rule.layer)) continue;
+        if (!enabled(context.cfg, rule_index)) continue;
         if (rule.syntax == .ir and context.module == null) continue;
         const matcher = rule.match orelse continue;
 
         var dispatched = context.*;
+        // the entry's address, so the context the matcher is handed names the
+        // table row the engine resolved rather than a copy of it
         dispatched.rule = rule;
         try matcher(&dispatched);
     }
@@ -1241,6 +1362,137 @@ test "every rule has a verdict, and the index flags and the index verdicts agree
         try testing.expect(rule.needs_project_index == (rule.resolve_index != null));
         try testing.expect(declaresFingerprintFamily(rule) == (rule.resolve_fingerprints != null));
     }
+}
+
+/// the two toggles a config test hands a config that names rules, one that
+/// silences a rule and one that names a rule the table does not have
+fn testToggles(allocator: std.mem.Allocator, names: []const []const u8) ![]config.RuleToggle {
+    const entries = try allocator.alloc(config.RuleToggle, names.len);
+    for (names, 0..) |name, entry_index| {
+        // every other name is turned on, so the resolver is seen to reach the
+        // dropped rule in front of it
+        entries[entry_index] = .{ .name = try allocator.dupe(u8, name), .enabled = entry_index % 2 == 1 };
+    }
+    return entries;
+}
+
+// the config names rules, the table holds indices, and the one place the two meet
+// is the resolver, so this is where a name that matches nothing has to surface
+
+test "resolveToggles maps the names a config carries onto the table, and reports a name it has no rule for" {
+    const allocator = testing.allocator;
+
+    var cfg = config.Config{
+        .surfaces = &.{},
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+        .rules = .{ .entries = try testToggles(allocator, &.{ "em-dash", "switch-statement" }) },
+    };
+    defer cfg.deinit(allocator);
+    var unknown_cfg = config.Config{
+        .surfaces = &.{},
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+        .rules = .{ .entries = try testToggles(allocator, &.{"em-dashes"}) },
+    };
+    defer unknown_cfg.deinit(allocator);
+
+    const em_dash_index = ruleIndexNamed("em-dash").?;
+    const switch_index = ruleIndexNamed("switch-statement").?;
+
+    // a config that names rules still runs them until the names are resolved
+    try testing.expect(enabled(&cfg, em_dash_index));
+
+    try testing.expect(resolveToggles(&cfg) == null);
+    try testing.expect(!enabled(&cfg, em_dash_index));
+    // the second name is spelled on, which clears a bit rather than setting one
+    try testing.expect(enabled(&cfg, switch_index));
+    // and the rule the config never named keeps running
+    try testing.expect(enabled(&cfg, ruleIndexNamed("null-literal").?));
+
+    // a name the table does not have is handed back rather than resolved to
+    // nothing, because the rule it meant to silence would keep reporting
+    try testing.expectEqualStrings("em-dashes", resolveToggles(&unknown_cfg).?);
+    try testing.expect(enabled(&unknown_cfg, em_dash_index));
+}
+
+// the layer toggle and the rule toggle have to compose: a rule named off inside a
+// layer that is off stays off either way, and a rule named off inside a layer that
+// is on is the case the config exists for
+
+test "a rule named off stops reporting while the rules beside it keep reporting" {
+    const allocator = testing.allocator;
+    const source = "const title = \"a \u{2014} b\";\n";
+
+    var line: u32 = 1;
+    const tokens = try ts.tokenize(allocator, source, &line);
+    defer allocator.free(tokens);
+
+    var off_cfg = config.Config{
+        .surfaces = &.{},
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+        .rules = .{ .entries = try testToggles(allocator, &.{"em-dash"}) },
+    };
+    defer off_cfg.deinit(allocator);
+    try testing.expect(resolveToggles(&off_cfg) == null);
+
+    const on_cfg = config.Config{
+        .surfaces = &.{},
+        .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
+    };
+
+    var turned_off: std.ArrayList(Finding) = .empty;
+    defer {
+        for (turned_off.items) |finding| {
+            allocator.free(finding.path);
+            allocator.free(finding.message);
+        }
+        turned_off.deinit(allocator);
+    }
+    var turned_on: std.ArrayList(Finding) = .empty;
+    defer {
+        for (turned_on.items) |finding| {
+            allocator.free(finding.path);
+            allocator.free(finding.message);
+        }
+        turned_on.deinit(allocator);
+    }
+
+    const path = "src/a.util.ts";
+    try run(&Context{ .allocator = allocator, .cfg = &off_cfg, .findings = &turned_off, .path = path, .source = source, .tokens = tokens, .module = null, .hygiene = false });
+    try testing.expectEqual(@as(usize, 0), turned_off.items.len);
+
+    try run(&Context{ .allocator = allocator, .cfg = &on_cfg, .findings = &turned_on, .path = path, .source = source, .tokens = tokens, .module = null, .hygiene = false });
+    try testing.expectEqual(@as(usize, 1), turned_on.items.len);
+    try testing.expectEqualStrings(em_dash, turned_on.items[0].message);
+}
+
+// the schema beside the tool is what a user's editor autocompletes a rule name
+// from, so a rule it does not list is a name nobody can find and a name it lists
+// that the table dropped is one no config can use
+
+test "the schema names every rule in the table, and no rule the table does not have" {
+    const allocator = testing.allocator;
+    // the schema the binary embeds and ships is the one beside this file, which is
+    // the one a project's editor autocompletes a rule name from
+    const schema_source = @embedFile("architecture.schema.json");
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, schema_source, .{});
+    defer parsed.deinit();
+
+    const section = parsed.value.object.get("properties").?.object.get("rules").?.object;
+    // a key the table does not have would autocomplete a name the run then rejects
+    try testing.expect(!section.get("additionalProperties").?.bool);
+    const listed = section.get("properties").?.object;
+
+    var matched: usize = 0;
+    for (all) |rule| {
+        const entry = listed.get(rule.name) orelse continue;
+        try testing.expectEqualStrings("boolean", entry.object.get("type").?.string);
+        try testing.expect(entry.object.get("default").?.bool);
+        try testing.expect(entry.object.get("description").?.string.len > 0);
+        matched += 1;
+    }
+    try testing.expectEqual(all.len, matched);
+    try testing.expectEqual(all.len, listed.count());
 }
 
 // the graph dispatch reaches a rule only when its own layer is on, and the row it

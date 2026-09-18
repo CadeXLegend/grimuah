@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("../config.zig");
 const prepass = @import("../prepass.zig");
 const engine = @import("../engine.zig");
+const rules = @import("../rules.zig");
 
 /// the pre-pass on its own thread while the engine takes the cores. the two
 /// stages are independent, both walk the whole tree, and neither reads the
@@ -32,13 +33,22 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
         return;
     };
     defer parsed.deinit();
-    const cfg = parsed.value;
+    var cfg = parsed.value;
 
     // validate config
     config.validate(&cfg) catch |err| {
         std.debug.print("error: invalid architecture.config.json: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
+
+    // match the rule names the config carries against the table once, so a name
+    // the table does not have stops the run instead of leaving the rule it meant
+    // to silence in place
+    if (rules.resolveToggles(&cfg)) |unknown_name| {
+        std.debug.print("Error: architecture.config.json names the rule '{s}', which grimuah has no rule for.\n", .{unknown_name});
+        std.debug.print("Run 'grimuah rules' to list every name.\n", .{});
+        std.process.exit(1);
+    }
 
     var exit_code: u8 = 0;
     var finding_count: u32 = 0;

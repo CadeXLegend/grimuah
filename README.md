@@ -35,6 +35,7 @@ the rest is scaffolding, lint rules, and a chef's kiss
 - [quickstart](#quickstart)
 - [core principles](#core-principles)
 - [the four rule layers](#the-four-rule-layers)
+- [turning a single rule off](#turning-a-single-rule-off)
 - [identity](#identity)
 - [surfaces](#surfaces)
 - [innate members](#innate-members)
@@ -259,6 +260,40 @@ runtime safety and error handling discipline
 | Bare `catch {}`                      | an empty catch swallows every error, including ones the developer did not anticipate, there is no path to observability or recovery                                                        |
 | `catch { $_ }`                       | a discarded parameter does not make the silence acceptable, same structural problem as a bare catch, with the added misdirection of naming the ignored error                               |
 | Input validation at trust boundaries | untrusted input causes most runtime failures in practice, validating at the boundary stops malformed data from reaching deeper layers where the original context is lost                    |
+
+---
+
+## turning a single rule off
+
+each layer is a category, and every rule inside one has its own name
+
+a rule runs unless the config names it, so a project that wants `switch` back keeps every other resilience rule
+
+```json
+"layers": {
+  "resilience": true
+},
+"rules": {
+  "switch-statement": false,
+  "max-file-lines": false
+}
+```
+
+the layer is the gate and a rule only narrows it, so a rule named on inside a layer that is off stays off
+
+the `rules` object takes a boolean per rule, `false` turns the rule off and `true` is the default, so a config usually lists only the rules it silences
+
+the hygiene rules have no layer of their own, so `rules` is the only switch they have
+
+`architecture.schema.json` lists every rule name, so an editor autocompletes the key and marks one the table does not have
+
+`grimuah rules` prints the same list in the terminal, grouped by layer with each rule's severity and the sentence it reports, for a finding you are looking at rather than a config you are writing
+
+a name that matches no rule stops the check with the name it could not match, because a typo would otherwise leave the rule it meant to silence running
+
+the surface and edge model is not a rule and carries no per-rule key
+
+the suffix list, the import firewall, the dag order, and the innate member scoping are the declaration a project makes about itself, and their layer is the only switch over them
 
 ---
 
@@ -576,7 +611,7 @@ the config is the single source of truth for the architecture
 
 the CLI reads it to validate imports, check naming, and run pre-passes
 
-the [schema](architecture.schema.json) validates it at authoring time with editor autocomplete
+the [schema](src/architecture.schema.json) validates it at authoring time with editor autocomplete
 
 the same schema runs during every `grimuah check`
 
