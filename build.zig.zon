@@ -8,6 +8,5 @@
         "build.zig.zon",
         "src",
         "presets",
-        "architecture.schema.json",
     },
 }
