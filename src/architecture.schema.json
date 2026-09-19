@@ -324,6 +324,11 @@
           "default": true,
           "description": "resilience layer: This computation is written in N other files. Extract it into a shared function both call sites import."
         },
+        "renamed-duplicate-body": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This body is a byte-identical copy of a declaration another file writes under a different name. Lift the implementation into one shared declaration and import it from both call sites."
+        },
         "unused-import": {
           "type": "boolean",
           "default": true,

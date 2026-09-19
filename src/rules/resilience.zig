@@ -880,6 +880,94 @@ fn duplicatedComputationMessage(allocator: std.mem.Allocator, expression: []cons
     return std.fmt.allocPrint(allocator, root.duplicated_computation, .{ expression, others, plural });
 }
 
+/// a body the run declares under more than one name, which is the blind spot of the accepted
+/// body rule: that rule keys a declaration on its name beside its body, so a copy whose author
+/// renamed the declaration is a different key and nothing reports it there
+///
+/// the run's index holds one group per collapsed body text, with the distinct files and the
+/// distinct names that declare it, and a group whose declarations all keep one name belongs to
+/// the sibling rule rather than to this one
+///
+/// a body whose defect the sibling computation rule already names stays quiet, because the two
+/// rules would otherwise report one body at one line twice, and the computation's row is the
+/// one that names what actually has to move
+/// that coverage comes from the collection the computation rule drives, so a project that turns
+/// that rule off runs this one without it, exactly as the computation rule runs without the body
+/// rule's own suppression when the body family is not collected
+pub fn checkRenamedDuplicateBody(
+    allocator: std.mem.Allocator,
+    index: *const root.FingerprintIndex,
+    project: *const root.Project,
+    path: []const u8,
+    rule: *const root.Rule,
+    findings: *std.ArrayList(root.Finding),
+) std.mem.Allocator.Error!void {
+    // a smoke module contributes no body to the run's grouping and reports no row of its own,
+    // while the collection the two body rules share reads one like any other file
+    if (std.mem.endsWith(u8, path, root.smoke_module_suffix)) return;
+
+    for (project.body_fingerprints.items) |fingerprint| {
+        const group = index.renamed_bodies.get(fingerprint.bodyText()) orelse continue;
+        if (group.files.files < root.minimum_duplicate_files) continue;
+        if (group.names.items.len < root.minimum_renamed_body_names) continue;
+        if (group.covered) continue;
+
+        const message = try renamedDuplicateBodyMessage(allocator, fingerprint.name, group, path);
+        defer allocator.free(message);
+        try findings.append(allocator, .{
+            .path = try allocator.dupe(u8, path),
+            .line = fingerprint.line,
+            .message = try allocator.dupe(u8, message),
+            .layer = rule.layer.name(),
+            .severity = rule.severity,
+        });
+    }
+}
+
+/// the row's message: the declaration's name, how many declarations the run writes under this
+/// body, how many files it spans, the other names it is declared under and one of those files
+fn renamedDuplicateBodyMessage(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    group: root.RenamedBody,
+    path: []const u8,
+) ![]u8 {
+    const other_names = try commaListedNames(allocator, group.names.items, name);
+    defer allocator.free(other_names);
+    return std.fmt.allocPrint(allocator, root.renamed_duplicate_body, .{
+        name,
+        group.sites,
+        group.files.files,
+        other_names,
+        exampleFileOf(group, path),
+    });
+}
+
+/// the names a row lists, apart from the one it reports, joined with a comma
+fn commaListedNames(allocator: std.mem.Allocator, names: []const []const u8, name: []const u8) ![]u8 {
+    var listed: std.ArrayList(u8) = .empty;
+    errdefer listed.deinit(allocator);
+    for (names) |candidate| {
+        if (std.mem.eql(u8, candidate, name)) continue;
+        if (listed.items.len > 0) try listed.appendSlice(allocator, ", ");
+        try listed.appendSlice(allocator, candidate);
+    }
+    return listed.toOwnedSlice(allocator);
+}
+
+/// the file a row names as its example: the first file of the group other than the one the row
+/// reports in
+/// the group keeps its first two files rather than a count of them, because a report inside the
+/// first file has to name the second
+/// both fallbacks are unreachable for a group a verdict can find, which is one a fingerprint put
+/// there and so one with a file: they are a safety net rather than a guard, because naming the
+/// reporting file itself is a stranger row than no example, and neither is worth a panic
+fn exampleFileOf(group: root.RenamedBody, path: []const u8) []const u8 {
+    const first = group.first_file orelse return path;
+    if (!std.mem.eql(u8, first, path)) return first;
+    return group.second_file orelse first;
+}
+
 const probe = @import("probe.zig");
 
 test "a mutable property of a type literal is reported, and an interface's is not" {
@@ -1925,4 +2013,203 @@ test "a smoke module is no site to the run or to itself, and one file counts onc
         \\
         },
     }, &.{ lower, upper });
+}
+
+/// the row a renamed-copy finding produces, built from the table's message so a wording change
+/// is one edit
+fn renamedDuplicateBodyRow(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    line: u32,
+    name: []const u8,
+    sites: u32,
+    files: u32,
+    other_names: []const []const u8,
+    example: []const u8,
+) ![]const u8 {
+    const listed = try std.mem.join(allocator, ", ", other_names);
+    defer allocator.free(listed);
+    const message = try std.fmt.allocPrint(allocator, root.renamed_duplicate_body, .{ name, sites, files, listed, example });
+    defer allocator.free(message);
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, message });
+}
+
+test "a body copied into another file under a new name is reported at each copy, at the body's own line" {
+    const allocator = std.testing.allocator;
+    const here = try renamedDuplicateBodyRow(allocator, "src/lib/a.util.ts", 2, "isMessageWithId", 2, 2, &.{"isChannelWithId"}, "src/lib/b.util.ts");
+    defer allocator.free(here);
+    const there = try renamedDuplicateBodyRow(allocator, "src/lib/b.util.ts", 2, "isChannelWithId", 2, 2, &.{"isMessageWithId"}, "src/lib/a.util.ts");
+    defer allocator.free(there);
+
+    try probe.expectProject(.resilience, &.{
+        // the declaration's name sits on the first line and its body begins on the second, so
+        // the row lands on the body's own start rather than on the declaration's
+        .{ .path = "src/lib/a.util.ts", .content =
+        \\export const isMessageWithId =
+        \\  (value: unknown): boolean => {
+        \\    return typeof value === "object" && typeof value !== "undefined";
+        \\  };
+        \\
+        },
+        .{ .path = "src/lib/b.util.ts", .content =
+        \\export const isChannelWithId =
+        \\  (value: unknown): boolean => {
+        \\    return typeof value === "object" && typeof value !== "undefined";
+        \\  };
+        \\
+        },
+    }, &.{ here, there });
+}
+
+test "a pair that keeps one name belongs to the accepted rule, and a body under the gate or alone in one file belongs to neither" {
+    const allocator = std.testing.allocator;
+    const charge_here = try duplicateBodyRow(allocator, "src/lib/charge.util.ts", 1, "charge");
+    defer allocator.free(charge_here);
+    const charge_there = try duplicateBodyRow(allocator, "src/lib/ledger.util.ts", 1, "charge");
+    defer allocator.free(charge_there);
+
+    try probe.expectProject(.resilience, &.{
+        // two names over one body in ONE file is a group of one file, so nothing outside it
+        // writes the body, whatever it is called
+        .{ .path = "src/lib/solo.util.ts", .content =
+        \\export const alpha = (value: unknown): boolean => {
+        \\  return typeof value === "object" && typeof value !== "undefined";
+        \\};
+        \\export const beta = (value: unknown): boolean => {
+        \\  return typeof value === "object" && typeof value !== "undefined";
+        \\};
+        \\
+        },
+        // a body under thirty collapsed characters is no group at all, under any name
+        .{ .path = "src/lib/tiny.util.ts", .content =
+        \\export const tiny = (): number => 1 + 1;
+        \\
+        },
+        .{ .path = "src/lib/minor.util.ts", .content =
+        \\export const minor = (): number => 1 + 1;
+        \\
+        },
+        // one name across two files is the accepted body rule's own case: the name is part of
+        // its key, and this rule is the blind spot beside that key rather than a second
+        // opinion on it
+        .{ .path = "src/lib/charge.util.ts", .content =
+        \\export const charge = (amount: number, rate: number): number => {
+        \\  return (amount * rate) / (rate + amount + 1);
+        \\};
+        \\
+        },
+        .{ .path = "src/lib/ledger.util.ts", .content =
+        \\export const charge = (amount: number, rate: number): number => {
+        \\  return (amount * rate) / (rate + amount + 1);
+        \\};
+        \\
+        },
+    }, &.{ charge_here, charge_there });
+}
+
+test "a renamed copy whose body holds a computation the accepted rule already reports stays quiet" {
+    const allocator = std.testing.allocator;
+    // the site IS the body here: an arrow's expression body is the expression itself, and the
+    // detector's coverage walk begins at the body node rather than at its children
+    const blessed = try duplicatedComputationRow(allocator, "src/db/blessed.repo.ts", 2, "Math.floor((amount * rate) / (PercentScale * PercentScale))", 1);
+    defer allocator.free(blessed);
+    const credited = try duplicatedComputationRow(allocator, "src/db/credited.repo.ts", 2, "Math.floor((amount * rate) / (PercentScale * PercentScale))", 1);
+    defer allocator.free(credited);
+    // this pair's site sits inside a block body, one level below the body the renamed rule
+    // groups
+    const panel = try duplicatedComputationRow(allocator, "src/db/panel.repo.ts", 2, "Math.round(amount * rate)", 1);
+    defer allocator.free(panel);
+    const frame = try duplicatedComputationRow(allocator, "src/db/frame.repo.ts", 2, "Math.round(amount * rate)", 1);
+    defer allocator.free(frame);
+
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/db/blessed.repo.ts", .content =
+        \\export const resolveBlessedAmount = (amount: number, rate: number): number =>
+        \\  Math.floor((amount * rate) / (PercentScale * PercentScale));
+        \\
+        },
+        .{ .path = "src/db/credited.repo.ts", .content =
+        \\export const resolveBlessedCreditedAmount = (amount: number, rate: number): number =>
+        \\  Math.floor((amount * rate) / (PercentScale * PercentScale));
+        \\
+        },
+        .{ .path = "src/db/panel.repo.ts", .content =
+        \\export const alpha = (amount: number, rate: number): number => {
+        \\  return Math.round(amount * rate);
+        \\};
+        \\
+        },
+        .{ .path = "src/db/frame.repo.ts", .content =
+        \\export const beta = (amount: number, rate: number): number => {
+        \\  return Math.round(amount * rate);
+        \\};
+        \\
+        },
+    }, &.{ blessed, credited, panel, frame });
+}
+
+test "a smoke module contributes no copy to the grouping and reports no row of its own" {
+    const allocator = std.testing.allocator;
+    const quiet = try renamedDuplicateBodyRow(allocator, "src/lib/quiet.util.ts", 1, "isQuietMessage", 2, 2, &.{"isQuietChannel"}, "src/lib/other.util.ts");
+    defer allocator.free(quiet);
+    const other = try renamedDuplicateBodyRow(allocator, "src/lib/other.util.ts", 1, "isQuietChannel", 2, 2, &.{"isQuietMessage"}, "src/lib/quiet.util.ts");
+    defer allocator.free(other);
+
+    try probe.expectProject(.resilience, &.{
+        // the smoke module writes the same body under a third name: were it counted, the pair
+        // beside it would read three files across three names, and were it judged, it would
+        // report a row of its own
+        .{ .path = "src/lib/quiet.util.smoke.ts", .content =
+        \\export const isQuietRecord = (value: unknown): boolean => {
+        \\  return typeof value === "object" && typeof value !== "undefined";
+        \\};
+        \\
+        },
+        .{ .path = "src/lib/quiet.util.ts", .content =
+        \\export const isQuietMessage = (value: unknown): boolean => {
+        \\  return typeof value === "object" && typeof value !== "undefined";
+        \\};
+        \\
+        },
+        .{ .path = "src/lib/other.util.ts", .content =
+        \\export const isQuietChannel = (value: unknown): boolean => {
+        \\  return typeof value === "object" && typeof value !== "undefined";
+        \\};
+        \\
+        },
+    }, &.{ quiet, other });
+}
+
+test "coverage reaches a body above the one the site sits in, and a nested body is no body of this rule's" {
+    const allocator = std.testing.allocator;
+    // the duplicated expression sits inside `inner`, a body both files declare under ONE name,
+    // so the accepted body rule owns those two rows and the sibling computation rule stays
+    // quiet. the OUTER bodies are the renamed pair's, and the detector's own walk from the
+    // outer body descends through the nested declaration to the expression, which is what marks
+    // them covered: a walk that stopped at the innermost body would report the pair as well
+    const inner_here = try duplicateBodyRow(allocator, "src/db/nested.repo.ts", 2, "inner");
+    defer allocator.free(inner_here);
+    const inner_there = try duplicateBodyRow(allocator, "src/db/outer.repo.ts", 2, "inner");
+    defer allocator.free(inner_there);
+
+    try probe.expectProject(.resilience, &.{
+        .{ .path = "src/db/nested.repo.ts", .content =
+        \\export const outerOne = (amount: number, rate: number): number => {
+        \\  const inner = (value: number): number => {
+        \\    return Math.round(value * rate);
+        \\  };
+        \\  return inner(amount) + 1;
+        \\};
+        \\
+        },
+        .{ .path = "src/db/outer.repo.ts", .content =
+        \\export const outerTwo = (amount: number, rate: number): number => {
+        \\  const inner = (value: number): number => {
+        \\    return Math.round(value * rate);
+        \\  };
+        \\  return inner(amount) + 1;
+        \\};
+        \\
+        },
+    }, &.{ inner_here, inner_there });
 }

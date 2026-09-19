@@ -164,3 +164,15 @@ the pair reports nothing beyond those two rows, and the sites `duplicate-functio
 and `second.ts` hold between them (`Math.round(amount * rate)` and `Math.floor(amount / rate)`,
 both over the gate) report nothing either, because the body they sit in is one the duplicate-body
 rule already owns: that is this fixture's half of the suppression
+
+`renamed-duplicate-body/first.ts` and `second.ts` are the renamed body rule's pair: the two
+bodies are byte-identical while the declarations keep different names, which is exactly what
+the accepted body rule's key cannot see, because that key is the name beside the body. the
+first writes its body on the declaration's own line and the second puts the `{` on the next
+line, so the two rows also pin the collapse and the body's own line as the reported one. the
+pair reports two rows and no other fixture gains one: a pair that keeps one name belongs to the
+accepted rule, and no fixture here holds a renamed copy incidentally
+
+the pair's body deliberately holds no call, construction or template: a renamed pair whose body
+holds one is the coverage the computation rule already claims, and that shape is pinned by the
+rule's own unit test rather than by a fixture whose rows would say two things at once

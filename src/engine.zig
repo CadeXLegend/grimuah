@@ -353,7 +353,7 @@ fn mergeRun(
     var fingerprints: ?rules.FingerprintIndex = null;
     // a cost gate rather than a verdict one, like the collection's: building an index no
     // enabled rule reads changes no row
-    if (rules.needsFingerprints(cfg, hygiene)) fingerprints = try buildFingerprintIndex(allocator, contributions);
+    if (rules.needsFingerprints(cfg, hygiene)) fingerprints = try buildFingerprintIndex(allocator, contributions, rules.needsRenamedBodies(cfg, hygiene));
     defer if (fingerprints) |*built| built.deinit();
 
     for (contributions, 0..) |*contribution, file| {
@@ -647,14 +647,12 @@ fn appendBodyFingerprint(
         .key = key,
         .line = tokens[typemodel.tokenAtOrAfter(tokens, @intCast(start))].line,
         .body = body,
+        // the walk starts at the body itself, so the innermost collected body that is a
+        // STRICT ancestor of this one is what comes back, which is what a nested declaration
+        // needs: a body is not inside itself
+        .enclosing_body = enclosingBodyKey(module, bodies.items, body),
     });
 }
-
-/// a smoke module is out of the computation rule's scope twice over: the detector skips one
-/// when it builds the run's index and again when it produces rows, so excluding it at the
-/// collection covers both, because the sites a file contributes are its own rows and the
-/// run's count alike
-const smoke_module_suffix = ".smoke.ts";
 
 /// every computation expression one file offers to the run's computation index, in the order
 /// the expressions appear, which is the order their rows are reported in
@@ -678,7 +676,10 @@ fn collectComputationSites(
     bodies: []const rules.BodyFingerprint,
     sites: *std.ArrayList(rules.ComputationSite),
 ) !void {
-    if (std.mem.endsWith(u8, rel_path, smoke_module_suffix)) return;
+    // a smoke module is out of scope twice over: the detector skips one when it builds the
+    // run's index and again when it produces rows, so excluding it here covers both, because
+    // the sites a file contributes are its own rows and the run's count alike
+    if (std.mem.endsWith(u8, rel_path, rules.smoke_module_suffix)) return;
     try appendComputationSites(allocator, module, tokens, bodies, module.root, sites);
 }
 
@@ -739,6 +740,7 @@ fn appendComputationSite(
         .key = try allocator.realloc(key, collapsed.len),
         .line = tokens[typemodel.tokenAtOrAfter(tokens, @intCast(start))].line,
         .enclosing_body = enclosingBodyKey(module, bodies, index),
+        .node = index,
     });
 }
 
@@ -765,7 +767,7 @@ fn enclosingBodyKey(module: *const ir.Module, bodies: []const rules.BodyFingerpr
 /// the key is built at its longest possible size and handed back to the allocator at the
 /// length it uses, because a `free` needs the slice the allocation returned
 fn fingerprintKey(allocator: std.mem.Allocator, name: []const u8, raw: []const u8) !?[]u8 {
-    const separator_length = 1;
+    const separator_length = rules.body_key_separator_length;
     const buffer = try allocator.alloc(u8, name.len + separator_length + raw.len);
     errdefer allocator.free(buffer);
 
@@ -1249,7 +1251,7 @@ fn buildConfigValueIndex(
 /// every allocation through the arena happens before the struct literal copies the arena,
 /// because the arena's state is a value: a copy taken mid-literal misses the buffers a
 /// later field allocated, so `deinit` would free only the first
-fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Contribution) !rules.FingerprintIndex {
+fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Contribution, with_renamed_bodies: bool) !rules.FingerprintIndex {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const index_allocator = arena.allocator();
@@ -1265,6 +1267,13 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
     // a family the run did not collect contributes no site, so this walk is over an empty
     // list when the rule is off and needs no gate of its own
     const computation_files = try countComputationFiles(index_allocator, contributions);
+    // this family is gated on its own rule rather than on the collection it reads, because it
+    // groups the bodies by text and copies every group's text: a project that enables only the
+    // sibling body rule never pays for that walk
+    const renamed_bodies: std.StringHashMapUnmanaged(rules.RenamedBody) = if (with_renamed_bodies)
+        try buildRenamedBodyIndex(index_allocator, contributions, computation_files)
+    else
+        .empty;
     return .{
         .arena = arena,
         .body_files = body_files,
@@ -1272,7 +1281,130 @@ fn buildFingerprintIndex(allocator: std.mem.Allocator, contributions: []const Co
         .copy_files = copy_files,
         .config_values = config_values,
         .computation_files = computation_files,
+        .renamed_bodies = renamed_bodies,
     };
+}
+
+/// the run's bodies grouped by their collapsed text alone, with the coverage the sibling
+/// computation rule already holds inside each one
+///
+/// the grouping is the renamed body rule's index: the accepted body rule keys a declaration on
+/// its name beside its body, so a copy whose author renamed the declaration reports nothing
+/// there, and a body the run declares under two names in two files is this rule's case
+///
+/// a `.smoke.ts` contributes nothing, because its detector skips one at both ends: it is out of
+/// the run's grouping and out of its own rows, while the sibling body rule reads it like any
+/// other file, which is why the exclusion is here rather than in the collection the two share
+fn buildRenamedBodyIndex(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+    computation_files: std.StringHashMapUnmanaged(rules.FingerprintFiles),
+) !std.StringHashMapUnmanaged(rules.RenamedBody) {
+    var groups: std.StringHashMapUnmanaged(rules.RenamedBody) = .empty;
+    for (contributions, 0..) |contribution, file| {
+        if (std.mem.endsWith(u8, contribution.path, rules.smoke_module_suffix)) continue;
+        const current: u32 = @intCast(file);
+        for (contribution.project.body_fingerprints.items) |fingerprint| {
+            const text = fingerprint.bodyText();
+            const entry = try groups.getOrPut(allocator, text);
+            if (!entry.found_existing) {
+                // the map keeps its own copy, because the merge frees a file's fingerprints
+                // once its rows are reported while a group answers for every file after it
+                entry.key_ptr.* = try allocator.dupe(u8, text);
+                entry.value_ptr.* = .{};
+            }
+            const group = entry.value_ptr;
+            // the count is of files rather than declarations, which is the detector's own
+            // test, so a file that writes the same body twice counts once
+            if (group.files.last_file != current) {
+                group.files.last_file = current;
+                group.files.files += 1;
+                if (group.first_file == null) {
+                    group.first_file = try allocator.dupe(u8, contribution.path);
+                } else if (group.second_file == null) {
+                    group.second_file = try allocator.dupe(u8, contribution.path);
+                }
+            }
+            group.sites += 1;
+            try appendDistinctName(allocator, &group.names, fingerprint.name);
+        }
+    }
+    try markCoveredBodies(allocator, contributions, computation_files, &groups);
+    return groups;
+}
+
+/// `names` with `name` appended unless it is already there
+/// the detector holds the names in a set, so two declarations of one name are one name, and
+/// the count of distinct names is what tells a renamed copy from a repeat of the same helper
+fn appendDistinctName(
+    allocator: std.mem.Allocator,
+    names: *std.ArrayListUnmanaged([]const u8),
+    name: []const u8,
+) !void {
+    for (names.items) |known| {
+        if (std.mem.eql(u8, known, name)) return;
+    }
+    try names.append(allocator, try allocator.dupe(u8, name));
+}
+
+/// whether the sibling computation rule already reports a defect inside each renamed body
+///
+/// the detector walks the first copy's body and asks whether a computation it holds is written
+/// in two files. that is the same question read backwards: a site is inside every body that
+/// encloses it, so the innermost collected body around a site is marked, and so is each body
+/// above it, because the detector's walk descends through a nested declaration to the site
+/// inside it. the walk also BEGINS at the body itself, so a site that is the body, which is
+/// what an arrow's expression body is, marks its own body's text
+///
+/// the marks are keyed by body text, which is what a renamed group is keyed by, and every map
+/// here holds views into the run's own contributions, which stay alive for the whole index
+/// build
+fn markCoveredBodies(
+    allocator: std.mem.Allocator,
+    contributions: []const Contribution,
+    computation_files: std.StringHashMapUnmanaged(rules.FingerprintFiles),
+    groups: *std.StringHashMapUnmanaged(rules.RenamedBody),
+) !void {
+    // the text of every body key, and the key of the body that encloses each one
+    var body_text: std.StringHashMapUnmanaged([]const u8) = .empty;
+    var enclosing_body: std.StringHashMapUnmanaged([]const u8) = .empty;
+    for (contributions) |contribution| {
+        if (std.mem.endsWith(u8, contribution.path, rules.smoke_module_suffix)) continue;
+        for (contribution.project.body_fingerprints.items) |fingerprint| {
+            try body_text.put(allocator, fingerprint.key, fingerprint.bodyText());
+            if (fingerprint.enclosing_body) |enclosing| {
+                try enclosing_body.put(allocator, fingerprint.key, enclosing);
+            }
+        }
+    }
+
+    var covered: std.StringHashMapUnmanaged(void) = .empty;
+    for (contributions) |contribution| {
+        if (std.mem.endsWith(u8, contribution.path, rules.smoke_module_suffix)) continue;
+        // the bodies of THIS file keyed by the node each one is, because a node is the file's
+        // own and two files number the same shape differently
+        var body_of_node: std.AutoHashMapUnmanaged(ir.NodeIndex, []const u8) = .empty;
+        defer body_of_node.deinit(allocator);
+        for (contribution.project.body_fingerprints.items) |fingerprint| {
+            try body_of_node.put(allocator, fingerprint.body, fingerprint.bodyText());
+        }
+
+        for (contribution.project.computation_sites.items) |site| {
+            const owners = computation_files.get(site.key) orelse continue;
+            if (owners.files < rules.minimum_duplicate_files) continue;
+            if (body_of_node.get(site.node)) |text| try covered.put(allocator, text, {});
+            var current = site.enclosing_body;
+            while (current) |key| : (current = enclosing_body.get(key)) {
+                const text = body_text.get(key) orelse break;
+                try covered.put(allocator, text, {});
+            }
+        }
+    }
+
+    var iterator = groups.iterator();
+    while (iterator.next()) |entry| {
+        entry.value_ptr.covered = covered.contains(entry.key_ptr.*);
+    }
 }
 
 /// every declaration this file exports that a rule can judge by where it lives

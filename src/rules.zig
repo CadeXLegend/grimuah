@@ -283,6 +283,12 @@ pub const IndexVerdict = *const fn (
     findings: *std.ArrayList(Finding),
 ) std.mem.Allocator.Error!void;
 
+/// the one byte `BodyFingerprint.key` puts between the declared name and the collapsed body
+/// text, which is a byte a name cannot hold
+/// both ends of that layout read it: the engine builds the key, and a rule that groups bodies by
+/// their text alone takes the name back off it
+pub const body_key_separator_length: usize = 1;
+
 /// one function body a file offers to the run's fingerprint index
 pub const BodyFingerprint = struct {
     /// the declared name, which is the row's subject
@@ -302,6 +308,20 @@ pub const BodyFingerprint = struct {
     /// inside this body walks against: the key is text, and the tree is gone by the time a
     /// verdict runs
     body: ir.NodeIndex,
+    /// the `key` of the innermost other body of the same file that contains this one, or
+    /// null when no collected body encloses it
+    /// it is a view into the same file's own list, and it is what carries a renamed body's
+    /// coverage up through the bodies that enclose it: a body nested inside another one is
+    /// judged by the outer body's text as well, which is what the detector's own walk of the
+    /// first copy's body finds when it descends into a nested declaration
+    enclosing_body: ?[]const u8 = null,
+
+    /// the collapsed body text alone, which is `key` without the name and its separator
+    /// it is the renamed body rule's own key: a copy whose author changed the declaration's
+    /// name keeps this text and loses the name the sibling body rule keys on
+    pub fn bodyText(self: BodyFingerprint) []const u8 {
+        return self.key[self.name.len + body_key_separator_length ..];
+    }
 };
 
 /// how many distinct files of the run hold one fingerprint, and which file was counted last
@@ -352,6 +372,37 @@ pub const ComputationSite = struct {
     /// reads it, and it is what keeps this rule quiet where the sibling duplicate-body rule
     /// already reports the same line
     enclosing_body: ?[]const u8 = null,
+    /// the node the expression is
+    /// the key is text and the tree is gone by the time a verdict runs, and this is what tells
+    /// a site that IS a body from a site inside one: an arrow's expression body is the
+    /// expression itself, so `body` and the site are one node, which is a body no ancestor
+    /// walk from the site can reach
+    node: ir.NodeIndex,
+};
+
+/// one body text the run declares under more than one name, which is the blind spot of the
+/// accepted body rule: that rule keys a declaration on its name beside its body, so a copy
+/// whose author renamed the declaration is a different key and reports nothing there
+pub const RenamedBody = struct {
+    /// the distinct files that declare this body, which is the detector's own count of files
+    /// rather than of declarations
+    files: FingerprintFiles = .{},
+    /// how many declarations write it, which is the detector's own site count and what the
+    /// row's "declared {d} times" reads
+    sites: u32 = 0,
+    /// the first two distinct files that declare this body, in the order the run meets them
+    /// the row names the first file other than the one it reports in, so the pair is kept
+    /// rather than derived from a count: the file a report happens in can be the first one
+    first_file: ?[]const u8 = null,
+    second_file: ?[]const u8 = null,
+    /// the distinct names the body is declared under, in the order the run meets them
+    /// they are the index's own copies, because the merge frees a file's fingerprints as soon
+    /// as its rows are reported while this group answers for every file after it
+    names: std.ArrayListUnmanaged([]const u8) = .empty,
+    /// whether the sibling computation rule already owns a defect inside this body, which is
+    /// the detector's own suppression: two rules reporting one defect at one line is one
+    /// finding too many, and the row that survives names the expression that actually moves
+    covered: bool = false,
 };
 
 /// one string value an enum of a `.config.ts` file declares
@@ -420,6 +471,11 @@ pub const FingerprintIndex = struct {
     /// this family reads the same `FingerprintFiles` shape the body family does: one file
     /// that writes the same expression twice holds one copy of the defect
     computation_files: std.StringHashMapUnmanaged(FingerprintFiles) = .empty,
+    /// the bodies the run declares under more than one name, keyed by the collapsed body text
+    /// alone
+    /// the text is the key rather than `name|body`, because a renamed copy is exactly the
+    /// case the name is not part of
+    renamed_bodies: std.StringHashMapUnmanaged(RenamedBody) = .empty,
 
     pub fn deinit(self: *FingerprintIndex) void {
         self.arena.deinit();
@@ -568,6 +624,12 @@ pub const Rule = struct {
     /// one before any verdict
     /// it is a family of its own for the same reason the others are
     needs_computation_sites: bool = false,
+    /// this rule's verdict needs the run's bodies grouped by their text alone, so the merge
+    /// builds that grouping and the coverage test beside it before any verdict
+    /// the bodies themselves come from `needs_body_fingerprints`, which this rule declares as
+    /// well: the grouping is a reading of the same collection rather than a second one, and a
+    /// project that enables only the sibling body rule never pays for it
+    needs_renamed_bodies: bool = false,
     /// the verdict this rule reaches over the run's fingerprints
     /// its table entry must
     /// declare a family flag, or the collection it reads was never made
@@ -627,6 +689,7 @@ pub const duplicated_user_facing_copy = "This sentence is written in three or mo
 pub const repeated_inline_copy = "This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.";
 pub const literal_duplicating_config_value = "This literal duplicates `{s}`, which the surface's own `.config.ts` already declares. Reference the enum member instead.";
 pub const duplicated_computation = "This computation `{s}` is written in {d} other file{s}. Extract it into a shared function both call sites import.";
+pub const renamed_duplicate_body = "`{s}` is a byte-identical body, also declared {d} times across {d} files as {s}, for example {s}. Lift the implementation into one shared declaration and import it from both call sites.";
 
 /// the shortest cooked copy the duplicate-copy rule counts, in UTF-16 code units, which is
 /// what a JavaScript string's own `length` reads. it is the detector's own gate, and the
@@ -644,6 +707,24 @@ pub const minimum_body_length: u32 = 30;
 /// the count is what `Module.descendantsOf` reports, so this constant is the one place the
 /// rule and the counter have to agree
 pub const minimum_computation_nodes: u32 = 7;
+
+/// the fewest distinct files that must hold one fingerprint for a duplicate to be a defect
+/// it is every detector's own `files.size >= 2` test, and the two places that read it here are
+/// the renamed body rule's verdict and the coverage test the merge runs against it
+pub const minimum_duplicate_files: u32 = 2;
+
+/// the fewest distinct names one body text must be declared under for the copies to be
+/// renamed ones
+/// the sibling body rule owns a group whose declarations all keep one name, so this gate is
+/// what tells the two rules apart rather than a second opinion on the same defect
+pub const minimum_renamed_body_names: u32 = 2;
+
+/// the suffix of a smoke module
+/// it is out of scope to both rules whose detector skips one: the computation rule excludes
+/// it once, at collection, because its sites serve the run's index and its own rows alike,
+/// while the renamed body rule excludes it at both ends, because the bodies it groups are the
+/// ones the sibling body rule reads, and that rule reads a smoke module like any other
+pub const smoke_module_suffix = ".smoke.ts";
 
 /// the hygiene layer. the wording is biome's own, so a project that ran the
 /// biome step before reads the same message from the native engine
@@ -1046,6 +1127,17 @@ pub const all = [_]Rule{
         .resolve_fingerprints = resilience.checkDuplicatedComputation,
     },
     .{
+        .name = "renamed-duplicate-body",
+        .layer = .resilience,
+        .severity = .warn,
+        .message = renamed_duplicate_body,
+        .syntax = .ir,
+        .oracle = false,
+        .needs_body_fingerprints = true,
+        .needs_renamed_bodies = true,
+        .resolve_fingerprints = resilience.checkRenamedDuplicateBody,
+    },
+    .{
         .name = "unused-import",
         .layer = .hygiene,
         .severity = .warn,
@@ -1204,11 +1296,25 @@ pub fn needsComputationSites(cfg: *const config.Config, with_hygiene: bool) bool
     return false;
 }
 
+/// whether an enabled rule needs the run's bodies grouped by their text alone, so the merge
+/// knows whether to build that grouping
+/// it is separate from `needsBodyFingerprints` because the two are different readings of one
+/// collection: the grouping copies the body text of every declaration, and a project that
+/// enables only the sibling body rule never pays for that walk
+pub fn needsRenamedBodies(cfg: *const config.Config, with_hygiene: bool) bool {
+    for (&all, 0..) |*rule, rule_index| {
+        if (!rule.needs_renamed_bodies) continue;
+        if (rule.layer == .hygiene and !with_hygiene) continue;
+        if (enabled(cfg, rule_index)) return true;
+    }
+    return false;
+}
+
 /// whether a rule reads a family of the run's fingerprints
 /// the families are ported one at a time, and this is the one place a new one is declared:
 /// a family that is not named here never reaches its verdict
 fn declaresFingerprintFamily(rule: Rule) bool {
-    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values or rule.needs_computation_sites;
+    return rule.needs_body_fingerprints or rule.needs_statement_text or rule.needs_copy_owners or rule.needs_config_values or rule.needs_computation_sites or rule.needs_renamed_bodies;
 }
 
 comptime {

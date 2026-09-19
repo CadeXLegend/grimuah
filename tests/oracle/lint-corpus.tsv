@@ -179,6 +179,8 @@ src/probe/reexport-renamed.ts:1: [resilience] do not proxy re-export; every expo
 src/probe/reexport-star-namespace.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport-star.ts:3: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/reexport.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
+src/probe/renamed-duplicate-body/first.ts:1: [resilience] `isMessageWithId` is a byte-identical body, also declared 2 times across 2 files as isChannelWithId, for example src/probe/renamed-duplicate-body/second.ts. Lift the implementation into one shared declaration and import it from both call sites.
+src/probe/renamed-duplicate-body/second.ts:2: [resilience] `isChannelWithId` is a byte-identical body, also declared 2 times across 2 files as isMessageWithId, for example src/probe/renamed-duplicate-body/first.ts. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/require-enum-in-config-file.repo.ts:18: [structural] `AccountFailureReason` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/require-enum-in-config-file.repo.ts:18: [structural] This enum is a configuration constant declared in an implementation module. Move it to the surface's .config.ts file.
 src/probe/require-enum-over-literal-union.service.ts:12: [structural] `Wave` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
