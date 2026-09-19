@@ -6,11 +6,13 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/CadeXLegend/grimuah/build.yml)](https://github.com/CadeXLegend/grimuah/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah?color=blue)](https://github.com/CadeXLegend/grimuah/releases)
 
-the grimoire for typescript architecture 🤌
+the grimoire for codebase architecture 🤌
 
-summon typescript projects with linter-enforced architecture and dag-driven scaffolding
+summon projects with linter-enforced architecture and dag-driven scaffolding
 
-one ~260kb zig binary, zero runtime dependencies
+one self-contained zig binary, zero runtime dependencies
+
+under a megabyte stripped, no subprocess, no other linter, no plugin directory to keep in step
 
 most projects treat folders as glorified buckets with hidden social contracts
 
@@ -26,22 +28,30 @@ imports flow from deep surfaces to shallow ones, never back
 
 the graph stays acyclic
 
-the rest is scaffolding, lint rules, and a chef's kiss
+the rest is scaffolding, a rule engine, and a chef's kiss
+
+---
+
+## documentation map
+
+| document                           | what it covers                                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [README.md](README.md)             | this page: install, quickstart, presets, commands, and the language story                       |
+| [CONCEPTS.md](CONCEPTS.md)         | identity, surfaces, innate members, the dag, the config file, and the two enforcement tiers     |
+| [RULES.md](RULES.md)               | every rule, grouped by layer, with its severity, plus how to turn a single rule off             |
+| [PHILOSOPHY.md](PHILOSOPHY.md)     | why the rules exist and what the generator optimises for                                        |
 
 ---
 
 ## table of contents
 
 - [quickstart](#quickstart)
+- [languages](#languages)
 - [core principles](#core-principles)
-- [the four rule layers](#the-four-rule-layers)
-- [turning a single rule off](#turning-a-single-rule-off)
-- [identity](#identity)
-- [surfaces](#surfaces)
-- [innate members](#innate-members)
-- [the dag in practice](#the-dag-in-practice)
-- [the enforcement tiers](#the-enforcement-tiers)
-- [presets and commands](#presets-and-commands)
+- [presets](#presets)
+- [commands](#commands)
+- [how a check runs](#how-a-check-runs)
+- [config examples](#config-examples)
 
 ---
 
@@ -51,7 +61,7 @@ the rest is scaffolding, lint rules, and a chef's kiss
 
 grab the prebuilt binary from [releases](https://github.com/CadeXLegend/grimuah/releases), or build from source
 
-```sh
+```
 git clone https://github.com/CadeXLegend/grimuah.git
 cd grimuah
 zig build -p ~/.local
@@ -59,13 +69,24 @@ zig build -p ~/.local
 
 requires zig 0.16
 
+each platform ships two release builds
+
+- **`release-safe`**: optimised for speed with every safety check kept, so a bounds or overflow violation traps instead of reading undefined memory, this is the recommended one, ~858 kb on linux x86_64
+- **`release-small`**: optimised for size with the safety checks removed, so it is ~44% smaller and ~9% slower than `release-safe`, ~478 kb on linux x86_64
+
+both are stripped, so a shipped binary is under a megabyte against the ~6 mb an unstripped one carries
+
+a local `zig build` is a debug build, so it keeps its symbols and full panic stack traces
+
+pass `-Dstrip=false` to a release build to keep both, which is what you want when debugging a release-mode bug
+
 the binary lands in `~/.local/bin/grimuah`
 
 make sure that directory is on your PATH
 
 ### summon a project
 
-```sh
+```
 grimuah summon my-project --preset webapp
 cd my-project
 pnpm install
@@ -78,8 +99,8 @@ pick whichever flavour you like
 `summon` scaffolds:
 
 - the folder structure
-- the architecture config
-- the tsconfig
+- `architecture.config.json` and `architecture.schema.json`
+- the `tsconfig.json`
 - `package.json`
 - `.gitignore`
 - husky pre-commit hooks
@@ -92,613 +113,67 @@ up to six yes or no questions add optional surfaces on top
 
 ### enforce the architecture
 
-```sh
+```
 grimuah check        # the pre-passes plus the rule engine, in one process
+grimuah rules        # every rule name a config can turn off
 grimuah add guard    # new surface, rules regenerate
 grimuah upgrade      # sync to the closest preset
 ```
 
-to enforce the architecture on every commit, add `grimuah check` to the husky pre-commit hook
+`pnpm check` runs `grimuah check` in a scaffolded project
 
-```sh
-# .husky/pre-commit
-pnpm typecheck
-grimuah check
-```
+the scaffolded husky hook runs `pnpm typecheck` and the em-dash guard, so a fresh project commits clean before its architecture rules are tuned
 
 `grimuah check` needs no subprocess and no other linter installed, so it is the only lint step a project needs
 
-other commands are documented in [presets and commands](#presets-and-commands)
+other commands are documented in [commands](#commands)
+
+---
+
+## languages
+
+grimuah is language-agnostic by design
+
+a front-end turns source into a shared intermediate representation, and the rule engine reads only that representation
+
+every rule declares the languages it supports, so a rule with no language-specific syntax runs on any front-end that produces the same tree
+
+TypeScript is the first front-end and the only one shipping today
+
+it reads `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`, so plain JavaScript and JSX ride the same front-end as TypeScript
+
+adding a language means adding a front-end beside `src/lang/ts.zig`, not rewriting the rules
+
+`src/lang/` holds the front-ends, `src/ir.zig` holds the representation they build, and `src/rules/` holds the rules that read it
 
 ---
 
 ## core principles
 
-### everything must justify its existence
+the short version, with the long version in [PHILOSOPHY.md](PHILOSOPHY.md)
 
-no speculative abstractions, no pattern applied before its scale earns it
+**everything must justify its existence**: no speculative abstractions, no pattern applied before its scale earns it
 
-a folder with one file has not earned its place as a surface
+**identity defines the boundary**: a file's suffix tells you the role, the surface's contract tells you the rules, the surface's scope tells you the responsibility
 
-it is a leaf node that belongs at a higher scope
+**co-location is the default, abstraction is the exception**: types, config, tests, and patterns live next to the code that owns them, and lifting to a shared location is a deliberate, gated act
 
-a config option that never changes is not config
-
-it is a hardcoded value with extra indirection
-
-a lint rule that never fires is noise
-
-justification does not mean aggressive deletion
-
-it means awareness
-
-every surface, every file, every abstraction should carry a mental note of why it exists
-
-when the justification is gone, the thing should go with it
-
-### identity defines the boundary
-
-a folder that only groups files by category is a bucket
-
-buckets are managed through hidden social contracts
-
-so instead of buckets, we use identities
-
-identity has three parts
-
-- **naming contract**: a file's suffix must match its folder's name
-- **contractual obligation**: the file must follow its surface's rules
-- **scope of operation**: the file operates within its surface's linguistic boundary
-
-the suffix tells you the role, the contract tells you the rules, the scope tells you the responsibility
-
-without identity, every folder is equally addressable
-
-there is no structural reason one folder should not import from another
-
-with identity, the boundary is declared and enforced
-
-### co-location is the default, abstraction is the exception
-
-types live next to the surface that owns them
-
-config lives next to the code that reads it
-
-tests live next to the code they test
-
-patterns live next to the surface that matches them
-
-lifting to a shared location is a deliberate act, gated by proven need
-
-the shallowest common ancestor rule governs when sharing is warranted
-
-two surfaces that need the same type lift it to their shared parent
-
-they do not lift it to a global namespace
-
-a type in a central `types/` folder is accessible to the entire project, whether it belongs there or not
-
-a type in `services/subscription.types.ts` is accessible only to surfaces with an edge to `services/`
-
-scoping is the default, exposure is earned
-
-### living rules over documentation
-
-architecture that is not enforced is aspirational
-
-a style guide in a wiki decays with every PR
-
-a rule that blocks a violating import before it lands is worth a hundred paragraphs of documentation
-
-this generator encodes architectural rules as static analysis
-
-the import graph is declared in `architecture.config.json`
-
-file naming, suffix conventions, and surface membership are checked by CLI pre-passes
-
-AST-level patterns are enforced by grimuah's own rule engine, in-process
+**living rules over documentation**: a rule that blocks a violating import before it lands beats a style guide that decays with every PR
 
 ---
 
-## the four rule layers
-
-architectural rules are grouped into four layers
-
-each layer targets a distinct class of problem
-
-each layer can be toggled independently in `architecture.config.json`
-
-a project can adopt the layers it needs without committing to all four at once
-
-### cosmetic
-
-surface-level readability and naming consistency
-
-| Rule                                                                               | Why                                                                                                                                                                             |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files must use a suffix declared for their surface                                 | a `.handler.ts` file in `services/` violates the surface's suffix list                                                                                                          |
-| Centralised `config/`, `types/`, or `models/` directories under `src/` are flagged | these group by category instead of by identity                                                                                                                                  |
-| Em-dashes are banned in strings, templates, and comments                           | they serve no structural purpose and create inconsistency across the codebase                                                                                                   |
-
-### structural
-
-graph integrity and surface membership
-
-| Rule                                                                                             | Why                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| The import firewall blocks files from importing from surfaces not in their `allowedImports` list | a component importing directly from a database repository is a structural violation                                                           |
-| Innate members inherit their hosting surface's depth and dagOrder                                | a `.types.ts` file in `components/` cannot be imported by `services/` because it sits deeper in the graph                                      |
-| Surfaces with a single file trigger a warning                                                    | a folder with one file has not earned its place as a surface, the file could be lifted to a higher scope                                      |
-
-this layer is the core of the architecture
-
-without it the graph is aspirational, with it every import is validated against the declared DAG
-
-### resilience
-
-change-proofing patterns that prevent codebase fractures over time
-
-| Pattern                           | Replacement                            | Why                                                                                                                                                          |
-| --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `switch`                          | Dispatch table using `Record` or `Map` | a switch decouples the discriminant from its handler, every new case requires editing an existing block, exhaustiveness becomes a runtime concern            |
-| C-style `for`                     | `map`, `filter`, `reduce`, `for..of`   | every for loop re-implements a generalised operation, a named operator has a clear contract and known semantics                                              |
-| `let`                             | `const`                                | a `let` binding signals mutability without saying what mutates or why, `const` makes the invariant explicit at the declaration site                           |
-| `null`                            | `undefined`                            | `undefined` is the language's native signal for absence, using it aligns with the language's fundamental construction                                        |
-| `as any`                          | Proper types                           | `as any` removes the type system at the call site that needs it most, the unchecked value erases type information for every downstream consumer               |
-| Chained `as unknown as T`         | Single cast                            | two casts first erase all type information, then assert a specific type, bypassing every structural safeguard the compiler provides                           |
-| Proxy re-exports                  | Direct imports                         | a pass-through file creates an indirect dependency, the consumer is coupled to a file that hides the original module behind an indirection                    |
-| `const + as const + keyof typeof` | `enum`                                 | five lines of boilerplate with a self-referential type alias, an enum provides the same with better tooling and no type gymnastics                           |
-| `==`                              | `===`                                  | loose equality coerces both sides, making `0 == ''` and `false == '0'` true, strict equality compares type and value matching the programmer's mental model   |
-
-### behavioural
-
-runtime safety and error handling discipline
-
-| Rule                                 | Why                                                                                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `throw` is banned                    | every fallible operation returns `Outcome`, a discriminated union narrowed on `succeeded`, this makes error handling explicit at every call site                                   |
-| Bare `catch {}`                      | an empty catch swallows every error, including ones the developer did not anticipate, there is no path to observability or recovery                                                        |
-| `catch { $_ }`                       | a discarded parameter does not make the silence acceptable, same structural problem as a bare catch, with the added misdirection of naming the ignored error                               |
-| Input validation at trust boundaries | untrusted input causes most runtime failures in practice, validating at the boundary stops malformed data from reaching deeper layers where the original context is lost                    |
-
----
-
-## turning a single rule off
-
-each layer is a category, and every rule inside one has its own name
-
-a rule runs unless the config names it, so a project that wants `switch` back keeps every other resilience rule
-
-```json
-"layers": {
-  "resilience": true
-},
-"rules": {
-  "switch-statement": false,
-  "max-file-lines": false
-}
-```
-
-the layer is the gate and a rule only narrows it, so a rule named on inside a layer that is off stays off
-
-the `rules` object takes a boolean per rule, `false` turns the rule off and `true` is the default, so a config usually lists only the rules it silences
-
-the hygiene rules have no layer of their own, so `rules` is the only switch they have
-
-`architecture.schema.json` lists every rule name, so an editor autocompletes the key and marks one the table does not have
-
-`grimuah rules` prints the same list in the terminal, grouped by layer with each rule's severity and the sentence it reports, for a finding you are looking at rather than a config you are writing
-
-a name that matches no rule stops the check with the name it could not match, because a typo would otherwise leave the rule it meant to silence running
-
-the surface and edge model is not a rule and carries no per-rule key
-
-the suffix list, the import firewall, the dag order, and the innate member scoping are the declaration a project makes about itself, and their layer is the only switch over them
-
----
-
-## identity
-
-identity describes the structural role a file plays in the codebase
-
-defining identity for a folder means encoding three things
-
-**naming contract**: any file in this set must be named with a suffix matching the folder's name
-
-a service file has `.service.ts`, a component file has `.component.ts`
-
-the suffix tells you the role before you open the file
-
-**contractual obligation**: the file must follow the rules of its surface
-
-a service does not throw errors, it returns `Outcome`
-
-a component does not import from deeper surfaces than its own
-
-these are not recommendations, they are enforced by a static check
-
-**scope of operation**: the file operates within what the surface's name means linguistically
-
-a service orchestrates business logic, a component renders presentation, a guard checks permissions
-
-when the scope is clear, so is responsibility
-
-consider `sync-subscription.service.ts` in `services/`
-
-the suffix tells you it is a service
-
-its contract says it returns outcomes instead of throwing
-
-its scope says it orchestrates subscription logic
-
-it does not render UI, does not write raw database queries, does not define its own permission model
-
-three pieces of information available before you read a single line of implementation
-
-a folder with identity stops being a bucket and becomes a boundary
-
-the boundary has rules, everything inside is subject to them
-
----
-
-## surfaces
-
-a folder with identity is a surface
-
-a surface is a boundary with declared rules about what lives inside, who can cross the boundary, and what obligations the citizens carry
-
-think of `src` as a set
-
-each subfolder is a subset at a specific resolution
-
-`services/` is the set of service-citizens, `components/` is the set of component-citizens
-
-the two sets do not share edges by default
-
-a citizen of a surface inherits three things from its hosting surface
-
-**identity**: the citizen must match the surface's naming contract, contractual obligation, and scope
-
-a file cannot call itself a service-citizen if it is named `*.component.ts`
-
-**position**: the citizen sits at the surface's depth in the filesystem and its order in the import DAG
-
-depth controls where the directory lives, dagOrder controls who can import from whom
-
-depth and dagOrder are two distinct parameters because the file tree and the dependency graph are different things
-
-**constraints**: the citizen may only import from surfaces listed in the surface's `allowedImports`
-
-the citizen's own exports flow downstream to surfaces with a higher dagOrder, never upstream
-
-this creates a directed graph where every edge carries a contract
-
-when `services/` exports a type consumed by `components/`, that type defines the shape of data crossing the edge
-
-the consumer depends on the producer
-
-the producer cannot depend on the consumer
-
-here is the default graph
-
-```mermaid
-graph LR
-
-    L[lib/] --> U[utils/]
-
-    L --> S[services/]
-
-    L --> C[components/]
-
-    U --> S
-
-    S --> C
-
-    C --> P[pages/]
-```
-
-each arrow is an allowed import direction
-
-components can import from services, the reverse is a structural violation
-
-surfaces at the same dagOrder level do not see each other unless explicitly configured
-
-the graph is not documentation
-
-it is declared in `architecture.config.json`
-
-`grimuah check` validates every import against it
-
----
-
-## innate members
-
-some file types do not have a natural home in any single surface
-
-a type definition belongs to the surface that owns the data, not to a global `types/` folder
-
-config belongs to the surface that uses it, not to a central `config/` directory
-
-tests belong alongside the code they test, not in a separate `tests/` tree
-
-regex patterns belong to the surface that matches them, not in a shared `regex/` file
-
-the traditional approach creates a folder for each of these
-
-the grimuah approach is different
-
-these file types become citizens of whichever surface needs them
-
-they follow the same naming rules, import constraints, and scope obligations as any other citizen
-
-they provide only the context and nuance required to justify their existence
-
-there are four such types
-
-**`.types.ts`**: type definitions and contracts
-
-when `services/` defines a `SubscriptionStatus` type, it lives in `services/subscription.types.ts`
-
-the type inherits the surface's dagOrder
-
-it cannot be imported by surfaces with a lower dagOrder
-
-**`.config.ts`**: config, constants, and enums
-
-config lives next to its consumer
-
-a config file follows the same import constraints as any other file in its surface
-
-**`.spec.ts`**: tests
-
-tests live alongside the code they test
-
-lifting tests to a central `tests/` directory breaks the co-location principle
-
-**`.regex-patterns.ts`**: documented regular expressions in a single source of truth
-
-every regex is a named constant with a JSDoc comment explaining what it matches
-
-no inline regex littered through the surface's code
-
-innate members inherit their hosting surface's depth and dagOrder
-
-a type defined in `components/` cannot be imported by `services/`
-
-it is not a global type, it is a local contract
-
-the shallowest common ancestor rule governs sharing
-
-if a type is needed by two sibling surfaces, lift it to their shared parent
-
-if `services/` and `components/` both need the same type, it moves to `lib/` or the appropriate utility surface
-
-the type never moves downward
-
-moving a type up is a deliberate act of sharing, not the default position
-
----
-
-## the dag in practice
-
-### depth and dagOrder
-
-two parameters control where a surface sits in the project
-
-**depth** is physical, it describes where the directory lives in the file tree
-
-`lib/` at the project root has depth 0, `src/services/` has depth 1
-
-this is purely filesystem layout
-
-**dagOrder** is logical, it describes where the surface sits in the import DAG
-
-a surface with dagOrder 3 can import from surfaces with dagOrder 0, 1, or 2
-
-it cannot import from dagOrder 4, 5, or 6
-
-depth and dagOrder are independent because the file tree and the dependency graph are different things
-
-multiple surfaces can share the same file depth with different dagOrders
-
-`utils/` and `services/` are both at depth 1
-
-`utils/` has dagOrder 0 and `services/` has dagOrder 1
-
-services can import from utils, utils cannot import from services
-
-the file tree has nothing to do with it
-
-here is the default graph for a webapp preset
-
-```mermaid
-graph LR
-
-    L[lib/\ndepth 0, dagOrder 0] --> U[utils/\ndepth 1, dagOrder 0]
-
-    L --> S[services/\ndepth 1, dagOrder 1]
-
-    L --> C[components/\ndepth 1, dagOrder 2]
-
-    L --> P[pages/\ndepth 1, dagOrder 3]
-
-    U --> S
-
-    S --> C
-
-    C --> P
-```
-
-each arrow is an allowed import direction
-
-surfaces at the same dagOrder do not share an edge unless `allowedImports` explicitly lists it
-
-`utils/` and `services/` are at different dagOrders so the edge runs one way
-
-two surfaces at the same dagOrder would not see each other at all
-
-### allowed imports
-
-the `allowedImports` field on each surface declares which surfaces it may import from
-
-this is the edge table of the graph
-
-```json
-{
-  "name": "services",
-  "path": "src/services",
-  "depth": 1,
-  "dagOrder": 1,
-  "suffixes": [".service.ts"],
-  "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-  "allowedImports": ["utils"]
-}
-```
-
-this declaration says that `services/` may import from `utils/`
-
-any import from `services/` to any other surface is a structural violation
-
-every edge in the DAG is declared here, there is no implicit connectivity between surfaces
-
-### the config file
-
-the full `architecture.config.json` includes surfaces, layers, and an optional rootLib
-
-grimuah generates this file into every scaffolded project, it is not part of this repository
-
-```json
-{
-  "surfaces": [
-    {
-      "name": "utils",
-      "path": "src/utils",
-      "depth": 1,
-      "dagOrder": 0,
-      "suffixes": [".util.ts"],
-      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
-      "allowedImports": []
-    },
-    {
-      "name": "services",
-      "path": "src/services",
-      "depth": 1,
-      "dagOrder": 1,
-      "suffixes": [".service.ts"],
-      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["utils"]
-    },
-    {
-      "name": "components",
-      "path": "src/components",
-      "depth": 1,
-      "dagOrder": 2,
-      "suffixes": [".component.ts"],
-      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
-      "allowedImports": ["utils", "services"]
-    }
-  ],
-  "layers": {
-    "cosmetic": true,
-    "structural": true,
-    "resilience": true,
-    "behavioural": true
-  }
-}
-```
-
-the config is the single source of truth for the architecture
-
-the CLI reads it to validate imports, check naming, and run pre-passes
-
-the [schema](src/architecture.schema.json) validates it at authoring time with editor autocomplete
-
-the same schema runs during every `grimuah check`
-
-there is no second config file, no hidden convention, no documentation that contradicts the graph
-
----
-
-## the enforcement tiers
-
-architectural rules fall into two tiers that compose into a single check run
-
-not all rules can be enforced at the same level
-
-### tier one: grimuah's rule matcher
-
-AST-level rules run inside `grimuah check` itself
-
-these operate on the tokens of the source and detect patterns in the code itself
-
-the resilience and behavioural layers are enforced here
-
-switch statements, c-style for loops, let bindings, null literals, `as any` casts, chained casts, proxy re-exports, const-as-enum patterns, and loose equality are matched structurally
-
-throw statements, bare catches, and silent discards are matched the same way
-
-the rules are enforced by grimuah's engine here, in the same process as the pre-passes
-
-there is nothing to install and nothing to configure: the engine is the binary
-
-this tier used to be a set of GritQL plugin files that biome matched, which cost one full syntax-tree traversal per rule per file whether or not the pattern could match
-
-the plugin files are gone with biome, and `tests/oracle/` holds the findings the biome engine validated while it was still the oracle
-
-one fact from that history explains why grimuah has a rule engine at all: biome 2.5.11 could not compile the em-dash, `let` and `switch` patterns, and discarded them without reporting anything, so no scaffolded project ever had those three enforced by biome
-
-### tier two: CLI pre-passes
-
-file-path-level rules run as CLI pre-passes inside `grimuah check`
-
-these operate on the filesystem and file content rather than the syntax tree
-
-the cosmetic and structural layers rely on this tier for rules that need the filesystem rather than the syntax tree
-
-| Pre-pass                        | What it checks                                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Folder suffix validation        | Every file in a surface directory must use one of the surface's declared suffixes or an innate member suffix |
-| Centralised directory detection | Directories named `config/`, `types/`, or `models/` under `src/` are flagged                                 |
-| Import firewall                 | Every import in every file is resolved to a surface and checked against the surface's `allowedImports` list  |
-| Innate member depth scoping     | A `.types.ts` file in a deeper surface cannot import from or be imported by a shallower surface              |
-| Singleton warnings              | Surfaces containing exactly one file trigger a warning                                                       |
-
-the import firewall pre-pass extracts imports by scanning file content for six import patterns
-
-it handles multi-line imports, dynamic imports, side-effect imports, and backslash-escaped paths
-
-this is a linear scan, not a full parser
-
-it covers the patterns that appear in practice
-
-### how they compose
-
-`grimuah check` runs the CLI pre-passes first, then the rule engine
-
-both must pass for the check to succeed
-
-each tier enforces the rule layers that are enabled in `architecture.config.json`
-
-if structural is disabled, the pre-pass skips the import firewall and singleton checks
-
-if resilience is disabled, the matcher skips the resilience rules
-
----
-
-## presets and commands
-
-### presets
+## presets
 
 five presets ship with the binary
 
 each preset defines a surface configuration for a common project archetype
 
-| Preset  | Surfaces                                            | Root lib |
-| ------- | --------------------------------------------------- | -------- |
-| default | utils, services, components                         | No       |
-| webapp  | lib, utils, services, components, pages             | Yes      |
-| cli     | lib, utils, services, commands                      | Yes      |
-| backend | lib, db, middleware, services                       | Yes      |
+| Preset  | Surfaces                                                             | Root lib |
+| ------- | -------------------------------------------------------------------- | -------- |
+| default | utils, services, components                                          | No       |
+| webapp  | lib, utils, services, components, pages                              | Yes      |
+| cli     | lib, utils, services, commands                                       | Yes      |
+| backend | lib, db, middleware, services                                        | Yes      |
 | bot     | lib, db, services, middleware, components, commands, tasks, handlers | Yes      |
 
 no `--preset` flag uses the default preset
@@ -711,13 +186,15 @@ each question is skipped when the surface is already present in the preset
 
 adding lib shifts it to depth 0 and shifts existing surfaces down
 
-adding middleware inserts it between services and components in the DAG order
+adding middleware inserts it between services and components in the dag order
 
-### commands
+---
+
+## commands
 
 **`init [name] [--preset <name>]`** (alias `summon`)
 
-scaffolds a new project: folder structure, architecture config, tsconfig, `package.json`, `.gitignore`, and husky pre-commit hooks
+scaffolds a new project: folder structure, architecture config and schema, tsconfig, `package.json`, `.gitignore`, and husky pre-commit hooks
 
 interactive refinement asks only about surfaces not already in the chosen preset
 
@@ -725,13 +202,21 @@ templates produce output that needs no reformatting
 
 **`check`**
 
-runs CLI pre-passes for cosmetic and structural rules, then the rule engine for resilience and behavioural rules
+runs the CLI pre-passes for the cosmetic and structural rules, then the rule engine for the rest
 
-both tiers must pass for a zero exit code
+both tiers run in one process and both must pass for a zero exit code
+
+an error-severity finding fails the run, a warning-severity finding is reported without failing it
 
 pre-passes can be skipped by disabling the corresponding layer in the config
 
-**`add <surface-name>`**
+**`rules`**
+
+prints every rule the engine can report, grouped by layer, with its name, severity, and the sentence a run prints
+
+the names are the keys `architecture.config.json` turns a rule off with
+
+**`add <surface-name> [--path <dir>]`**
 
 creates a new surface directory with an example file and updates `architecture.config.json`
 
@@ -759,6 +244,131 @@ detects the closest matching preset
 
 adds any preset surfaces not already in the current config
 
-preserves user modifications, including layer toggles and custom surfaces
+preserves user modifications, including layer toggles, rule toggles, and custom surfaces
 
 reports when the config is already up to date
+
+---
+
+## how a check runs
+
+`grimuah check` reads `architecture.config.json`, then runs two tiers in the same process
+
+the CLI pre-passes handle file-path and file-content rules on a worker thread
+
+the rule engine handles token-level and tree-level rules on the remaining cores
+
+neither tier spawns a subprocess, and neither needs a linter installed
+
+findings print in `path:line: [layer] message` form, errors fail the run, and warnings are reported without failing it
+
+[CONCEPTS.md](CONCEPTS.md#the-enforcement-tiers) describes what each tier enforces, and [RULES.md](RULES.md) lists every rule
+
+---
+
+## config examples
+
+every layer is `true` and every rule is on by default
+
+`grimuah init` writes a config with all four layers enabled and no `rules` block at all, because a rule the `rules` object omits keeps running
+
+so the config a fresh project gets needs no rule keys to run all 51 rules
+
+### every layer on
+
+this is the config the default preset scaffolds
+
+```
+{
+  "sourceRoots": ["src"],
+  "surfaces": [
+    {
+      "name": "utils",
+      "path": "src/utils",
+      "depth": 1,
+      "dagOrder": 0,
+      "suffixes": [".util.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts", ".regex-patterns.ts"],
+      "allowedImports": []
+    },
+    {
+      "name": "services",
+      "path": "src/services",
+      "depth": 1,
+      "dagOrder": 1,
+      "suffixes": [".service.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": []
+    },
+    {
+      "name": "components",
+      "path": "src/components",
+      "depth": 1,
+      "dagOrder": 2,
+      "suffixes": [".component.ts"],
+      "innateMembers": [".types.ts", ".config.ts", ".spec.ts"],
+      "allowedImports": []
+    }
+  ],
+  "layers": {
+    "cosmetic": true,
+    "structural": true,
+    "resilience": true,
+    "behavioural": true
+  }
+}
+```
+
+### some rules off
+
+the `rules` object turns a single rule off by name, and the layer it belongs to stays on
+
+add it beside `layers`, keeping every surface entry as it is
+
+```
+"layers": {
+  "cosmetic": true,
+  "structural": true,
+  "resilience": true,
+  "behavioural": true
+},
+"rules": {
+  "switch-statement": false,
+  "max-file-lines": false,
+  "nested-ternary": false
+}
+```
+
+this project keeps every other rule, so it still gets `null-literal`, `throw-statement`, and the rest of the resilience layer
+
+[`grimuah rules`](#commands) prints the name every rule is switched with
+
+### a whole layer off
+
+a layer is the gate and a rule only narrows it
+
+turning a layer off silences every rule inside it, and a rule named `true` inside a disabled layer stays off
+
+```
+"layers": {
+  "cosmetic": true,
+  "structural": true,
+  "resilience": true,
+  "behavioural": false
+},
+"rules": {
+  "throw-statement": true
+}
+```
+
+the `throw-statement` rule stays off here, because `behavioural` is `false` and the layer is the outer switch
+
+set the layer back to `true` to turn it on, the schema requires all four layer keys
+
+the hygiene layer has no key at all, so it runs whenever the engine runs and `rules` is the only switch over its rules
+
+---
+
+## license
+
+MIT, see [LICENSE](LICENSE)
