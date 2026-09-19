@@ -10,21 +10,29 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: grimuah-linux-x86_64
-          - os: macos-latest
-            artifact: grimuah-macos-arm64
-    runs-on: ${{ matrix.os }}
+        platform:
+          - { os: ubuntu-latest, name: linux-x86_64 }
+          - { os: macos-latest, name: macos-arm64 }
+        build:
+          - { optimize: ReleaseSafe, suffix: release-safe }
+          - { optimize: ReleaseSmall, suffix: release-small }
+    runs-on: ${{ matrix.platform.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
-      - run: zig build -Doptimize=ReleaseSafe
+        with:
+          version: 0.16.0
+      - name: build
+        run: |
+          zig build -Doptimize=${{ matrix.build.optimize }}
+          mkdir -p dist
+          cp zig-out/bin/grimuah "dist/grimuah-${{ matrix.platform.name }}-${{ matrix.build.suffix }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: zig-out/bin/grimuah
+          name: grimuah-${{ matrix.platform.name }}-${{ matrix.build.suffix }}
+          path: dist/*
 
   release:
     needs: build
@@ -33,9 +41,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - run: sha256sum artifacts/*/grimuah > checksums.txt
+          merge-multiple: true
+      - run: sha256sum artifacts/* > checksums.txt
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            artifacts/*/grimuah
+            artifacts/*
             checksums.txt
