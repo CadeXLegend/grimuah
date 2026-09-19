@@ -1,6 +1,6 @@
 # concepts
 
-the mental model behind a grimuah project
+the mental model behind the grimuah project
 
 [README.md](README.md) has the install and the command reference, [RULES.md](RULES.md) has the rule table, and [PHILOSOPHY.md](PHILOSOPHY.md) has the why
 

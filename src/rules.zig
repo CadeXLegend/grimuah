@@ -655,7 +655,7 @@ pub const throw_stmt = "do not use throw; all errors must flow through Operation
 pub const bare_catch = "do not use bare catch with silent failure; log the error or return an Outcome";
 pub const silent_catch = "catch block must handle or log the error, not silently discard it";
 
-/// the rules added from the rule research (`docs/rule-candidates/catalogue.md`).
+/// the rules added from the rule research (`git show 4a390e5:docs/rule-candidates/catalogue.md`).
 /// they are user-facing sentences, so they carry the capital and the full stop
 /// the shipped messages predate
 pub const max_nesting_depth = "This block is nested {d} levels deep. Return early or extract a helper.";
