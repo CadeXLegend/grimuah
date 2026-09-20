@@ -216,6 +216,18 @@ prints every rule the engine can report, grouped by layer, with its name, severi
 
 the names are the keys `architecture.config.json` turns a rule off with
 
+**`skills list`**
+
+prints every agent skill the binary carries, with the sentence an agent matches on
+
+**`skills install [name...] [--path <dir>] [--force]`**
+
+writes each named skill, or all of them, to `<dir>/<name>/SKILL.md`
+
+`<dir>` defaults to `.agents/skills`, and an existing file is kept unless `--force` is passed
+
+the skills are embedded in the binary, so an upgrade hands over the version it shipped with and no network is needed
+
 **`add <surface-name> [--path <dir>]`**
 
 creates a new surface directory with an example file and updates `architecture.config.json`

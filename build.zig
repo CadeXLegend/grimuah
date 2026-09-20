@@ -1,5 +1,28 @@
 const std = @import("std");
 
+/// the agent skills the binary carries, as files the root `skills/` tree owns
+///
+/// they are embedded rather than copied into `src/`, so the markdown an agent
+/// receives is the same file a reader of the repository reads, and the shipped
+/// binary hands over the version it was built from
+const embedded_skills = [_]struct { import_name: []const u8, path: []const u8 }{
+    .{ .import_name = "skill-grimuah-setup", .path = "skills/grimuah-setup/SKILL.md" },
+    .{ .import_name = "skill-grimuah-architecture", .path = "skills/grimuah-architecture/SKILL.md" },
+    .{ .import_name = "skill-grimuah-compliance", .path = "skills/grimuah-compliance/SKILL.md" },
+    .{ .import_name = "skill-grimuah-fix-findings", .path = "skills/grimuah-fix-findings/SKILL.md" },
+    .{ .import_name = "skill-grimuah-migrate-existing", .path = "skills/grimuah-migrate-existing/SKILL.md" },
+};
+
+/// make every skill reachable as `@embedFile("<import_name>")` from `module`
+///
+/// they sit outside the module's package path, so the build has to name them
+/// one by one. every module that reads them needs this, the test build included
+fn addEmbeddedSkills(b: *std.Build, module: *std.Build.Module) void {
+    for (embedded_skills) |skill| {
+        module.addAnonymousImport(skill.import_name, .{ .root_source_file = b.path(skill.path) });
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -28,6 +51,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    addEmbeddedSkills(b, exe.root_module);
+
     b.installArtifact(exe);
 
     const tests = b.addTest(.{
@@ -42,6 +67,8 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_tests = b.addRunArtifact(tests);
+
+    addEmbeddedSkills(b, tests.root_module);
 
     const test_step = b.step("test", "run unit tests");
     test_step.dependOn(&run_tests.step);

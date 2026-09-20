@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # e2e: end-to-end test for grimuah (architecture generator)
 # Auto-cleanup via trap
-# 60+ checks across init/check/add/remove/upgrade/layers/oracle
+# 60+ checks across init/check/add/remove/upgrade/layers/skills/oracle
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -243,7 +243,44 @@ listed=$("$GRIMUAH" rules 2>&1 | grep -cE '^  [a-z][a-z-]+ +[a-z]+ +')
 schema_rows=$(jq '.properties.rules.properties | length' "$SCRIPT_DIR/src/architecture.schema.json")
 test "$listed" -eq "$schema_rows" && ok "rules: lists all $listed rules" || fail "rules: listed $listed of $schema_rows rows"
 
-# ── 28. frozen oracle ──
+# ── 28. skills ──
+# the skills are embedded in the binary, so what it hands over has to be the file
+# the repository carries. the count comes off the tree rather than a number, so a
+# skill added to skills/ and not embedded fails here
+cd "$TMPDIR"
+shipped=$(find "$SCRIPT_DIR/skills" -mindepth 2 -name SKILL.md | wc -l | tr -d ' ')
+listed=$("$GRIMUAH" skills list 2>&1 | grep -cE '^  grimuah-[a-z-]+$' || true)
+test "$listed" -eq "$shipped" && ok "skills: lists all $shipped skills" || fail "skills: listed $listed of $shipped"
+
+unlisted=0
+for skill_dir in "$SCRIPT_DIR"/skills/*/; do
+  skill_name=$(basename "$skill_dir")
+  "$GRIMUAH" skills list 2>&1 | grep -q "^  $skill_name$" || unlisted=1
+done
+test "$unlisted" -eq 0 && ok "skills: every folder is listed" || fail "skills: a folder is missing from the listing"
+
+"$GRIMUAH" skills install >/dev/null 2>&1 || true
+test "$(find "$TMPDIR/.agents/skills" -name SKILL.md | wc -l | tr -d ' ')" -eq "$shipped" && ok "skills install: writes every skill" || fail "skills install: wrong file count"
+
+identical=0
+for skill_dir in "$SCRIPT_DIR"/skills/*/; do
+  skill_name=$(basename "$skill_dir")
+  cmp -s "$skill_dir/SKILL.md" "$TMPDIR/.agents/skills/$skill_name/SKILL.md" || identical=1
+done
+test "$identical" -eq 0 && ok "skills install: byte-identical to the tree" || fail "skills install: content differs from the tree"
+
+"$GRIMUAH" skills install 2>&1 | grep -q "skipped" && ok "skills install: keeps an existing file" || fail "skills install: overwrote without --force"
+printf 'hand edited\n' > "$TMPDIR/.agents/skills/grimuah-setup/SKILL.md"
+"$GRIMUAH" skills install >/dev/null 2>&1 || true
+grep -q "hand edited" "$TMPDIR/.agents/skills/grimuah-setup/SKILL.md" && ok "skills install: kept the hand edit" || fail "skills install: lost the hand edit"
+"$GRIMUAH" skills install --force >/dev/null 2>&1 || true
+cmp -s "$SCRIPT_DIR/skills/grimuah-setup/SKILL.md" "$TMPDIR/.agents/skills/grimuah-setup/SKILL.md" && ok "skills install --force: rewrote the edit" || fail "skills install --force: left the edit"
+
+"$GRIMUAH" skills install grimuah-setup --path vendor/skills >/dev/null 2>&1 || true
+test -f "$TMPDIR/vendor/skills/grimuah-setup/SKILL.md" && ok "skills install --path: honoured" || fail "skills install --path: ignored"
+if "$GRIMUAH" skills install no-such-skill >/dev/null 2>&1; then fail "skills install: unknown name accepted"; else ok "skills install: unknown name fails"; fi
+
+# ── 29. frozen oracle ──
 oracle_log="$TMPDIR/oracle.log"
 if bash "$SCRIPT_DIR/tests/oracle/check.sh" >"$oracle_log" 2>&1; then
   ok "frozen oracle: corpus findings unchanged"

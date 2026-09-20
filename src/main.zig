@@ -5,6 +5,8 @@ const addCmd = @import("commands/add.zig");
 const removeCmd = @import("commands/remove.zig");
 const upgradeCmd = @import("commands/upgrade.zig");
 const rulesCmd = @import("commands/rules.zig");
+const skillsCmd = @import("commands/skills.zig");
+const skills = @import("skills.zig");
 
 /// no per-thread alternate signal stack
 ///
@@ -39,6 +41,8 @@ test {
     _ = @import("commands/init.zig");
     _ = @import("commands/remove.zig");
     _ = @import("commands/rules.zig");
+    _ = @import("commands/skills.zig");
+    _ = @import("skills.zig");
     _ = @import("commands/upgrade.zig");
 }
 
@@ -78,10 +82,75 @@ pub fn main(init: std.process.Init) !void {
         try upgradeCmd.run(allocator, io);
     } else if (std.mem.eql(u8, command, "rules")) {
         rulesCmd.run();
+    } else if (std.mem.eql(u8, command, "skills")) {
+        try runSkills(allocator, io, args);
     } else {
         std.debug.print("unknown command: {s}\n", .{command});
         printUsage();
     }
+}
+
+/// dispatch `grimuah skills list` and `grimuah skills install`
+fn runSkills(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) !void {
+    const subcommand = if (args.len > 2 and !std.mem.startsWith(u8, args[2], "--")) args[2] else null;
+    const chosen = subcommand orelse {
+        printSkillsUsage();
+        return;
+    };
+
+    if (std.mem.eql(u8, chosen, "list")) {
+        skillsCmd.list();
+        return;
+    }
+    if (!std.mem.eql(u8, chosen, "install")) {
+        std.debug.print("unknown skills subcommand: {s}\n", .{chosen});
+        printSkillsUsage();
+        return;
+    }
+
+    var names: std.ArrayList([]const u8) = .empty;
+    try collectSkillNames(allocator, args, &names);
+    try skillsCmd.install(std.Io.Dir.cwd(), io, allocator, names.items, .{
+        .root = parseFlag(args, "--path") orelse skills.default_install_root,
+        .overwrite = hasFlag(args, "--force"),
+    });
+}
+
+/// every argument that names a skill, skipping the subcommand and each flag
+///
+/// `--path` takes a value, so the argument after it is the path and not a name.
+/// `--path=<dir>` carries its own value and is skipped like any other flag
+fn collectSkillNames(allocator: std.mem.Allocator, args: []const [:0]const u8, names: *std.ArrayList([]const u8)) !void {
+    // the program name, `skills` and the subcommand are never skill names
+    const first_candidate: usize = 3;
+    var index: usize = first_candidate;
+    while (index < args.len) : (index += 1) {
+        const argument = args[index];
+        if (std.mem.eql(u8, argument, "--path")) {
+            index += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, argument, "-")) continue;
+        try names.append(allocator, argument);
+    }
+}
+
+fn hasFlag(args: []const [:0]const u8, flag: []const u8) bool {
+    for (args) |argument| {
+        if (std.mem.eql(u8, argument, flag)) return true;
+    }
+    return false;
+}
+
+fn printSkillsUsage() void {
+    std.debug.print(
+        \\usage:
+        \\  grimuah skills list                      every skill this binary carries
+        \\  grimuah skills install [name...] [--path <dir>] [--force]
+        \\
+        \\install writes each skill to <dir>/<name>/SKILL.md
+        \\<dir> defaults to .agents/skills, and an existing file is kept unless --force
+    , .{});
 }
 
 fn parseFlag(args: []const [:0]const u8, flag: []const u8) ?[]const u8 {
@@ -109,11 +178,14 @@ fn printUsage() void {
         \\  grimuah remove <surface>
         \\  grimuah upgrade
         \\  grimuah rules
+        \\  grimuah skills list|install [name...] [--path <dir>] [--force]
         \\
         \\check runs grimuah's architecture rules and its built-in hygiene rules
         \\in-process, with no subprocess and no other linter involved
         \\
         \\rules lists every rule name architecture.config.json can turn off
+        \\
+        \\skills hands the agent skills this binary carries to a project
         \\
         \\presets: default, webapp, cli, backend, bot
         \\
