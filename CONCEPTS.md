@@ -265,7 +265,7 @@ this is where a same-dagOrder grant or a shallow-to-deep grant is written down
 
 this declaration adds no edge of its own, so `services/` may import only from the surfaces the dag already permits
 
-an entry naming a surface at a lower dagOrder is redundant, because the dag already grants it, and the `no-redundant-allowed-import` rule reports it
+an entry naming a surface at a lower dagOrder is redundant, because the dag already grants it, and the `redundant-allowed-import` rule reports it
 
 every extra edge in the dag is declared here, there is no implicit connectivity between surfaces at the same dagOrder
 
@@ -377,7 +377,7 @@ the cosmetic and structural layers rely on this tier for rules that need the fil
 | Folder suffix validation        | Every file in a surface directory must use one of the surface's declared suffixes or an innate member suffix |
 | Centralised directory detection | Directories named `config/`, `types/`, or `models/` under `src/` are flagged                                 |
 | Import firewall                 | Every import in every file is resolved to a surface and checked against the surface's `allowedImports` list  |
-| Innate member depth scoping     | A `.types.ts` file in a deeper surface cannot import from or be imported by a shallower surface              |
+| Innate member depth scoping     | A `.types.ts` or `.config.ts` file may not import from a surface deeper than its own, so a contract never depends on an implementation       |
 | Singleton warnings              | Surfaces containing exactly one file trigger a warning                                                       |
 
 the import firewall pre-pass extracts imports by scanning file content for six import patterns
