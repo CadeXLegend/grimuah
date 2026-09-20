@@ -33,7 +33,7 @@ the largest real-code coverage came from the synthetic bench repos plus a
 `sleepy` overlay, both filtered through biome while biome was the oracle. those
 harnesses went with biome; the committed corpora are what still replay.
 
-the 12 rules ported from the rule research (`git show 4a390e5:docs/rule-candidates/catalogue.md`) have fixtures here
+the 12 rules ported from the rule research (the catalogue at commit `4a390e5`) have fixtures here
 too: `await-in-loop.ts`, `boolean-flag-argument.ts`,
 `config-declares-data-only.config.ts`, `cyclomatic-complexity.ts`,
 `for-of-accumulation.ts`, `if-chain-dispatch.ts`, `lowercase-copy.config.ts`,

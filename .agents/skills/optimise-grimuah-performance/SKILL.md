@@ -18,9 +18,9 @@ Use this skill for performance work on the Zig code of this repository. It cover
 
 Use it also when a change needs a wall-clock claim, and when you must trust a measurement on this machine. Read it before you touch a rule, because the differential guards and the no-false-negative rule live here.
 
-The bench scripts are in `.auto/`, which git ignores on this machine. The scripts do not travel with the repository, but this skill does. On a fresh clone, rebuild the scripts from the protocol in `git show 6d0b617:docs/autoresearch/check-speed-2026-09-11/README.md`, which is the last commit that carries the research tree, before you trust a number. On this machine, restore a lost script with `git show 302384d:.auto/<file>` while that commit is still reachable.
+The bench scripts are in `.auto/`, which git ignores on this machine. The scripts do not travel with the repository, but this skill does. On a fresh clone, rebuild the scripts from the protocol in the check-speed record, which commit 6d0b617 still carries (`git show 6d0b617 --stat` names its files), before you trust a number. On this machine, restore a lost script with `git show 302384d:.auto/<file>` while that commit is still reachable.
 
-Do not use this skill for a correctness-only change that carries no measurement claim. Do not make `check` lint less to shrink `check_ms`. The bench cannot detect that loss, so the metric rewards a check that misses findings. The biome ruleset of a user project belongs to that project, not to this one, and the user declined that lever in `git show 6d0b617:docs/autoresearch/check-speed-2026-09-11/ideas.md`.
+Do not use this skill for a correctness-only change that carries no measurement claim. Do not make `check` lint less to shrink `check_ms`. The bench cannot detect that loss, so the metric rewards a check that misses findings. The biome ruleset of a user project belongs to that project, not to this one, and the user declined that lever in the check-speed record, at commit 6d0b617.
 
 ## Procedure
 1. Build the binary that you will measure. Run `zig build -Doptimize=ReleaseSafe`. Then run `ls -la zig-out/bin/grimuah`. ReleaseSafe is about 5.4 MB. Debug is about 19.7 MB and about 4x slower. `bash test-e2e.sh` leaves a Debug binary in `zig-out/bin`, and every number after it is wrong.
