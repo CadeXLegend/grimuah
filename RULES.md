@@ -63,9 +63,13 @@ surface-level readability and naming consistency
 | -------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `em-dash`                        | error    | strings, templates, and comments carry no em-dashes, use commas, colons, or sentence breaks instead                            |
 | `lowercase-copy`                 | warn     | user-facing copy in a `.config.ts` starts with a capital letter                                                                |
-| `duplicated-user-facing-copy`    | warn     | a sentence written in three or more files lives once in the owning `.config.ts`                                                |
-| `repeated-inline-copy`           | warn     | a sentence written twice in one file is declared once as a named constant                                                      |
+| `duplicated-user-facing-copy`    | warn     | a sentence written in three or more files lives once in the owning `.config.ts`, or as a named constant while that config is not yet earned |
+| `repeated-inline-copy`           | warn     | a sentence written twice in one file is declared once as a named constant, or in the owning `.config.ts` once that config is earned |
 | `literal-duplicating-config-value` | warn   | a literal retyping a value the surface's own `.config.ts` declares references the enum member instead                          |
+
+the two copy rules name the owning `.config.ts` only once the file's own vocabulary earns one, as `enum-placement` does
+
+[CONCEPTS.md](CONCEPTS.md#innate-members) defines what earns it
 
 ---
 
@@ -76,7 +80,7 @@ graph integrity and surface membership
 | Rule                       | Severity | What it enforces                                                                                                                                    |
 | -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `config-behaviour`         | warn     | a `.config.ts` declares data, never a function, so behaviour moves to the surface's own module                                                       |
-| `enum-placement`           | warn     | an exported enum in an implementation module moves to the surface's `.config.ts`                                                                     |
+| `enum-placement`           | warn     | an exported enum in an implementation module moves to the surface's `.config.ts`, once the file's vocabulary earns one                                |
 | `import-cycle`             | error    | two files that import each other are a cycle, because module initialisation order becomes load-bearing                                              |
 | `redundant-allowed-import` | warn     | an `allowedImports` entry the dag already permits is dead configuration and is deleted                                                               |
 | `shared-type-placement`    | warn     | a type an implementation module exports and another directory imports moves to the surface's `.types.ts`                                             |

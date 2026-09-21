@@ -83,9 +83,9 @@ src/probe/d-throw-cond.ts:2: [behavioural] do not use throw; all errors must flo
 src/probe/d-two-as.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
 src/probe/duplicated-computation/first.ts:2: [resilience] This computation `remainder .slice(separatorIndex + 1)` is written in 1 other file. Extract it into a shared function both call sites import.
 src/probe/duplicated-computation/second.ts:2: [resilience] This computation `remainder .slice(separatorIndex + 1)` is written in 1 other file. Extract it into a shared function both call sites import.
-src/probe/duplicated-user-facing-copy/first.ts:6: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
-src/probe/duplicated-user-facing-copy/second.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
-src/probe/duplicated-user-facing-copy/third.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.
+src/probe/duplicated-user-facing-copy/first.ts:6: [cosmetic] This sentence is written in three or more files. Declare it once as a named constant the other files import, or lift it to the shared module when several surfaces need it.
+src/probe/duplicated-user-facing-copy/second.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once as a named constant the other files import, or lift it to the shared module when several surfaces need it.
+src/probe/duplicated-user-facing-copy/third.ts:5: [cosmetic] This sentence is written in three or more files. Declare it once as a named constant the other files import, or lift it to the shared module when several surfaces need it.
 src/probe/duplicate-function-body/first.ts:1: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/duplicate-function-body/second.ts:2: [resilience] `spreadOf` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.
 src/probe/emdash-comment.ts:1: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
@@ -153,8 +153,8 @@ src/probe/no-optional-properties.ts:16: [resilience] This property is optional. 
 src/probe/no-optional-properties.ts:17: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:25: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:30: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
-src/probe/no-repeated-inline-copy.ts:11: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.
-src/probe/no-repeated-inline-copy.ts:7: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.
+src/probe/no-repeated-inline-copy.ts:11: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant and name it at both sites.
+src/probe/no-repeated-inline-copy.ts:7: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant and name it at both sites.
 src/probe/no-unread-scalar-result.ts:28: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.
 src/probe/no-unread-scalar-result.ts:29: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.
 src/probe/no-unread-scalar-result.ts:31: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.

@@ -132,7 +132,9 @@ three-file fixture, and the rule is the reason: it counts DISTINCT FILES rather 
 occurrences, and its threshold is three, so a pair of files reports nothing at all. the
 sentence the three share reports one row per file, at the literal's own line, and the
 second sentence the fixture holds is written into two of the three on purpose, which is
-the exclusion that pair pins
+the exclusion that pair pins. the two entries each file holds sit under the config bar,
+so the rows they pin name a named constant rather than a `.config.ts`, which is where the
+three rules that point at one send a reader once the file's own vocabulary earns it
 
 `no-repeated-inline-copy.ts` is the corpus's only single-file copy fixture, and the
 sentence it holds is written twice inside the one module on purpose: this rule's verdict

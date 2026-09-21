@@ -4,6 +4,7 @@ const config = @import("../config.zig");
 const ir = @import("../ir.zig");
 const ts = @import("../lang/ts.zig");
 const naming = @import("naming.zig");
+const config_weight = @import("config_weight.zig");
 const typemodel = @import("../lang/typemodel.zig");
 
 /// the rules about what a file of a given name is allowed to be
@@ -77,8 +78,15 @@ fn report(module: *const ir.Module, context: *const root.Context, index: ir.Node
 /// only a top-level `export enum` counts. a nested one is not read, and for the
 /// same reason the detector's top-level statement walk leaves it: `declare
 /// module { ... }` parses as one node with no children
+///
+/// the destination is a `.config.ts`, so the rule stays quiet until the file's own
+/// vocabulary earns one: a config built to hold three entries is indirection around
+/// three constants a reader would find faster where they are used, and the row is
+/// work made for nobody. a config the surface already holds is the destination
+/// whatever the file weighs, because that case creates nothing
 pub fn checkEnumPlacement(context: *const root.Context) !void {
     if (!isEnumPlacementModule(context.path)) return;
+    if (!config_weight.earnsConfig(context.tokens, context.source, context.paths, context.path)) return;
     const module = context.module orelse return;
 
     var child = module.firstChildOf(module.root);
@@ -299,6 +307,85 @@ test "an exported enum in an implementation module is reported, and the excluded
         split_reason,
         const_reason,
     });
+}
+
+/// the enum rule's message as `path:line: message`, built from the table's own string so a
+/// wording change is one edit, which is the shape `unconsumedRow` takes too
+fn enumPlacementRow(allocator: std.mem.Allocator, path: []const u8, line: u32) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{d}: {s}", .{ path, line, root.enum_placement });
+}
+
+test "a file whose vocabulary is too small to fill a config keeps its enum inline" {
+    const path = "src/db/accounts.repo.ts";
+    // the export rule reads the file's name and reports the declarations nothing else names,
+    // which is what tells the enum rule's silence from a file the run never read
+    const allocator = std.testing.allocator;
+    const unconsumed_reason = try unconsumedRow(allocator, path, 1, "Reason");
+    defer allocator.free(unconsumed_reason);
+    const unconsumed_heading = try unconsumedRow(allocator, path, 6, "heading");
+    defer allocator.free(unconsumed_heading);
+    const unconsumed_footer = try unconsumedRow(allocator, path, 7, "footer");
+    defer allocator.free(unconsumed_footer);
+    const placement = try enumPlacementRow(allocator, path, 1);
+    defer allocator.free(placement);
+
+    // three entries: an enum of two members and the sentence beside it. a config built to hold
+    // them is one indirection around three constants a reader finds faster where they stand,
+    // which is the case the rule stays quiet about
+    try probe.expectProject(.structural, &.{
+        .{ .path = path, .content =
+        \\export enum Reason {
+        \\  NotFound = "not-found",
+        \\  Gone = "gone",
+        \\}
+        \\
+        \\export const heading = "Nothing is playing.";
+        \\
+        },
+    }, &.{ unconsumed_reason, unconsumed_heading });
+
+    // one more literal is the fourth entry, and the fourth is where a config is worth the file
+    // it costs
+    try probe.expectProject(.structural, &.{
+        .{ .path = path, .content =
+        \\export enum Reason {
+        \\  NotFound = "not-found",
+        \\  Gone = "gone",
+        \\}
+        \\
+        \\export const heading = "Nothing is playing.";
+        \\export const footer = "Nothing else.";
+        \\
+        },
+    }, &.{ placement, unconsumed_reason, unconsumed_heading, unconsumed_footer });
+}
+
+test "a config the surface already holds is the destination whatever the file weighs" {
+    // the same three entries, and the config stands beside the file rather than being created
+    // for it, which is the half of the gate that keeps the rule about placement rather than
+    // about size. the config is empty on purpose: what the gate reads is the sibling's
+    // existence, not what the sibling declares
+    const path = "src/db/accounts.repo.ts";
+    const allocator = std.testing.allocator;
+    const placement = try enumPlacementRow(allocator, path, 1);
+    defer allocator.free(placement);
+    const unconsumed_reason = try unconsumedRow(allocator, path, 1, "Reason");
+    defer allocator.free(unconsumed_reason);
+    const unconsumed_heading = try unconsumedRow(allocator, path, 6, "heading");
+    defer allocator.free(unconsumed_heading);
+
+    try probe.expectProject(.structural, &.{
+        .{ .path = path, .content =
+        \\export enum Reason {
+        \\  NotFound = "not-found",
+        \\  Gone = "gone",
+        \\}
+        \\
+        \\export const heading = "Nothing is playing.";
+        \\
+        },
+        .{ .path = "src/db/accounts.repo.config.ts", .content = "" },
+    }, &.{ placement, unconsumed_reason, unconsumed_heading });
 }
 
 /// the line a whole-surface finding is anchored at. the entry is a fact about the

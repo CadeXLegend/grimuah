@@ -165,6 +165,14 @@ config lives next to its consumer
 
 a config file follows the same import constraints as any other file in its surface
 
+a config also has to earn its file, because three constants under one roof are still three constants
+
+the rules that name a config as the destination ask what the config would hold before they speak: an enum member is one entry, a string literal written outside an enum is one entry, a member's own value is part of the member rather than a second entry, and fewer than four entries is no config at all
+
+a config the surface already holds is the one exception, because adding to that one creates nothing
+
+[RULES.md](RULES.md#structural) lists the three rules that read the count and [PHILOSOPHY.md](PHILOSOPHY.md#everything-must-justify-its-existence) covers the test behind it
+
 **`.spec.ts`**: tests
 
 tests live alongside the code they test

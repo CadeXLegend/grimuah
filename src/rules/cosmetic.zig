@@ -3,6 +3,7 @@ const root = @import("../rules.zig");
 const tokens_mod = @import("tokens.zig");
 const ir = @import("../ir.zig");
 const ts = @import("../lang/ts.zig");
+const config_weight = @import("config_weight.zig");
 
 const Token = tokens_mod.Token;
 
@@ -145,6 +146,15 @@ pub fn checkDuplicatedUserFacingCopy(
 ) std.mem.Allocator.Error!void {
     if (std.mem.endsWith(u8, path, ".d.ts")) return;
 
+    // the row names the surface's `.config.ts` as the place the sentence belongs, and a
+    // config this file would fill with three entries is no place at all. the finding stands
+    // either way, because the sentence is still written out more than once, so the smaller
+    // config only takes the config out of the message
+    const message = if (config_weight.justifiesConfig(project.config_weight, project.config_sibling_exists))
+        rule.message
+    else
+        root.duplicated_user_facing_copy_without_config;
+
     for (project.copy_sites.items) |site| {
         const owners = index.copy_files.get(site.key) orelse continue;
         if (owners.files < duplicate_copy_file_threshold) continue;
@@ -152,7 +162,7 @@ pub fn checkDuplicatedUserFacingCopy(
         try findings.append(allocator, .{
             .path = try allocator.dupe(u8, path),
             .line = site.line,
-            .message = try allocator.dupe(u8, rule.message),
+            .message = try allocator.dupe(u8, message),
             .layer = rule.layer.name(),
             .severity = rule.severity,
         });
@@ -234,6 +244,60 @@ test "a sentence written in three files is reported in each of them, and the sha
     });
 }
 
+test "a sentence three small files share is sent to one named constant rather than to a config" {
+    // one entry in each file and no config beside them: a config built for this sentence is
+    // one indirection around one sentence, so the row stays and the config leaves the message
+    const without_config = root.duplicated_user_facing_copy_without_config;
+    try probe.expectProject(.cosmetic, &.{
+        .{ .path = "src/messages/a.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\
+        },
+        .{ .path = "src/messages/b.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\
+        },
+        .{ .path = "src/messages/c.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\
+        },
+    }, &.{
+        "src/messages/a.service.ts:1: " ++ without_config,
+        "src/messages/b.service.ts:1: " ++ without_config,
+        "src/messages/c.service.ts:1: " ++ without_config,
+    });
+
+    // four entries is where a config earns its own file, and the sentence belongs in it again
+    const with_config = root.duplicated_user_facing_copy;
+    try probe.expectProject(.cosmetic, &.{
+        .{ .path = "src/messages/a.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\export const first = "Ready to play.";
+        \\export const second = "The queue is empty.";
+        \\export const third = "Waiting for a track.";
+        \\
+        },
+        .{ .path = "src/messages/b.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\export const fourth = "Now playing.";
+        \\export const fifth = "Nothing else queued.";
+        \\export const sixth = "Skipping this track.";
+        \\
+        },
+        .{ .path = "src/messages/c.service.ts", .content =
+        \\export const atLimit = "Nothing is playing here.";
+        \\export const seventh = "Paused here.";
+        \\export const eighth = "Resuming now.";
+        \\export const ninth = "Stopped here.";
+        \\
+        },
+    }, &.{
+        "src/messages/a.service.ts:1: " ++ with_config,
+        "src/messages/b.service.ts:1: " ++ with_config,
+        "src/messages/c.service.ts:1: " ++ with_config,
+    });
+}
+
 /// the shortest cooked copy an inline repeat counts, in UTF-16 code units, which is what a
 /// JavaScript string's own `length` reads
 const minimum_inline_copy_length = 8;
@@ -294,7 +358,14 @@ pub fn checkRepeatedInlineCopy(context: *const root.Context) !void {
 
     for (sites.items) |site| {
         if (countOccurrences(sites.items, site.key) < minimum_inline_occurrences) continue;
-        try context.report(site.line, .cosmetic, root.repeated_inline_copy, .warn);
+        // the second half of the message is the owning `.config.ts`, which is where the
+        // sentence belongs once the file's vocabulary earns a config and is a detour while it
+        // does not. the repeat is reported either way
+        const message = if (config_weight.earnsConfig(context.tokens, context.source, context.paths, context.path))
+            root.repeated_inline_copy
+        else
+            root.repeated_inline_copy_without_config;
+        try context.report(site.line, .cosmetic, message, .warn);
     }
 }
 
@@ -413,6 +484,47 @@ test "the two files the detector skips whole are skipped here too" {
     ;
     try probe.expect(.cosmetic, "probe.d.ts", source, &.{});
     try probe.expect(.cosmetic, "probe.config.ts", source, &.{});
+}
+
+test "a repeat is sent to a named constant while the file's own vocabulary is too small for a config" {
+    // the file holds two entries and no `.config.ts` stands beside it, so a config built for
+    // this sentence is one indirection around one sentence. the repeat is reported either way,
+    // which is what the size of the message's second half turns on
+    const source =
+        \\export const atLimit = "Nothing is playing now.";
+        \\export const atLimitAgain = "Nothing is playing now.";
+        \\
+    ;
+    try probe.expect(.cosmetic, "probe.ts", source, &.{
+        "1: " ++ root.repeated_inline_copy_without_config,
+        "2: " ++ root.repeated_inline_copy_without_config,
+    });
+
+    // five literals beside the repeat is a config worth having, which is where the sentence
+    // belongs again
+    const roomy =
+        \\export const atLimit = "Nothing is playing now.";
+        \\export const atLimitAgain = "Nothing is playing now.";
+        \\export const heading = "Now playing.";
+        \\export const footer = "Nothing else.";
+        \\export const empty = "The queue is empty.";
+        \\export const ready = "Ready to play.";
+        \\
+    ;
+    try probe.expect(.cosmetic, "probe.ts", roomy, &.{
+        "1: " ++ root.repeated_inline_copy,
+        "2: " ++ root.repeated_inline_copy,
+    });
+
+    // a config the surface already holds is the destination whatever the file weighs, and the
+    // probe's run holds one, so the smaller source reports the message that names it
+    try probe.expectProject(.cosmetic, &.{
+        .{ .path = "src/messages/a.service.ts", .content = source },
+        .{ .path = "src/messages/a.service.config.ts", .content = "" },
+    }, &.{
+        "src/messages/a.service.ts:1: " ++ root.repeated_inline_copy,
+        "src/messages/a.service.ts:2: " ++ root.repeated_inline_copy,
+    });
 }
 
 /// the surface a consuming file reads its config from, which is its own path minus `.ts`

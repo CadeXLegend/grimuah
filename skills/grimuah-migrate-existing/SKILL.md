@@ -36,7 +36,7 @@ Set the stage in `architecture.config.json` by turning the not-yet-adopted layer
 
 8. Give every surface two or more files as you go, since the singleton rule reports a one-file surface and an empty one. A directory whose single file is real has three honest endings: it gains a second real file, it merges into the surface that consumes it, or it stops being a surface and its file moves somewhere that is.
 
-9. Land stage two file by file, since each banned construct is a local rewrite: `let` to `const` (a module-level mutable cache is the one exception the rule allows), `switch` to a `Record` dispatch table, `for (;;)` to `map`/`filter`/`reduce`/`for..of` where the loop does not accumulate, `null` to `undefined` (keeping `null` only where a third-party boundary returns it), `as any` to the type you mean, and `{ ... } as const` to an enum in the surface's `.config.ts`.
+9. Land stage two file by file, since each banned construct is a local rewrite: `let` to `const` (a module-level mutable cache is the one exception the rule allows), `switch` to a `Record` dispatch table, `for (;;)` to `map`/`filter`/`reduce`/`for..of` where the loop does not accumulate, `null` to `undefined` (keeping `null` only where a third-party boundary returns it), `as any` to the type you mean, and `{ ... } as const` to an enum, in the surface's `.config.ts` once the file's own vocabulary earns one and beside the code while it does not.
 
 10. Land stage three last, because it is the only stage that changes function signatures. Move the shipped `lib/outcome.ts` in as-is, then convert the fallible functions one surface at a time, starting at the deepest surface so the callers can be updated in the same pass.
 

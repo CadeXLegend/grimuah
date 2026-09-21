@@ -31,6 +31,12 @@ a config option that never changes is not config
 
 it is a hardcoded value with extra indirection
 
+a `.config.ts` that would hold three entries is not config either
+
+it is a second file to open for three constants the module already declares, so the rules that point at one stay quiet until it would hold four or more
+
+a config the surface already has is the destination either way, because nothing new is created by adding to it
+
 a lint rule that never fires is noise
 
 justification does not mean aggressive deletion

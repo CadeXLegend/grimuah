@@ -112,6 +112,15 @@ pub fn matchingBracket(tokens: []const Token, open: usize) ?usize {
     return null;
 }
 
+/// the first occurrence of the punctuation `text` at or after `from`
+pub fn nextPunct(tokens: []const Token, from: usize, text: []const u8) ?usize {
+    var index = from;
+    while (index < tokens.len) : (index += 1) {
+        if (tokens[index].isPunct(text)) return index;
+    }
+    return null;
+}
+
 /// `;` between `open` and `close` that is not inside a nested bracket pair
 pub fn countTopLevelSemicolons(tokens: []const Token, open: usize, close: usize) usize {
     var depth: usize = 0;

@@ -27,6 +27,7 @@ test {
     _ = @import("engine.zig");
     _ = @import("rules.zig");
     _ = @import("rules/hygiene.zig");
+    _ = @import("rules/config_weight.zig");
     _ = @import("rules/parity.zig");
     _ = @import("scope.zig");
     _ = @import("ir.zig");

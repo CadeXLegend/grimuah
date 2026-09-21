@@ -528,6 +528,14 @@ pub const Project = struct {
     /// every computation expression this file offers to the run's computation index, in the
     /// order the expressions appear, which is the order the rows are reported in
     computation_sites: std.ArrayList(ComputationSite) = .empty,
+    /// the entries this file would hand to its surface's `.config.ts`: the members of the
+    /// enums it declares and the string literals it writes outside them
+    /// it travels with the copy sites, which is the gate that collects it, because the copy
+    /// rule is its only reader
+    config_weight: u32 = 0,
+    /// whether the run holds this file's own `.config.ts`, which is what makes a config the
+    /// right destination for the file's vocabulary whatever that vocabulary weighs
+    config_sibling_exists: bool = false,
 
     /// free what this file contributed, with the allocator it was built on
     pub fn deinit(self: *Project, allocator: std.mem.Allocator) void {
@@ -687,6 +695,17 @@ pub const duplicated_function_body = "`{s}` has a byte-identical body in another
 pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
 pub const duplicated_user_facing_copy = "This sentence is written in three or more files. Declare it once in the owning surface's `.config.ts` and import it, or lift it to the shared module when several surfaces need it.";
 pub const repeated_inline_copy = "This sentence is written more than once in this file. Declare it once as a module-level constant, or as an entry in the owning `.config.ts`, and name it at both sites.";
+
+/// the two copy rules name the surface's `.config.ts` as the destination, and a config the
+/// file would fill with three entries is no destination at all. these are the messages those
+/// rules carry when the file's own vocabulary does not earn one and the surface holds no
+/// config beside it
+///
+/// the finding itself is unchanged: the sentence is still written more than once, so the row
+/// stays and only the place the reader is sent changes, which is why these repeat the opening
+/// sentence rather than reword it
+pub const duplicated_user_facing_copy_without_config = "This sentence is written in three or more files. Declare it once as a named constant the other files import, or lift it to the shared module when several surfaces need it.";
+pub const repeated_inline_copy_without_config = "This sentence is written more than once in this file. Declare it once as a module-level constant and name it at both sites.";
 pub const literal_duplicating_config_value = "This literal duplicates `{s}`, which the surface's own `.config.ts` already declares. Reference the enum member instead.";
 pub const duplicated_computation = "This computation `{s}` is written in {d} other file{s}. Extract it into a shared function both call sites import.";
 pub const renamed_duplicate_body = "`{s}` is a byte-identical body, also declared {d} times across {d} files as {s}, for example {s}. Lift the implementation into one shared declaration and import it from both call sites.";

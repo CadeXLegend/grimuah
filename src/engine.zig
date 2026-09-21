@@ -8,6 +8,7 @@ const ts = @import("lang/ts.zig");
 const typemodel = @import("lang/typemodel.zig");
 const rules = @import("rules.zig");
 const rule_tokens = @import("rules/tokens.zig");
+const config_weight = @import("rules/config_weight.zig");
 const scope = @import("scope.zig");
 
 /// the lint engine: discovery, the per-file front-end, rule dispatch, findings
@@ -1087,7 +1088,7 @@ fn collectConfigEnumValues(
 
         const name_index = nextWord(tokens, index + 1) orelse continue;
         const enum_name = tokens[name_index].text;
-        const open = nextPunct(tokens, name_index + 1, "{") orelse continue;
+        const open = rule_tokens.nextPunct(tokens, name_index + 1, "{") orelse continue;
         const close = rule_tokens.matchingBracket(tokens, open) orelse continue;
 
         var member_start = open + 1;
@@ -1153,15 +1154,6 @@ fn nextWord(tokens: []const ts.Token, from: usize) ?usize {
     var index = from;
     while (index < tokens.len) : (index += 1) {
         if (tokens[index].kind == .word) return index;
-    }
-    return null;
-}
-
-/// the first occurrence of the punctuation `text` at or after `from`
-fn nextPunct(tokens: []const ts.Token, from: usize, text: []const u8) ?usize {
-    var index = from;
-    while (index < tokens.len) : (index += 1) {
-        if (tokens[index].isPunct(text)) return index;
     }
     return null;
 }
@@ -2013,6 +2005,11 @@ pub fn lintContent(
     // stream's own literal sites, so it needs no parse either
     if (rules.needsCopyOwners(cfg, hygiene)) {
         try collectCopySites(finding_allocator, tokens, content, &contribution.project.copy_sites);
+        // the file's config weight comes with the copy sites, because the copy rule is the one
+        // reader of it and this is the gate that rule already runs under: a second pass of the
+        // token stream for a count nothing else reads would be paid for by every project
+        contribution.project.config_weight = config_weight.entries(tokens, content);
+        contribution.project.config_sibling_exists = config_weight.siblingConfigExists(run_paths, rel_path);
     }
 
     // the config values this file declares and the literals it holds, which the rule about a
