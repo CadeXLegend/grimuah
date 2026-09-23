@@ -28,9 +28,11 @@ jobs:
       # takes its feature set from the machine running it: a runner with
       # avx-512 produced a linux-x86_64 binary carrying %zmm, which dies with
       # SIGILL on every cpu without it, most consumer chips since 2021 and all
-      # of the amd ones. baseline is the feature set the name x86_64 promises,
-      # and a local `zig build` keeps native features because it only ever runs
-      # on the machine that built it
+      # of the amd ones
+      #
+      # baseline is the feature set the name x86_64 promises, and a local
+      # `zig build` keeps native features because it only ever runs on the
+      # machine that built it
       - name: build
         run: |
           zig build -Doptimize=${{ matrix.build.optimize }} -Dcpu=baseline

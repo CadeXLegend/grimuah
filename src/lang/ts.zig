@@ -4018,12 +4018,16 @@ test "parse survives every committed corpus file" {
 
 // parse every source file under the roots listed in `.auto/parse-sweep.txt`,
 // which is how the parser's gaps are found against real projects instead of the
-// committed corpus. run it while migrating a rule onto the IR and read the
-// summary: it reports rather than fails. a root is another project's live
-// checkout, and whatever that tree parses to is evidence about the parser, not
-// a verdict this repo has to answer for. the committed corpus test above is
-// what gates the parser. roots that do not exist on this machine are skipped,
-// so the test is a no-op in a checkout without them
+// committed corpus
+//
+// run it while migrating a rule onto the IR and read the summary: it reports
+// rather than fails, because a root is another project's live checkout and
+// whatever that tree parses to is evidence about the parser rather than a
+// verdict this repo has to answer for
+//
+// the committed corpus test above is what gates the parser, and roots that do
+// not exist on this machine are skipped, so the test is a no-op in a checkout
+// without them
 test "parse sweep over real projects" {
     const a = testing.allocator;
     const io = std.testing.io;
