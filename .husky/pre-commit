@@ -1,7 +1,7 @@
-# zig-aware pre-commit for the grimuah generator repo itself
-# this repo is zig, not typescript, so the pnpm gates from the scaffold template
-# do not apply here; the real gates are the zig build, the unit tests, and the
-# e2e suite that validates the generated projects end to end
+# pre-commit for the grimuah generator repo itself
+# the source is zig, so the pnpm gates a scaffolded project runs do not all apply
+# here: the gates are the zig build, the unit tests, and the e2e suite that
+# validates the generated projects end to end
 #
 # husky runs this file with `sh -e`, so the first failing gate stops the commit
 # RULES.md is kept in step with the rule table here: the counts it states are
@@ -14,3 +14,8 @@ zig build
 zig build test
 bash test-e2e.sh
 bash .husky/check-em-dash.sh
+
+# `src/templates/` is the exception to the zig-only rule, because those files are
+# the TypeScript every scaffolded project is handed: the compiler reads them here
+# rather than only in a project that was generated from them
+pnpm typecheck
