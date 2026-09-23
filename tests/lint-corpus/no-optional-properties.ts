@@ -1,11 +1,11 @@
-// an optional property, in an interface, in a type literal, nested inside
-// another object type, in an `as` assertion's type and inside a `declare module`
-// block, which the reader has to scan for its declarations. the shapes the rule
-// must leave alone sit here too: an optional parameter, an optional class field,
-// which is a property declaration rather than a signature, and an optional
-// method, which is a signature without a property. the corpus is linted with
-// every layer on, so nothing here is a banned construct and every property in a
-// type literal is readonly
+// an optional property and an optional parameter, and the shapes both rules
+// leave alone. a property is a member of an object type: in an interface, in a
+// type literal, nested inside another object type, in an `as` assertion's type
+// and inside a `declare module` block, which the reader has to scan for its
+// declarations. a parameter is optional on a function and on a constructor
+// alike, and the class field at the bottom is a third container, reported by
+// `optional-class-member` because the type model never reads a class body. every
+// layer is on, so nothing else is banned and every type literal member is readonly
 
 export interface MessageDraft {
   readonly channel?: string;

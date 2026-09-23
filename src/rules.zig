@@ -649,7 +649,8 @@ pub const Rule = struct {
 };
 
 pub const em_dash = "do not use em-dashes; use commas, colons, or sentence breaks instead";
-pub const null_literal = "do not use null; use undefined. null only at third-party boundaries (DB, RegExp)";
+pub const null_literal = "do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json";
+pub const undefined_literal = "This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.";
 pub const let_decl = "do not use let; use const. only let at module-level mutable caches";
 pub const switch_stmt = "do not use switch; use a dispatch table (Record/Map) instead";
 pub const imperative_for = "do not use imperative for loops; use map, filter, reduce, or for..of instead";
@@ -681,6 +682,9 @@ pub const config_behaviour = "This .config.ts file declares a function. Move the
 pub const if_chain_dispatch = "These {d} branches dispatch on one subject. Declare a Record or Map from the subject's value to the handler.";
 pub const literal_union_enum = "This union of {d} string literals carries no runtime value. Declare a string enum and use its members as the discriminant.";
 pub const optional_property = "This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.";
+pub const optional_parameter = "This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts.";
+pub const optional_method = "This method is optional. Make it required and implemented on every path, or model the states as a discriminated union.";
+pub const optional_class_member = "This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.";
 pub const readonly_collection_signature = "This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.";
 pub const readonly_type_member = "This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.";
 pub const scalar_failure_return = "This async operation reports its failure as a bare boolean or number, so a caller cannot tell the answer from the error. Return an outcome value that names the failure reason.";
@@ -690,6 +694,7 @@ pub const enum_placement = "This enum is a configuration constant declared in an
 pub const import_cycle = "This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.";
 pub const shared_type_placement = "This type is imported from another directory, so this module's behaviour is coupled to it. Declare it in {s}.types.ts instead.";
 pub const redundant_allowed_import = "Surface '{s}' (dagOrder {d}) grants '{s}' (dagOrder {d}), which the dag already permits. Delete the entry from its allowedImports list.";
+pub const stale_exemption = "The exemption for `{s}` covers `{s}`, which matches no file in this run. Fix the path, or delete the entry.";
 pub const export_without_consumer = "`{s}` is exported but no other module names it. Drop the `export` keyword, or have another module name it.";
 pub const duplicated_function_body = "`{s}` has a byte-identical body in another file. Lift the implementation into one shared declaration and import it from both call sites.";
 pub const duplicated_statement_text = "This statement is written more than once in the run. Declare it once as a module-level constant, or as one exported helper both call sites call.";
@@ -770,6 +775,16 @@ pub const all = [_]Rule{
         .severity = .err,
         .message = null_literal,
         .match = resilience.checkNullLiteral,
+    },
+    .{
+        .name = "undefined-literal",
+        .layer = .resilience,
+        .severity = .err,
+        .message = undefined_literal,
+        .match = resilience.checkUndefinedLiteral,
+        // the token engine in `src/lint.zig` has no twin for this rule, so the
+        // corpus in `tests/oracle/` is what pins it rather than the parity test
+        .oracle = false,
     },
     .{
         .name = "let-declaration",
@@ -986,11 +1001,38 @@ pub const all = [_]Rule{
     .{
         .name = "optional-property",
         .layer = .resilience,
-        .severity = .warn,
+        .severity = .err,
         .message = optional_property,
         .syntax = .ir,
         .oracle = false,
         .match = resilience.checkOptionalProperties,
+    },
+    .{
+        .name = "optional-parameter",
+        .layer = .resilience,
+        .severity = .err,
+        .message = optional_parameter,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkOptionalParameters,
+    },
+    .{
+        .name = "optional-method",
+        .layer = .resilience,
+        .severity = .err,
+        .message = optional_method,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkOptionalMethods,
+    },
+    .{
+        .name = "optional-class-member",
+        .layer = .resilience,
+        .severity = .err,
+        .message = optional_class_member,
+        .syntax = .ir,
+        .oracle = false,
+        .match = resilience.checkOptionalClassMembers,
     },
     .{
         .name = "readonly-collection-signature",
@@ -1065,6 +1107,14 @@ pub const all = [_]Rule{
         .message = redundant_allowed_import,
         .oracle = false,
         .match = structural.checkRedundantAllowedImport,
+    },
+    .{
+        .name = "stale-exemption",
+        .layer = .structural,
+        .severity = .warn,
+        .message = stale_exemption,
+        .oracle = false,
+        .match = structural.checkStaleExemption,
     },
     .{
         .name = "shared-type-placement",
@@ -1383,6 +1433,11 @@ pub fn resolveToggles(cfg: *config.Config) ?[]const u8 {
             cfg.disabledRules.set(rule_index);
         }
     }
+    // an exemption names a rule too, and a name the table does not have carves
+    // nothing out while reading as though it carves something out
+    for (cfg.exemptions) |exemption| {
+        if (ruleIndexNamed(exemption.rule) == null) return exemption.rule;
+    }
     return null;
 }
 
@@ -1405,6 +1460,7 @@ pub fn resolveIndex(
         const verdict = rule.resolve_index orelse continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
         if (!enabled(cfg, rule_index)) continue;
+        if (cfg.exemptedFor(rule.name, path)) continue;
         try verdict(allocator, graph, file, path, rule, findings);
     }
 }
@@ -1426,6 +1482,7 @@ pub fn resolveFingerprints(
         const verdict = rule.resolve_fingerprints orelse continue;
         if (rule.layer == .hygiene and !with_hygiene) continue;
         if (!enabled(cfg, rule_index)) continue;
+        if (cfg.exemptedFor(rule.name, path)) continue;
         try verdict(allocator, index, project, path, rule, findings);
     }
 }
@@ -1463,6 +1520,10 @@ pub fn run(context: *const Context) !void {
         if (rule.layer == .hygiene and !context.hygiene) continue;
         if (!enabled(context.cfg, rule_index)) continue;
         if (rule.syntax == .ir and context.module == null) continue;
+        // a config that carved this rule out of this file has already decided the
+        // rule does not apply here, so the rule does not run at all: a verdict it
+        // never reached is one it cannot report, including a deferred call site
+        if (context.cfg.exemptedFor(rule.name, context.path)) continue;
         const matcher = rule.match orelse continue;
 
         var dispatched = context.*;

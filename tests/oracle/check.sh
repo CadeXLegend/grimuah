@@ -50,6 +50,17 @@ lint_corpus_findings() {
   # missing-directory warning, which is what the pre-pass reports on a surface
   # whose directory is not there
   rm -rf "$project/src/components" "$project/src/services" "$project/src/utils"
+  # the carve-out machinery is part of what the corpus pins: one entry covers a
+  # fixture the oracle would otherwise report, and one names a path no file in the
+  # run has, so the frozen rows carry both the suppression and the report on an
+  # entry that went stale when its file moved
+  jq '.exemptions = [
+        { "rule": "null-literal", "paths": ["src/probe/null-lit.ts"],
+          "reason": "a driver hands back null" },
+        { "rule": "null-literal", "paths": ["src/probe/moved-away.ts"],
+          "reason": "the file this used to name" }
+      ]' "$project/architecture.config.json" >"$project/cfg.json"
+  mv "$project/cfg.json" "$project/architecture.config.json"
   ( cd "$project" && "$BIN" check ) 2>&1 || true
 }
 

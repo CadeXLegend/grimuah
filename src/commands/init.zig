@@ -28,10 +28,9 @@ const tsconfig_template: []const u8 =
     \\    "noPropertyAccessFromIndexSignature": true,
     \\    "noImplicitReturns": true,
     \\    "noFallthroughCasesInSwitch": true,
-    \\    "outDir": "./dist",
-    \\    "rootDir": "./src"
+    \\    "outDir": "./dist"
     \\  },
-    \\  "include": ["src/**/*.ts"],
+    \\  "include": ["src/**/*.ts", "lib/**/*.ts"],
     \\  "exclude": ["node_modules", "dist"]
     \\}
     \\

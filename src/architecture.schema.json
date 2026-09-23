@@ -4,7 +4,10 @@
   "title": "ArchitectureConfig",
   "description": "declarative architecture configuration for grimuah, defines surfaces, edge rules, depth ordering, dag ordering, and rule layer toggles",
   "type": "object",
-  "required": ["surfaces", "layers"],
+  "required": [
+    "surfaces",
+    "layers"
+  ],
   "additionalProperties": false,
   "properties": {
     "sourceRoots": {
@@ -21,7 +24,13 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["name", "path", "depth", "dagOrder", "suffixes"],
+        "required": [
+          "name",
+          "path",
+          "depth",
+          "dagOrder",
+          "suffixes"
+        ],
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -72,7 +81,12 @@
     "layers": {
       "type": "object",
       "description": "independently toggleable rule layers, each controls a category of lint enforcement",
-      "required": ["cosmetic", "structural", "resilience", "behavioural"],
+      "required": [
+        "cosmetic",
+        "structural",
+        "resilience",
+        "behavioural"
+      ],
       "additionalProperties": false,
       "properties": {
         "cosmetic": {
@@ -107,7 +121,12 @@
         "null-literal": {
           "type": "boolean",
           "default": true,
-          "description": "resilience layer: do not use null; use undefined. null only at third-party boundaries (DB, RegExp)"
+          "description": "resilience layer: do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry"
+        },
+        "undefined-literal": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file"
         },
         "let-declaration": {
           "type": "boolean",
@@ -244,6 +263,21 @@
           "default": true,
           "description": "resilience layer: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union."
         },
+        "optional-parameter": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts."
+        },
+        "optional-method": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This method is optional. Make it required and implemented on every path, or model the states as a discriminated union."
+        },
+        "optional-class-member": {
+          "type": "boolean",
+          "default": true,
+          "description": "resilience layer: This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union."
+        },
         "readonly-collection-signature": {
           "type": "boolean",
           "default": true,
@@ -283,6 +317,11 @@
           "type": "boolean",
           "default": true,
           "description": "structural layer: Surface 'name' (dagOrder N) grants 'name' (dagOrder N), which the dag already permits. Delete the entry from its allowedImports list."
+        },
+        "stale-exemption": {
+          "type": "boolean",
+          "default": true,
+          "description": "structural layer: The exemption for `{s}` covers `{s}`, which matches no file in this run. Fix the path, or delete the entry."
         },
         "shared-type-placement": {
           "type": "boolean",
@@ -356,10 +395,44 @@
         }
       }
     },
+    "exemptions": {
+      "type": "array",
+      "default": [],
+      "description": "per-rule carve-outs. an entry silences its rule in the files and directories it names and nowhere else, which is the narrow form of the toggle: a rule whose own message allows a third-party boundary needs the project to say where that boundary is",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule",
+          "paths",
+          "reason"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "description": "a rule name from `grimuah rules`"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "repo-relative files or directories, a directory covers every file under it"
+          },
+          "reason": {
+            "type": "string",
+            "description": "why the carve-out exists"
+          }
+        }
+      }
+    },
     "rootLib": {
       "type": "object",
       "description": "optional root-level lib/ surface at depth 0, shallower than everything in src/",
-      "required": ["enabled", "path"],
+      "required": [
+        "enabled",
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
         "enabled": {

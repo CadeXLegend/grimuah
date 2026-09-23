@@ -442,13 +442,61 @@ fn grantingSurface(cfg: *const config.Config, path: []const u8) ?*const config.S
 /// byte order rather than the locale's: the row has to be the same on any machine,
 /// and the research's runner sorts the same way
 fn isFirstFileOfSurface(context: *const root.Context, surface: *const config.Surface) bool {
+    return isFirstOfRun(context, surface.path);
+}
+
+/// the first file of the run in byte order, or the first one under `prefix` when
+/// the finding belongs to a surface. byte order rather than the locale's: the row
+/// has to be the same on any machine
+fn isFirstOfRun(context: *const root.Context, prefix: ?[]const u8) bool {
     var first: ?[]const u8 = null;
     for (context.paths) |candidate| {
-        if (!config.pathIsWithin(candidate, surface.path)) continue;
+        if (prefix) |dir| {
+            if (!config.pathIsWithin(candidate, dir)) continue;
+        }
         if (first == null or std.mem.lessThan(u8, candidate, first.?)) first = candidate;
     }
     return if (first) |path| std.mem.eql(u8, path, context.path) else false;
 }
+
+/// an exemption that covers no file of the run
+///
+/// a carve-out is a claim about where a boundary sits. a file that moved or was
+/// renamed leaves the claim naming nothing, and the rule then reads as silenced
+/// while applying to the whole tree again, so the claim itself is what gets
+/// reported
+///
+/// once per entry rather than once per file, anchored at the run's first file,
+/// because the entry is one fact about the configuration and a forty-file run
+/// would otherwise repeat it forty times
+pub fn checkStaleExemption(context: *const root.Context) !void {
+    if (context.cfg.exemptions.len == 0) return;
+    if (!isFirstOfRun(context, null)) return;
+
+    for (context.cfg.exemptions) |*exemption| {
+        for (exemption.paths) |exempt_path| {
+            if (coversAnyFile(context.paths, exempt_path)) continue;
+            const message = try std.fmt.allocPrint(context.allocator, root.stale_exemption, .{
+                exemption.rule,
+                exempt_path,
+            });
+            defer context.allocator.free(message);
+            try context.report(RUN_FINDING_LINE, .structural, message, .warn);
+        }
+    }
+}
+
+/// whether any file of the run sits at or under `exempt_path`
+fn coversAnyFile(paths: []const []const u8, exempt_path: []const u8) bool {
+    for (paths) |path| {
+        if (config.pathIsWithin(path, exempt_path)) return true;
+    }
+    return false;
+}
+
+/// the line a run-wide finding is anchored at. the entry it names is a fact about
+/// the configuration rather than about the file the row lands on
+const RUN_FINDING_LINE = 1;
 
 /// the surfaces the redundancy tests run under: `src/commands` carries two entries,
 /// one the dag already implies and one at its own dagOrder, which the checker reads;

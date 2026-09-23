@@ -22,6 +22,39 @@ pub fn checkNullLiteral(context: *const root.Context) !void {
     }
 }
 
+/// `` `undefined` `` matches the literal keyword anywhere in code, including
+/// property names (`o.undefined`) and type positions (`| undefined`). strings,
+/// template text and comments never match, so it reads the token stream for the
+/// same reason the `null` rule beside it does
+///
+/// the pattern grimuah ships is the one exemption: `<rootLib>/outcome.ts` has to
+/// name `undefined` to lift one into an Outcome, and every other mention is the
+/// ad-hoc absence check the pattern replaces
+pub fn checkUndefinedLiteral(context: *const root.Context) !void {
+    if (isShippedPattern(context)) return;
+    for (context.tokens) |token| {
+        if (token.kind != .word) continue;
+        if (!std.mem.eql(u8, token.text, "undefined")) continue;
+        try context.report(token.line, .resilience, root.undefined_literal, .err);
+    }
+}
+
+/// whether this file is the pattern grimuah ships, which is the only file allowed
+/// to name `undefined`
+///
+/// the exemption is that one file rather than its surface: `lib` is a source root
+/// like any other, so a project's own file there answers to every rule
+fn isShippedPattern(context: *const root.Context) bool {
+    const lib = context.cfg.rootLib;
+    if (!lib.enabled) return false;
+    // the walk hands the engine a path relative to the project root, without the
+    // `./` the pre-pass prints
+    const relative = if (std.mem.startsWith(u8, context.path, "./")) context.path[2..] else context.path;
+    const directory = std.fs.path.dirname(relative) orelse return false;
+    if (!std.mem.eql(u8, directory, lib.path)) return false;
+    return std.mem.eql(u8, std.fs.path.basename(relative), "outcome.ts");
+}
+
 /// a `let` declaration. a `let` used as a name (`o.let`, `{ let: string }`) or
 /// in a type position is not a declaration and produces no node, which is
 /// exactly the condition the token rule tests for
@@ -557,10 +590,10 @@ pub fn checkLiteralUnionEnum(context: *const root.Context) !void {
 /// path, so a `.d.ts` declares its optionals under the same ban as any other
 /// file
 ///
-/// a parameter's `?` is not a property's `?`, which is the correctness risk this
-/// reader removes by construction: the annotation carries `optional` only for a
-/// member of an object type, so `function send(name?: string)` is silent while
-/// `{ name?: string }` is not
+/// a parameter's `?` is not a property's `?`, and the two rules read the one
+/// each bans: this one filters on the member position, so
+/// `function send(name?: string)` is silent here and reported by
+/// `checkOptionalParameters` instead
 pub fn checkOptionalProperties(context: *const root.Context) !void {
     const module = context.module orelse return;
 
@@ -573,6 +606,60 @@ pub fn checkOptionalProperties(context: *const root.Context) !void {
         // the detector reports the property signature's own start, which is the
         // member rather than its annotation
         try context.report(context.tokens[annotation.report_start].line, .resilience, root.optional_property, .warn);
+    }
+}
+
+/// an optional parameter, on any callable: a function, a method, an arrow, a
+/// signature, or a constructor
+///
+/// a class field's `?` is a third form and is not read here. a field is state the
+/// class owns rather than a value it was handed, so the type model never reads a
+/// class body, which is the same exclusion `checkReadonlyCollectionSignatures`
+/// documents for a mutable field
+pub fn checkOptionalParameters(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.items) |annotation| {
+        if (annotation.position != .parameter_type) continue;
+        if (!annotation.optional) continue;
+        // the detector reports the parameter's own start rather than its
+        // annotation's, so a leading `...` or `readonly` is included
+        try context.report(context.tokens[annotation.report_start].line, .resilience, root.optional_parameter, .warn);
+    }
+}
+
+/// an optional method signature in an object type: `m?(): void`
+///
+/// such a member holds a parameter list and a return rather than one type
+/// expression, so the reader records the member's own start instead of an
+/// annotation, and this reads that
+pub fn checkOptionalMethods(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    var table = try typemodel.analyze(context.allocator, context.tokens, module, context.walk);
+    defer table.deinit();
+
+    for (table.optional_signatures) |report_token| {
+        try context.report(context.tokens[report_token].line, .resilience, root.optional_method, .err);
+    }
+}
+
+/// an optional member of a class body, a field (`x?: T`) or a method (`m?(): R`)
+///
+/// the parser records where each one starts, because the tree keeps the `?` as a
+/// descendant count beside the class, which is a number rather than a place
+///
+/// a class body is the one container the type model does not read: a field is
+/// state the class owns rather than a value it was handed, so the reader stops at
+/// the class, and the recording above is what makes the member reachable
+pub fn checkOptionalClassMembers(context: *const root.Context) !void {
+    const module = context.module orelse return;
+
+    for (module.optional_class_members.items) |member| {
+        try context.report(context.tokens[member.start].line, .resilience, root.optional_class_member, .err);
     }
 }
 
@@ -968,6 +1055,7 @@ fn exampleFileOf(group: root.RenamedBody, path: []const u8) []const u8 {
     return group.second_file orelse first;
 }
 
+const config = @import("../config.zig");
 const probe = @import("probe.zig");
 
 test "a mutable property of a type literal is reported, and an interface's is not" {
@@ -1071,7 +1159,7 @@ test "a readonly array, a readonly reference, a union and a qualified name are n
         \\export type Held = {
         \\  readonly frozen: readonly Track[];
         \\  readonly ref: ReadonlyArray<Track>;
-        \\  readonly either: Track[] | undefined;
+        \\  readonly either: Track[] | Set<Track>;
         \\  readonly qualified: globalThis.Array<Track>;
         \\  readonly element: Track[][];
         \\};
@@ -1113,7 +1201,7 @@ test "a class field, a type alias and a local binding are out of scope" {
     try probe.expect(.resilience, "probe.ts", source, &.{});
 }
 
-test "an optional property is reported in an interface and a type literal, and an optional parameter is not" {
+test "an optional property is reported in an interface and a type literal, and a class field by the sibling rule" {
     const source =
         \\export interface Draft {
         \\  readonly channel?: string;
@@ -1133,10 +1221,39 @@ test "an optional property is reported in an interface and a type literal, and a
     const rows = &.{
         "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
         "5: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+        // the parameter rule reports the same run's `suffix?: string`
+        "7: This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts.",
+        // and the class member rule reports the class field, which the type model
+        // never reads and the property rule therefore never saw
+        "12: This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.",
     };
     try probe.expect(.resilience, "probe.ts", source, rows);
     // a declaration file is in scope, unlike the literal-union rule's
     try probe.expect(.resilience, "probe.d.ts", source, rows);
+}
+
+test "an optional parameter is reported on a function, a constructor and a method, and the forms around it are not" {
+    const source =
+        \\export function send(topic: string, retries?: number): void {}
+        \\export class Client {
+        \\  constructor(readonly url?: string) {}
+        \\  fetch(path?: string): void {}
+        \\}
+        \\export const log = (level: string): void => {};
+        \\export type Handler = { onEvent?(event: string): void };
+        \\
+    ;
+    const parameter_message = "This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts.";
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "1: " ++ parameter_message,
+        // the modifier comes first on the parameter, so that is where it reports
+        "3: " ++ parameter_message,
+        "4: " ++ parameter_message,
+        // an arrow's parameter is read like any other, and here none is optional:
+        // what the run does report at 7 is the object type's optional method, which
+        // is a member rather than a parameter and belongs to the sibling rule
+        "7: This method is optional. Make it required and implemented on every path, or model the states as a discriminated union.",
+    });
 }
 
 test "a nested type literal is read and an optional method is not a property" {
@@ -1149,6 +1266,9 @@ test "a nested type literal is read and an optional method is not a property" {
     ;
     try probe.expect(.resilience, "probe.ts", source, &.{
         "2: This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.",
+        // the optional method is still not a property: it is a member whose `?`
+        // decorates a call signature, so `optional-method` reports it instead
+        "3: This method is optional. Make it required and implemented on every path, or model the states as a discriminated union.",
     });
 }
 
@@ -1456,8 +1576,8 @@ test "an exported async scalar result is reported, and the shapes around it are 
         \\  return [];
         \\}
         \\
-        \\export async function unioned(): Promise<boolean | undefined> {
-        \\  return undefined;
+        \\export async function unioned(): Promise<boolean | string> {
+        \\  return "unknown";
         \\}
         \\
         \\export default async function (): Promise<boolean> {
@@ -2212,4 +2332,124 @@ test "coverage reaches a body above the one the site sits in, and a nested body 
         \\
         },
     }, &.{ inner_here, inner_there });
+}
+
+// the absence rule and the one file it lets through. the pattern grimuah ships
+// has to name `undefined` to lift one into an Outcome, so `lib/outcome.ts` is
+// exempt and the exemption is that file rather than its surface: `lib` is a
+// source root like any other
+
+test "undefined is reported wherever it names an absence, and only the shipped pattern is exempt" {
+    const in_value = std.fmt.comptimePrint("1: {s}", .{root.undefined_literal});
+    const in_type = std.fmt.comptimePrint("1: {s}", .{root.undefined_literal});
+    const in_first_property = std.fmt.comptimePrint("1: {s}", .{root.undefined_literal});
+    const in_second_property = std.fmt.comptimePrint("2: {s}", .{root.undefined_literal});
+
+    // a comparison against it, which is the check the pattern replaces
+    try probe.expect(.resilience, "src/probe/absent.ts",
+        \\export const gone = (value: string): boolean => value === undefined;
+        \\
+    , &.{in_value});
+
+    // a union member, so a type position is in scope
+    try probe.expect(.resilience, "src/probe/absent.ts",
+        \\export type MaybeText = string | undefined;
+        \\
+    , &.{in_type});
+
+    // a property name, so `o.undefined` and `{ undefined: 1 }` are both the token
+    try probe.expect(.resilience, "src/probe/absent.ts",
+        \\export const holder = { undefined: 1 };
+        \\export const read = holder.undefined;
+        \\
+    , &.{ in_first_property, in_second_property });
+
+    // a string and a comment never reach the token stream
+    try probe.expect(.resilience, "src/probe/absent.ts",
+        \\// undefined is not reported here
+        \\export const word = "undefined";
+        \\
+    , &.{});
+
+    // the shipped pattern is exempt, and a project's own file in the same
+    // surface is not
+    const with_lib = config.Config{
+        .surfaces = &.{},
+        .layers = probe.only(.resilience),
+        .rootLib = .{ .enabled = true, .path = "lib" },
+    };
+    try probe.expectConfigured(&with_lib, &.{
+        .{ .path = "lib/outcome.ts", .content =
+        \\export const lift = (value: string | undefined, reason: string): string =>
+        \\  value === undefined ? reason : value;
+        \\
+        },
+    }, &.{});
+    const in_own_file = std.fmt.comptimePrint("lib/own.ts:1: {s}", .{root.undefined_literal});
+    try probe.expectConfigured(&with_lib, &.{
+        .{ .path = "lib/own.ts", .content =
+        \\export const gone = (value: string): boolean => value === undefined;
+        \\
+        },
+    }, &.{in_own_file});
+
+    // a config without a root lib exempts nothing, so the same path reports
+    const without_lib = config.Config{
+        .surfaces = &.{},
+        .layers = probe.only(.resilience),
+    };
+    const in_unexempted_pattern = std.fmt.comptimePrint("lib/outcome.ts:1: {s}", .{root.undefined_literal});
+    try probe.expectConfigured(&without_lib, &.{
+        .{ .path = "lib/outcome.ts", .content =
+        \\export const gone = (value: string): boolean => value === undefined;
+        \\
+        },
+    }, &.{in_unexempted_pattern});
+}
+
+// the two `?` forms the type model cannot reach on its own: an object type member
+// whose `?` decorates a call signature rather than a property, and a class member,
+// which lives in a container the model never reads
+
+test "an optional method signature and an optional class member are reported, and the forms around them are not" {
+    const source =
+        \\export type Handlers = {
+        \\  readonly onReady?(count: number): void;
+        \\  readonly onDone(count: number): void;
+        \\};
+        \\
+        \\export class Client {
+        \\  readonly label?: string;
+        \\  readonly name: string = "";
+        \\  ready?(): void {}
+        \\  stop(): void {}
+        \\}
+        \\
+    ;
+    const method_message = "This method is optional. Make it required and implemented on every path, or model the states as a discriminated union.";
+    const member_message = "This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.";
+    try probe.expect(.resilience, "probe.ts", source, &.{
+        "2: " ++ method_message,
+        // the class field, reported where the member starts
+        "7: " ++ member_message,
+        // and the class method, same rule, same message
+        "9: " ++ member_message,
+    });
+}
+
+test "a class member modifier is reported with the member, and a class with no optional member is quiet" {
+    const member_message = "This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.";
+    try probe.expect(.resilience, "probe.ts",
+        \\export class Client {
+        \\  private static readonly cache?: Map<string, string>;
+        \\  async load?(): Promise<string> {
+        \\    return "ready";
+        \\  }
+        \\}
+        \\
+    , &.{
+        // the modifier comes first, so that is the token the row names
+        "2: " ++ member_message,
+        "3: " ++ member_message,
+    });
 }

@@ -1774,8 +1774,12 @@ const Parser = struct {
                 continue;
             }
 
+            // an optional member is recorded where it starts, whatever form the
+            // name is followed by
+            var optional_member_start: ?u32 = null;
             if (self.atPunct("?")) {
                 self.module.addDescendants(parent, optional_member_token_node);
+                optional_member_start = @intCast(from);
                 self.pos += 1;
             }
             if (self.atPunct("<")) {
@@ -1784,6 +1788,9 @@ const Parser = struct {
             }
 
             if (self.atPunct("(")) {
+                if (optional_member_start) |start_token| {
+                    try self.module.optional_class_members.append(self.module.arena.child_allocator, .{ .start = start_token });
+                }
                 // a method, an accessor or a constructor: the callable node the tree
                 // builds is what stands in for the `MethodDeclaration`, `GetAccessor`,
                 // `SetAccessor` or `Constructor` wrapper, so only the name is missing
@@ -1804,6 +1811,9 @@ const Parser = struct {
 
             // a field: typescript wraps it in a `PropertyDeclaration` over its name and
             // its initializer, and the tree hangs the initializer off the class itself
+            if (optional_member_start) |start_token| {
+                try self.module.optional_class_members.append(self.module.arena.child_allocator, .{ .start = start_token });
+            }
             self.module.addDescendants(parent, class_member_node);
             if (self.atPunct(":")) {
                 self.pos += 1;

@@ -3,7 +3,7 @@ name: "grimuah-migrate-existing"
 description: "Adopt grimuah inside an existing TypeScript repository, layer by layer, without a big-bang rewrite: build the config, register existing directories as surfaces, rename to suffixes, and turn the layers on as the code converges."
 version: 1
 created: "2026-09-20"
-updated: "2026-09-20"
+updated: "2026-09-23"
 ---
 ## When to Use
 Use this skill when the repository already exists and grimuah must move in: a legacy `src/` tree, a service that predates the rules, or a monorepo where only one package is ready to be gated.
@@ -26,7 +26,7 @@ Do not use it for a greenfield project, where scaffolding is faster (that is the
 | Stage | Layers | What it asks of you |
 | ----- | ------ | ------------------- |
 | 1 | `cosmetic`, `structural` | file names, file locations, and the direction of imports |
-| 2 | plus `resilience` | rewrite `let`, `switch`, C-style `for`, `==`, `null`, `as any`, `as const` |
+| 2 | plus `resilience` | rewrite `let`, `switch`, C-style `for`, `==`, `null`, `undefined`, `as any`, `as const`, and give every optional property, parameter, method and class member a default or a definition |
 | 3 | plus `behavioural` | convert `throw` into returned outcomes, handle every `catch` |
 | 4 | plus the pre-commit gate | add `grimuah check` to the hook once the tree is clean |
 
@@ -36,7 +36,7 @@ Set the stage in `architecture.config.json` by turning the not-yet-adopted layer
 
 8. Give every surface two or more files as you go, since the singleton rule reports a one-file surface and an empty one. A directory whose single file is real has three honest endings: it gains a second real file, it merges into the surface that consumes it, or it stops being a surface and its file moves somewhere that is.
 
-9. Land stage two file by file, since each banned construct is a local rewrite: `let` to `const` (a module-level mutable cache is the one exception the rule allows), `switch` to a `Record` dispatch table, `for (;;)` to `map`/`filter`/`reduce`/`for..of` where the loop does not accumulate, `null` to `undefined` (keeping `null` only where a third-party boundary returns it), `as any` to the type you mean, and `{ ... } as const` to an enum, in the surface's `.config.ts` once the file's own vocabulary earns one and beside the code while it does not.
+9. Land stage two file by file, since each banned construct is a local rewrite: `let` to `const` (a module-level mutable cache is the one exception the rule allows), `switch` to a `Record` dispatch table, `for (;;)` to `map`/`filter`/`reduce`/`for..of` where the loop does not accumulate, `as any` to the type you mean, and `{ ... } as const` to an enum, in the surface's `.config.ts` once the file's own vocabulary earns one and beside the code while it does not. Absence is the one that changes a signature rather than a line: `null`, `undefined` and a `?` on a property or a parameter all go, and a value that may not be there becomes an `Outcome` from `lib/outcome.ts`, lifted with `fromUndefined` where it enters. Land that part with stage three, since it is the same signature-changing pass.
 
 10. Land stage three last, because it is the only stage that changes function signatures. Move the shipped `lib/outcome.ts` in as-is, then convert the fallible functions one surface at a time, starting at the deepest surface so the callers can be updated in the same pass.
 

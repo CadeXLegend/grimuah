@@ -324,7 +324,14 @@ grimuah generates this file into every scaffolded project, it is not part of thi
   },
   "rules": {
     "switch-statement": false
-  }
+  },
+  "exemptions": [
+    {
+      "rule": "null-literal",
+      "paths": ["src/db"],
+      "reason": "a driver hands back null at this boundary"
+    }
+  ]
 }
 ```
 
@@ -344,7 +351,9 @@ there is no second config file, no hidden convention, no documentation that cont
 
 `layers` toggles a whole category of rules and `rules` toggles one rule by name
 
-[RULES.md](RULES.md#turning-a-single-rule-off) covers both switches
+`exemptions` is the narrow switch under both: one entry carves a named rule out of the files or directories its `paths` cover, and leaves that rule running everywhere else, so a rule that is right about the tree and wrong about the one file at a third-party boundary is carved out rather than turned off
+
+[RULES.md](RULES.md#turning-a-single-rule-off) covers the toggles and [RULES.md](RULES.md#carving-a-rule-out-of-one-boundary) covers the carve-outs
 
 ---
 

@@ -153,6 +153,9 @@ fn rewriteConfig(
     // the toggles the user set
     try config.appendRuleToggles(&json_buf, allocator, cfg.rules.entries);
 
+    // write the carve-outs the config declares, so a rewrite keeps them
+    try config.appendExemptions(&json_buf, allocator, cfg.exemptions);
+
     // write rootLib if enabled
     if (cfg.rootLib.enabled) {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,

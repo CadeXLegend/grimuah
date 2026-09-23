@@ -284,7 +284,7 @@ every layer is `true` and every rule is on by default
 
 `grimuah init` writes a config with all four layers enabled and no `rules` block at all, because a rule the `rules` object omits keeps running
 
-so the config a fresh project gets needs no rule keys to run all 51 rules
+so the config a fresh project gets needs no rule keys to run all 56 rules
 
 ### every layer on
 
@@ -354,6 +354,28 @@ add it beside `layers`, keeping every surface entry as it is
 this project keeps every other rule, so it still gets `null-literal`, `throw-statement`, and the rest of the resilience layer
 
 [`grimuah rules`](#commands) prints the name every rule is switched with
+
+### one boundary carved out
+
+a toggle is all or nothing, and one rule cannot be right about a whole tree and about the one file that talks to a third party
+
+`null-literal` is the case it was written for, because a database driver and `RegExp.exec` hand back `null`
+
+```
+"exemptions": [
+  {
+    "rule": "null-literal",
+    "paths": ["src/db", "src/util/regex.util.ts"],
+    "reason": "a driver and RegExp.exec hand back null at this boundary"
+  }
+]
+```
+
+a path names a file or a directory, and a directory covers every file under it
+
+the rule still runs everywhere else, and all three fields are required
+
+a carve-out that covers no file in the run is reported by `stale-exemption`, so a file that moved cannot leave the rule reading as silenced while it applies to everything again
 
 ### a whole layer off
 

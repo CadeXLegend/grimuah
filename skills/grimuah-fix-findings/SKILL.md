@@ -3,7 +3,7 @@ name: "grimuah-fix-findings"
 description: "Read and triage the output of grimuah check: the two tiers and their different formats, which findings fail the run, the order to fix them in, when silencing a rule is right, and how to tell a real finding from a wrong one."
 version: 1
 created: "2026-09-20"
-updated: "2026-09-20"
+updated: "2026-09-23"
 ---
 ## When to Use
 Use this skill when `grimuah check` prints findings and you must decide what to change: the code, the file's location, the surface graph, or the config.
@@ -36,7 +36,10 @@ Do not use it to write new code so that it passes in the first place (that is th
 | `contains only N file(s)` | give the surface a second file, merge it into its consumer, or drop the surface from the config |
 | `innate member ... imports from deeper surface` | lift the type to the shallowest common ancestor and import it from there |
 | `centralized 'types/' directory detected` | co-locate the contents into the surfaces that own them, then delete the directory |
-| `do not use let` / `null` / `==` / `as any` / `any` / chained cast / proxy re-export / `as const` | use the replacement the message names |
+| `do not use let` / `==` / `as any` / `any` / chained cast / proxy re-export / `as const` | use the replacement the message names |
+| `do not use null` / `names an absence` | return an `Outcome`, or lift the value with `fromUndefined` from `lib/outcome.ts` where it enters |
+| `This property is optional` / `This parameter is optional` | give it a default at the boundary, or take an `Outcome` the caller has to read |
+| `This method is optional` / `This class member is optional` | make it required and implemented on every path, or initialise it where the class is constructed; a class field is state the class owns rather than a value it was handed |
 | `do not use switch` / `imperative for loops` / `if..else` chain over one subject | a `Record` or `Map` dispatch table, or `map`/`filter`/`reduce`/`for..of` |
 | `do not use throw` | return an `Outcome` and narrow on `succeeded` |
 | `do not use bare catch` / `catch block must handle or log` | log the error or return a failure |
@@ -49,6 +52,17 @@ Do not use it to write new code so that it passes in the first place (that is th
 "layers": { "resilience": true },
 "rules": { "switch-statement": false }
 ```
+
+When the rule is right for the tree and wrong for one file, carve that file out instead of turning the rule off. `null-literal` is the case it was written for, because a driver and `RegExp.exec` hand back `null`:
+
+```json
+"exemptions": [
+  { "rule": "null-literal", "paths": ["src/db", "src/util/regex.util.ts"],
+    "reason": "a driver and RegExp.exec hand back null at this boundary" }
+]
+```
+
+A path is a file or a directory, and a directory covers every file under it. All three fields are required, a rule name the table does not have stops the run, and a carve-out covering no file is reported by `stale-exemption`, so a moved file cannot leave the rule reading as silenced while it applies to everything again.
 
 A rule the config omits is on. A rule named `true` in a disabled layer stays off, because the layer gates the rule. The hygiene rules (`unused-import`, `unused-variable`, `prefer-const`, `constant-condition`, `unreachable-code`) have no layer of their own, so `rules` is the only switch they have. The surface and edge model, meaning the import firewall, the suffix check, the singleton check and the innate member scoping, has no per-rule key at all, so those findings can only be fixed or avoided by changing the graph. A layer turned off skips its pre-passes too: with `structural` off, the firewall and the singleton check stop running.
 

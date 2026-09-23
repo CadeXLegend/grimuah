@@ -73,6 +73,41 @@ jq -e '.surfaces[] | select(.name=="tasks")' "$TMPDIR/p3/architecture.config.jso
 jq -e '.rootLib.enabled' "$TMPDIR/p3/architecture.config.json" >/dev/null && ok "backend: rootLib enabled" || fail "backend: rootLib missing"
 dagok "$TMPDIR/p3/architecture.config.json" && ok "backend: dagOrder sequential" || fail "backend: dagOrder not sequential"
 
+# the absence rules and the one file they exempt. the shipped pattern has to name
+# `undefined` to lift one into an outcome, so lib/outcome.ts is allowed to and the
+# scaffold stays clean; a copy of it beside the original is not, which is what
+# keeps the exemption from being a rule that silently never fires
+p3out=$(cd "$TMPDIR/p3" && "$GRIMUAH" check 2>&1 || true)
+echo "$p3out" | grep -q "names an absence" && fail "backend: shipped pattern trips undefined-literal" || ok "backend: shipped pattern exempt from undefined-literal"
+echo "$p3out" | grep -q "do not use null"   && fail "backend: shipped pattern trips null-literal"      || ok "backend: shipped pattern exempt from null-literal"
+echo "$p3out" | grep -q "is optional"       && fail "backend: shipped pattern declares an optional declaration" || ok "backend: shipped pattern declares nothing optional"
+cp "$TMPDIR/p3/lib/outcome.ts" "$TMPDIR/p3/lib/beside.ts"
+p3copy=$(cd "$TMPDIR/p3" && "$GRIMUAH" check 2>&1 || true)
+echo "$p3copy" | grep -q "lib/beside.ts.*names an absence" && ok "backend: the exemption is the file, not the surface" || fail "backend: a copy of the pattern was exempted too"
+rm "$TMPDIR/p3/lib/beside.ts"
+
+# the carve-out machinery, end to end: an entry silences its rule in the file it
+# names and nowhere else, a path that matches nothing is reported, and a rewrite of
+# the config keeps the section
+cat > "$TMPDIR/p3/src/services/row.service.ts" <<'ROW'
+export const readRow = (row: Record<string, string>): string | null => (row.id === undefined ? null : row.id);
+ROW
+p3exempt=$(cd "$TMPDIR/p3" && "$GRIMUAH" check 2>&1 || true)
+echo "$p3exempt" | grep -q "row.service.ts.*null" && ok "exemptions: the file reports before the carve-out" || fail "exemptions: fixture did not report"
+jq '.exemptions = [{"rule": "null-literal", "paths": ["src/services/row.service.ts"], "reason": "a driver hands back null"}]' \
+  "$TMPDIR/p3/architecture.config.json" > "$TMPDIR/p3/cfg.json"
+mv "$TMPDIR/p3/cfg.json" "$TMPDIR/p3/architecture.config.json"
+p3carved=$(cd "$TMPDIR/p3" && "$GRIMUAH" check 2>&1 || true)
+echo "$p3carved" | grep -q "row.service.ts.*do not use null" && fail "exemptions: the carve-out did not hold" || ok "exemptions: the carved file is silent"
+echo "$p3carved" | grep -q "row.service.ts.*names an absence" && ok "exemptions: the carve-out is the rule, not the file" || fail "exemptions: the file went quiet for every rule"
+jq '.exemptions += [{"rule": "null-literal", "paths": ["src/services/moved-away.ts"], "reason": "the file this used to name"}]' \
+  "$TMPDIR/p3/architecture.config.json" > "$TMPDIR/p3/cfg.json"
+mv "$TMPDIR/p3/cfg.json" "$TMPDIR/p3/architecture.config.json"
+p3stale=$(cd "$TMPDIR/p3" && "$GRIMUAH" check 2>&1 || true)
+echo "$p3stale" | grep -q "moved-away.ts.*matches no file" && ok "exemptions: a stale carve-out is reported" || fail "exemptions: a stale carve-out went unreported"
+"$GRIMUAH" add tasks --path src/tasks >/dev/null 2>&1 <<< "" || true
+jq -e '.exemptions | length == 2' "$TMPDIR/p3/architecture.config.json" >/dev/null && ok "exemptions: a rewrite of the config keeps the section" || fail "exemptions: the rewrite dropped the section"
+
 # ── 7. init backend with tasks answered yes ──
 printf 'n\nn\ny\n' | "$GRIMUAH" init "$TMPDIR/p3-tasks" --preset backend 2>/dev/null
 s=$(jq '.surfaces | length' "$TMPDIR/p3-tasks/architecture.config.json"); test "$s" -eq 5 && ok "backend+tasks: 5 surfaces" || fail "backend+tasks: expected 5, got $s"
@@ -88,6 +123,11 @@ jq -e '.compilerOptions.noImplicitReturns' "$P1/tsconfig.json"         >/dev/nul
 jq -e '.compilerOptions.noFallthroughCasesInSwitch' "$P1/tsconfig.json">/dev/null && ok "tsconfig noFallthroughCasesInSwitch" || fail "tsconfig missing"
 jq -e '.compilerOptions.forceConsistentCasingInFileNames' "$P1/tsconfig.json" >/dev/null && ok "tsconfig forceConsistentCasingInFileNames" || fail "tsconfig missing"
 jq -e '.compilerOptions.esModuleInterop' "$P1/tsconfig.json"          >/dev/null && ok "tsconfig esModuleInterop"      || fail "tsconfig esModuleInterop missing"
+# lib/ holds the shipped outcome pattern and lib is a source root, so the
+# include has to reach it and rootDir has to stay unset: a single rootDir
+# cannot hold two source roots and tsc rejects the file as outside it
+jq -e '[.include[] | select(. == "lib/**/*.ts")] | length == 1' "$P1/tsconfig.json" >/dev/null && ok "tsconfig includes lib" || fail "tsconfig does not include lib/**/*.ts"
+jq -e '.compilerOptions.rootDir == null' "$P1/tsconfig.json" >/dev/null && ok "tsconfig sets no rootDir" || fail "tsconfig rootDir blocks the two source roots"
 # exactOptionalPropertyTypes is not part of the strict default, so it is stated
 # here: a fresh scaffold of every preset typechecks clean with it on
 jq -e '.compilerOptions.exactOptionalPropertyTypes' "$P1/tsconfig.json" >/dev/null && ok "tsconfig exactOptionalPropertyTypes" || fail "tsconfig exactOptionalPropertyTypes missing"

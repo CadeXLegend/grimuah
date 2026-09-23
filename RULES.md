@@ -4,7 +4,7 @@ every rule `grimuah check` can report, grouped by the layer that gates it
 
 [README.md](README.md) has the quickstart, [CONCEPTS.md](CONCEPTS.md) defines the surfaces and the dag, and [PHILOSOPHY.md](PHILOSOPHY.md) explains why the rules exist
 
-51 rules ship today: 46 project rules across four configurable layers, plus 5 hygiene rules that run whenever the engine runs
+56 rules ship today: 51 project rules across four configurable layers, plus 5 hygiene rules that run whenever the engine runs
 
 ---
 
@@ -18,6 +18,7 @@ every rule `grimuah check` can report, grouped by the layer that gates it
 - [behavioural](#behavioural)
 - [hygiene](#hygiene)
 - [turning a single rule off](#turning-a-single-rule-off)
+- [carving a rule out of one boundary](#carving-a-rule-out-of-one-boundary)
 - [listing the rules](#listing-the-rules)
 
 ---
@@ -83,6 +84,7 @@ graph integrity and surface membership
 | `enum-placement`           | warn     | an exported enum in an implementation module moves to the surface's `.config.ts`, once the file's vocabulary earns one                                |
 | `import-cycle`             | error    | two files that import each other are a cycle, because module initialisation order becomes load-bearing                                              |
 | `redundant-allowed-import` | warn     | an `allowedImports` entry the dag already permits is dead configuration and is deleted                                                               |
+| `stale-exemption`          | warn     | an `exemptions` entry covering no file in the run is reported, so a moved path cannot leave a rule reading as silenced                               |
 | `shared-type-placement`    | warn     | a type an implementation module exports and another directory imports moves to the surface's `.types.ts`                                             |
 | `export-without-consumer`  | warn     | an exported binding no other module names drops its `export` keyword                                                                                 |
 
@@ -100,18 +102,21 @@ change-proofing patterns that prevent codebase fractures over time
 
 ### banned constructs
 
-| Rule                  | Severity | Replacement                                        |
-| --------------------- | -------- | -------------------------------------------------- |
-| `null-literal`        | error    | `undefined`, with third-party boundaries the exception |
-| `let-declaration`     | error    | `const`, with module-level mutable caches the exception |
-| `switch-statement`    | error    | a `Record` or `Map` dispatch table                  |
-| `imperative-for-loop` | error    | `map`, `filter`, `reduce`, or `for..of`             |
-| `loose-equality`      | error    | `===` and `!==`                                     |
-| `as-any`              | error    | the type you mean                                   |
-| `any-type`            | error    | the type you mean, including `any[]` and `Array<any>` |
-| `chained-cast`        | error    | a single cast                                       |
-| `proxy-reexport`      | error    | a direct import from the source module              |
-| `as-const`            | error    | an enum                                             |
+| Rule                  | Severity | Replacement                                             |
+| --------------------- | -------- | ------------------------------------------------------- |
+| `null-literal`        | error    | an `Outcome` from `lib/outcome.ts`, never a nullish value |
+| `undefined-literal`   | error    | an `Outcome`, or `fromUndefined` where a value enters    |
+| `let-declaration`     | error    | `const`, with module-level mutable caches the exception  |
+| `switch-statement`    | error    | a `Record` or `Map` dispatch table                       |
+| `imperative-for-loop` | error    | `map`, `filter`, `reduce`, or `for..of`                  |
+| `loose-equality`      | error    | `===` and `!==`                                          |
+| `as-any`              | error    | the type you mean                                        |
+| `any-type`            | error    | the type you mean, including `any[]` and `Array<any>`    |
+| `chained-cast`        | error    | a single cast                                            |
+| `proxy-reexport`      | error    | a direct import from the source module                   |
+| `as-const`            | error    | an enum                                                  |
+
+The two absence rules are one idea in two halves: neither `null` nor `undefined` may stand for a value that is not there, in a value position or in a type position, because the type then says nothing about the absence and the check at the call site is where the mistake hides. Model the absence as an `Outcome`, lift a value that may be absent with `fromUndefined` where it enters, and read it with `succeeded`, `getOrElse`, or `matchOutcome`. The one exemption is the pattern file itself: `lib/outcome.ts` has to name `undefined` to lift one into an `Outcome`, and a plain `undefined` in a string, a template, or a comment is not a token and is never reported. A `?` says the same thing without naming the token, which is why the type shape rules below carry four rules for it, one per container the `?` can decorate: `optional-property` reads a member of an object type, `optional-method` reads one whose `?` decorates a call signature, `optional-parameter` reads a parameter, and `optional-class-member` reads a class body, which the type model never walks.
 
 ### size and complexity
 
@@ -128,7 +133,10 @@ change-proofing patterns that prevent codebase fractures over time
 | Rule                           | Severity | What it enforces                                                                                    |
 | ------------------------------ | -------- | --------------------------------------------------------------------------------------------------- |
 | `literal-union-enum`           | warn     | a union of two or more string literals becomes a string enum                                        |
-| `optional-property`            | warn     | an object type declares no optional property, default it at the boundary or model a discriminated union |
+| `optional-property`            | error    | an object type declares no optional property, default it at the boundary or model a discriminated union |
+| `optional-parameter`           | error    | no parameter is optional, give it a default value or model the absence as an `Outcome`               |
+| `optional-method`              | error    | no method is optional, make it required and implemented on every path                                |
+| `optional-class-member`        | error    | no class member is optional, initialise or implement it where the class is constructed               |
 | `readonly-collection-signature` | warn    | a parameter, return type, or property is `readonly T[]` or `ReadonlyArray<T>`                       |
 | `readonly-type-member`         | warn     | every property of a type literal is `readonly`                                                       |
 
@@ -216,6 +224,34 @@ a name that matches no rule stops the check with the name it could not match, be
 the surface and edge model is not a rule and carries no per-rule key
 
 the suffix list, the import firewall, the dag order, and the innate member scoping are the declaration a project makes about itself, and their layer is the only switch over them
+
+---
+
+## carving a rule out of one boundary
+
+a toggle is all or nothing, and one rule cannot be right about a whole tree and about the single file that talks to a third party
+
+`null-literal` is the rule it was written for: a database driver and `RegExp.exec` hand back `null`, and nothing else in the tree should
+
+an `exemptions` entry names the rule, the repo-relative files or directories it does not apply to, and why
+
+```
+"exemptions": [
+  {
+    "rule": "null-literal",
+    "paths": ["src/db", "src/util/regex.util.ts"],
+    "reason": "a driver and RegExp.exec hand back null at this boundary"
+  }
+]
+```
+
+a path names a file or a directory, and a directory covers every file under it, which is the prefix rule the surface model already uses
+
+the rule still runs everywhere else, so this is the narrow form of a toggle rather than a second way to silence a rule
+
+all three fields are required: an entry naming no rule, no path or no reason is rejected when the config loads, and a rule name the table does not have stops the check the way it does in `rules`
+
+a carve-out that covers no file in the run is reported by `stale-exemption`, because a file that moved would otherwise leave the rule reading as silenced while it applies to the whole tree again
 
 ---
 

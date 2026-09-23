@@ -108,6 +108,9 @@ fn rewriteConfigWithout(io: std.Io, allocator: std.mem.Allocator, cfg: *config.C
     // the toggles the user set
     try config.appendRuleToggles(&json_buf, allocator, cfg.rules.entries);
 
+    // write the carve-outs the config declares, so a rewrite keeps them
+    try config.appendExemptions(&json_buf, allocator, cfg.exemptions);
+
     if (cfg.rootLib.enabled) {
         try json_buf.appendSlice(allocator, try std.fmt.allocPrint(allocator,
             \\,

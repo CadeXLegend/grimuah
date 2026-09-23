@@ -102,6 +102,38 @@ pub const RootLib = struct {
     }
 };
 
+/// one rule's carve-out: the rule does not apply to the paths this entry names,
+/// and the entry says why
+///
+/// this is the tool's answer to a rule whose own message names a third-party
+/// boundary: `null-literal` cannot be right about a database driver's row type
+/// and about the rest of the tree at once, so the project names the files the
+/// boundary sits in rather than turning the rule off for everything
+pub const Exemption = struct {
+    rule: []const u8,
+    /// repo-relative files or directories. a directory covers every file under
+    /// it, which is the prefix rule `pathIsWithin` already applies to a surface
+    paths: []const []const u8,
+    /// why the carve-out exists, so the next reader does not have to guess which
+    /// boundary it was for
+    reason: []const u8,
+
+    pub fn deinit(self: *const Exemption, allocator: std.mem.Allocator) void {
+        allocator.free(self.rule);
+        for (self.paths) |exempt_path| allocator.free(exempt_path);
+        allocator.free(self.paths);
+        allocator.free(self.reason);
+    }
+
+    /// whether this entry covers `path`
+    fn covers(self: *const Exemption, path: []const u8) bool {
+        for (self.paths) |exempt_path| {
+            if (pathIsWithin(path, exempt_path)) return true;
+        }
+        return false;
+    }
+};
+
 /// parsed architecture configuration
 pub const Config = struct {
     /// repo-relative directories the lint walk starts from. this is the whole
@@ -121,12 +153,17 @@ pub const Config = struct {
     /// the same toggles as the bits the scan reads, resolved once from `rules`
     /// by `rules.resolveToggles` at startup
     disabledRules: DisabledRules = DisabledRules.empty,
+    /// the per-rule carve-outs the config declares. an entry silences its rule in
+    /// the paths it names and nowhere else, which is the narrow form of a toggle
+    exemptions: []const Exemption = &.{},
     rootLib: RootLib = .{ .enabled = false, .path = "lib" },
 
     pub fn deinit(self: *const Config, allocator: std.mem.Allocator) void {
         for (self.sourceRoots) |root| allocator.free(root);
         if (self.sourceRoots.len > 0) allocator.free(self.sourceRoots);
         self.rules.deinit(allocator);
+        for (self.exemptions) |*exemption| exemption.deinit(allocator);
+        if (self.exemptions.len > 0) allocator.free(self.exemptions);
         for (self.surfaces) |*surface| surface.deinit(allocator);
         allocator.free(self.surfaces);
         self.rootLib.deinit(allocator);
@@ -138,6 +175,19 @@ pub const Config = struct {
             if (std.mem.eql(u8, surface.name, name)) return surface;
         }
         return null;
+    }
+
+    /// whether `rule_name` does not apply to `path`
+    ///
+    /// this is read once per rule per file, so a config that declares no
+    /// exemption pays one length test rather than a walk of an empty list
+    pub fn exemptedFor(self: *const Config, rule_name: []const u8, path: []const u8) bool {
+        if (self.exemptions.len == 0) return false;
+        for (self.exemptions) |*exemption| {
+            if (!std.mem.eql(u8, exemption.rule, rule_name)) continue;
+            if (exemption.covers(path)) return true;
+        }
+        return false;
     }
 
     /// check if `from` surface is allowed to import from `to` surface
@@ -234,6 +284,10 @@ pub const ValidationError = error{
     EmptySurfaces,
     InvalidDagOrder,
     InvalidRootLibPath,
+    EmptyExemptionRule,
+    EmptyExemptionReason,
+    EmptyExemptionPath,
+    DuplicateExemption,
     MissingSurfaceInEdge,
 };
 
@@ -286,6 +340,29 @@ pub fn validate(config: *const Config) ValidationError!void {
     // rootLib path must be non-empty when enabled
     if (config.rootLib.enabled and config.rootLib.path.len == 0)
         return ValidationError.InvalidRootLibPath;
+
+    // an exemption is a carve-out, so it has to name the rule it carves out, the
+    // paths it covers and the reason it exists: an empty field would silence a
+    // rule somewhere no reader can see or justify
+    for (config.exemptions) |exemption| {
+        if (exemption.rule.len == 0) return ValidationError.EmptyExemptionRule;
+        if (exemption.reason.len == 0) return ValidationError.EmptyExemptionReason;
+        if (exemption.paths.len == 0) return ValidationError.EmptyExemptionPath;
+        for (exemption.paths) |exempt_path| {
+            if (exempt_path.len == 0) return ValidationError.EmptyExemptionPath;
+        }
+    }
+
+    // the same rule carved out twice for the same path is two entries a reader
+    // has to compare to learn they are one carve-out
+    for (config.exemptions, 0..) |exemption, index| {
+        for (config.exemptions[index + 1 ..]) |other| {
+            if (!std.mem.eql(u8, exemption.rule, other.rule)) continue;
+            for (exemption.paths) |exempt_path| {
+                if (other.covers(exempt_path)) return ValidationError.DuplicateExemption;
+            }
+        }
+    }
 }
 
 /// load and parse architecture.config.json from a file path
@@ -579,6 +656,38 @@ pub fn appendRuleToggles(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, 
     try buf.appendSlice(allocator, "\n  }");
 }
 
+/// append the `exemptions` section of a config, so every command that rewrites
+/// architecture.config.json keeps the carve-outs the user declared
+/// the section is omitted when the config declares none, which keeps a default
+/// config byte-identical across the commands that rewrite one
+pub fn appendExemptions(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, exemptions: []const Exemption) !void {
+    if (exemptions.len == 0) return;
+    try buf.appendSlice(allocator, ",\n  \"exemptions\": [");
+    for (exemptions, 0..) |exemption, exemption_index| {
+        if (exemption_index > 0) try buf.appendSlice(allocator, ",");
+        try buf.appendSlice(allocator, "\n    {\n      \"rule\": ");
+        try appendEncoded(buf, allocator, exemption.rule);
+        try buf.appendSlice(allocator, ",\n      \"paths\": [");
+        for (exemption.paths, 0..) |exempt_path, path_index| {
+            if (path_index > 0) try buf.appendSlice(allocator, ", ");
+            try appendEncoded(buf, allocator, exempt_path);
+        }
+        try buf.appendSlice(allocator, "],\n      \"reason\": ");
+        try appendEncoded(buf, allocator, exemption.reason);
+        try buf.appendSlice(allocator, "\n    }");
+    }
+    try buf.appendSlice(allocator, "\n  ]");
+}
+
+/// append `value` json-encoded, for a field whose text is the user's rather than
+/// one the table minted: a quote or a backslash in it would otherwise leave a
+/// config nothing can read
+fn appendEncoded(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {
+    const encoded = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
+    defer allocator.free(encoded);
+    try buf.appendSlice(allocator, encoded);
+}
+
 /// the width a generated config wraps at, so the layout stays stable across
 /// regeneration
 const LINE_WIDTH = 80;
@@ -853,4 +962,136 @@ test "appendRuleToggles encodes a name the user spelled, rather than copying it"
     defer buf.deinit(allocator);
     try appendRuleToggles(&buf, allocator, &awkward);
     try testing.expectEqualStrings(",\n  \"rules\": {\n    \"bad\\\"name\": false,\n    \"back\\\\slash\": true\n  }", buf.items);
+}
+
+// the carve-out is the narrow form of a toggle, and the two ways it fails are the
+// two a reader cannot see: a field left empty, and two entries that turn out to be
+// the same carve-out written twice
+
+/// the layers a test config states, since `Layers` carries no default
+const all_layers = Layers{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true };
+
+test "an exemption parses with its rule, its paths and its reason" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\{
+        \\  "sourceRoots": ["src"],
+        \\  "surfaces": [
+        \\    { "name": "db", "path": "src/db", "depth": 1, "dagOrder": 0,
+        \\      "suffixes": [".repo.ts"], "innateMembers": [".types.ts"], "allowedImports": [] }
+        \\  ],
+        \\  "layers": { "cosmetic": true, "structural": true, "resilience": true, "behavioural": true },
+        \\  "exemptions": [
+        \\    { "rule": "null-literal", "paths": ["src/db"], "reason": "a driver hands back null" }
+        \\  ]
+        \\}
+    ;
+    const parsed = try std.json.parseFromSlice(Config, allocator, source, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = false,
+    });
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.value.exemptions.len);
+    try testing.expectEqualStrings("null-literal", parsed.value.exemptions[0].rule);
+    try testing.expectEqualStrings("a driver hands back null", parsed.value.exemptions[0].reason);
+    try validate(&parsed.value);
+}
+
+test "a carve-out applies to the rule it names, in the paths it names, and nowhere else" {
+    const paths = [_][]const u8{"src/db"};
+    const exemptions = [_]Exemption{.{
+        .rule = "null-literal",
+        .paths = &paths,
+        .reason = "a driver hands back null",
+    }};
+    const cfg = Config{ .surfaces = &.{}, .layers = all_layers, .exemptions = &exemptions };
+
+    // a directory covers every file under it, at any depth
+    try testing.expect(cfg.exemptedFor("null-literal", "src/db/row.repo.ts"));
+    try testing.expect(cfg.exemptedFor("null-literal", "src/db/nested/row.repo.ts"));
+    // and the same prefix rule the surface model uses, so a sibling misses
+    try testing.expect(!cfg.exemptedFor("null-literal", "src/dbx/row.repo.ts"));
+    // another rule is carved out nowhere
+    try testing.expect(!cfg.exemptedFor("undefined-literal", "src/db/row.repo.ts"));
+}
+
+test "a config that declares no exemption exempts nothing" {
+    const cfg = Config{ .surfaces = &.{}, .layers = all_layers };
+    try testing.expect(!cfg.exemptedFor("null-literal", "src/db/row.repo.ts"));
+}
+
+test "an exemption with an empty field is rejected, and a duplicate carve-out is too" {
+    const one_path = [_][]const u8{"src/db"};
+    const empty_paths = [_][]const u8{};
+    const empty_path = [_][]const u8{""};
+    var surfaces = [_]Surface{.{ .name = "db", .path = "src/db", .depth = 1, .dagOrder = 0, .suffixes = &.{} }};
+
+    const nameless = [_]Exemption{.{ .rule = "", .paths = &one_path, .reason = "why" }};
+    try testing.expectError(error.EmptyExemptionRule, validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &nameless }));
+
+    const reasonless = [_]Exemption{.{ .rule = "null-literal", .paths = &one_path, .reason = "" }};
+    try testing.expectError(error.EmptyExemptionReason, validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &reasonless }));
+
+    const pathless = [_]Exemption{.{ .rule = "null-literal", .paths = &empty_paths, .reason = "why" }};
+    try testing.expectError(error.EmptyExemptionPath, validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &pathless }));
+
+    const blank = [_]Exemption{.{ .rule = "null-literal", .paths = &empty_path, .reason = "why" }};
+    try testing.expectError(error.EmptyExemptionPath, validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &blank }));
+
+    const twice = [_]Exemption{
+        .{ .rule = "null-literal", .paths = &one_path, .reason = "why" },
+        .{ .rule = "null-literal", .paths = &one_path, .reason = "why again" },
+    };
+    try testing.expectError(error.DuplicateExemption, validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &twice }));
+
+    // the same path under two rules is two carve-outs, not one written twice
+    const two_rules = [_]Exemption{
+        .{ .rule = "null-literal", .paths = &one_path, .reason = "why" },
+        .{ .rule = "undefined-literal", .paths = &one_path, .reason = "why" },
+    };
+    try validate(&Config{ .surfaces = &surfaces, .layers = all_layers, .exemptions = &two_rules });
+}
+
+test "appendExemptions writes the section, and nothing when the config declares none" {
+    const allocator = std.testing.allocator;
+    const paths = [_][]const u8{ "src/db", "src/util/regex.util.ts" };
+    const entries = [_]Exemption{.{
+        .rule = "null-literal",
+        .paths = &paths,
+        .reason = "a driver and RegExp.exec hand back null",
+    }};
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try appendExemptions(&buf, allocator, &entries);
+    try testing.expectEqualStrings(
+        ",\n  \"exemptions\": [" ++
+            "\n    {\n      \"rule\": \"null-literal\"," ++
+            "\n      \"paths\": [\"src/db\", \"src/util/regex.util.ts\"]," ++
+            "\n      \"reason\": \"a driver and RegExp.exec hand back null\"" ++
+            "\n    }" ++
+            "\n  ]",
+        buf.items,
+    );
+
+    var empty_buf: std.ArrayList(u8) = .empty;
+    defer empty_buf.deinit(allocator);
+    try appendExemptions(&empty_buf, allocator, &.{});
+    try testing.expectEqualStrings("", empty_buf.items);
+}
+
+test "appendExemptions encodes a reason the user spelled, rather than copying it" {
+    const allocator = std.testing.allocator;
+    const paths = [_][]const u8{"src/db"};
+    const entries = [_]Exemption{.{
+        .rule = "null-literal",
+        .paths = &paths,
+        .reason = "why \"this\" \\ that",
+    }};
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try appendExemptions(&buf, allocator, &entries);
+    try testing.expect(std.mem.indexOf(u8, buf.items, "\\\"this\\\"") != null);
 }

@@ -43,6 +43,8 @@ pub fn run() void {
 
     std.debug.print("a rule the config omits runs, so a config usually lists only the rules it silences\n", .{});
     std.debug.print("  \"rules\": {{ \"<name>\": false }}\n", .{});
+    std.debug.print("a rule that is right everywhere but one boundary is carved out there instead\n", .{});
+    std.debug.print("  \"exemptions\": [{{ \"rule\": \"<name>\", \"paths\": [\"<dir or file>\"], \"reason\": \"<why>\" }}]\n", .{});
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

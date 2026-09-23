@@ -80,6 +80,12 @@ pub const Annotation = struct {
 pub const Table = struct {
     arena: std.heap.ArenaAllocator,
     items: []const Annotation = &.{},
+    /// the report token of every optional method signature, in source order
+    ///
+    /// no annotation carries one: a member like `m?(): void` holds a parameter
+    /// list and a return rather than one type expression, so the `?` is recorded
+    /// here instead, and the rule that bans it reads this
+    optional_signatures: []const usize = &.{},
 
     pub fn deinit(self: *Table) void {
         self.arena.deinit();
@@ -103,7 +109,8 @@ pub fn analyze(
     const arena = table.arena.allocator();
 
     var list: std.ArrayList(Annotation) = .empty;
-    var reader = Reader{ .arena = arena, .tokens = tokens, .list = &list };
+    var signatures: std.ArrayList(usize) = .empty;
+    var reader = Reader{ .arena = arena, .tokens = tokens, .list = &list, .optional_signatures = &signatures };
 
     for (walk) |entry| {
         const span = module.spanOf(entry.index);
@@ -125,6 +132,7 @@ pub fn analyze(
 
     std.mem.sort(Annotation, list.items, {}, annotationBefore);
     table.items = try arena.dupe(Annotation, list.items);
+    table.optional_signatures = try arena.dupe(usize, signatures.items);
     return table;
 }
 
@@ -407,6 +415,8 @@ const Reader = struct {
     arena: std.mem.Allocator,
     tokens: []const Token,
     list: *std.ArrayList(Annotation),
+    /// the report token of every optional method signature this reader sees
+    optional_signatures: *std.ArrayList(usize),
 
     fn add(self: *Reader, annotation: Annotation) ReadError!void {
         try self.list.append(self.arena, annotation);
@@ -563,7 +573,9 @@ const Reader = struct {
     ///
     /// the whole parameter is the reported node, so the reported token is the
     /// parameter's first one, a leading `...` or `readonly` included. a `?` here
-    /// is never an optional property: a parameter is not a member of an object
+    /// is not an optional property, because a parameter is not a member of an
+    /// object type, so it is recorded on its own position and the rule that bans
+    /// optional parameters reads it there
     fn readParameter(self: *Reader, start: usize, end: usize) ReadError!void {
         const tokens = self.tokens;
         const parameter_end = trimEnd(tokens, start, end);
@@ -578,6 +590,9 @@ const Reader = struct {
             .type_start = type_start,
             .type_end = type_end,
             .report_start = start,
+            // `t?: T` puts the `?` immediately before the colon, and a `?`
+            // anywhere earlier belongs to the parameter's own type or pattern
+            .optional = colon > start and isPunct(tokens[colon - 1], "?"),
         });
         try self.readTypeExtent(type_start, type_end);
     }
@@ -623,16 +638,20 @@ const Reader = struct {
             if (hasTopLevelWord(tokens, cursor + 1, close, "in")) return;
             cursor = close + 1;
         } else if (isPunct(tokens[cursor], "(") or isPunct(tokens[cursor], "<")) {
-            try self.readSignature(cursor, member_end);
+            try self.readSignature(cursor, member_end, null);
             return;
         } else if (tokens[cursor].kind == .word and tokens[cursor].isWord("new")) {
-            try self.readSignature(cursor + 1, member_end);
+            try self.readSignature(cursor + 1, member_end, null);
             return;
         } else {
             cursor += 1;
         }
 
-        if (cursor < member_end and isPunct(tokens[cursor], "?")) cursor += 1;
+        var member_optional = false;
+        if (cursor < member_end and isPunct(tokens[cursor], "?")) {
+            member_optional = true;
+            cursor += 1;
+        }
         if (cursor >= member_end) return;
         if (isPunct(tokens[cursor], ":")) {
             const type_start = cursor + 1;
@@ -649,14 +668,17 @@ const Reader = struct {
             try self.readTypeExtent(type_start, member_end);
             return;
         }
-        try self.readSignature(cursor, member_end);
+        // a member whose `?` is followed by `(` rather than `:` is a method
+        // signature, and the member's own start is what a rule reports
+        try self.readSignature(cursor, member_end, if (member_optional) start else null);
     }
 
     /// `m(a: T): R` inside an object type, and the `new (...) => R` form. the
     /// member is not a property, so only its parameters and its return are read
-    fn readSignature(self: *Reader, start: usize, end: usize) ReadError!void {
+    fn readSignature(self: *Reader, start: usize, end: usize, optional_member: ?usize) ReadError!void {
         const tokens = self.tokens;
         if (start >= end) return;
+        if (optional_member) |report_token| try self.optional_signatures.append(self.arena, report_token);
         const open = if (isPunct(tokens[start], "("))
             start
         else
@@ -1293,7 +1315,7 @@ fn expectMutableArray(type_text: []const u8, expected: bool) !void {
     }
 }
 
-test "an optional property is a member, an optional parameter is not" {
+test "a property and a parameter each carry their own `?`, and a class field carries none" {
     const allocator = std.testing.allocator;
     const source =
         \\interface Bridge {
@@ -1310,7 +1332,7 @@ test "an optional property is a member, an optional parameter is not" {
         "5 alias_type optional=false readonly=false -",
         "5 property_type optional=true readonly=false type_literal",
         "5 property_type optional=false readonly=false type_literal",
-        "6 parameter_type optional=false readonly=false -",
+        "6 parameter_type optional=true readonly=false -",
         "6 return_type optional=false readonly=false -",
     });
 }

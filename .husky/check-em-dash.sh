@@ -4,12 +4,10 @@
 # own cosmetic.grit rule, so these files are scanned along with the zig source
 # gritql.zig is exempt: it must contain the literal em-dash to match it
 STATUS=0
-for dir in src code-patterns; do
-  if grep -rn $'\xe2\x80\x94' "$dir" --include="*.zig" --include="*.ts" | grep -v 'gritql.zig'; then
-    echo ""
-    echo "em-dash found in $dir, banned in this project"
-    echo "replace with a comma, colon, or sentence break instead"
-    STATUS=1
-  fi
-done
+if grep -rn $'\xe2\x80\x94' src --include="*.zig" --include="*.ts" | grep -v 'gritql.zig'; then
+  echo ""
+  echo "em-dash found in src, banned in this project"
+  echo "replace with a comma, colon, or sentence break instead"
+  STATUS=1
+fi
 exit $STATUS

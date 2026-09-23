@@ -191,6 +191,17 @@ pub const Node = struct {
     binding: BindingKind = .none,
 };
 
+/// one optional member of a class body
+///
+/// the tree records the `?` beside the class as an anonymous descendant count,
+/// which is a number rather than a place, and a rule that reports one needs the
+/// place. this is metadata on the module rather than a node, so no node count
+/// moves and the parity sidecar is untouched
+pub const ClassMember = struct {
+    /// the token the member starts at, a leading modifier included
+    start: u32,
+};
+
 pub const Module = struct {
     arena: std.heap.ArenaAllocator,
     nodes: std.ArrayList(Node),
@@ -217,6 +228,8 @@ pub const Module = struct {
     /// and a gate would need a `Module` whose array may be empty, which turns a missing count
     /// into a plausible zero. if a profile ever shows the four bytes, the gate is the fix
     extra_descendants: std.ArrayList(i32),
+    /// every optional class member the parser saw, in source order
+    optional_class_members: std.ArrayList(ClassMember),
     root: NodeIndex,
     source: []const u8,
     /// constructs the front-end skipped, so callers can report coverage instead
@@ -228,6 +241,7 @@ pub const Module = struct {
             .arena = std.heap.ArenaAllocator.init(child_allocator),
             .nodes = .empty,
             .extra_descendants = .empty,
+            .optional_class_members = .empty,
             .root = none,
             .source = source,
         };
@@ -238,6 +252,7 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.nodes.deinit(self.arena.child_allocator);
         self.extra_descendants.deinit(self.arena.child_allocator);
+        self.optional_class_members.deinit(self.arena.child_allocator);
         self.arena.deinit();
     }
 

@@ -1,4 +1,5 @@
 src/components:0: [structural] surface 'components' names the directory src/components/, which does not exist; create it or drop the surface from architecture.config.json
+src/probe/any-type.ts:1: [structural] The exemption for `null-literal` covers `src/probe/moved-away.ts`, which matches no file in this run. Fix the path, or delete the entry.
 src/probe/any-type.ts:5: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/any-type.ts:5: [resilience] This `any` type bypasses type safety. Write the type you mean instead.
 src/probe/any-type.ts:5: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
@@ -67,6 +68,7 @@ src/probe/d-for-nested.ts:1: [resilience] This signature hands over a mutable ar
 src/probe/d-for-nested.ts:2: [resilience] do not use let; use const. only let at module-level mutable caches
 src/probe/d-for-nested.ts:3: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
 src/probe/d-for-nested.ts:3: [resilience] do not use let; use const. only let at module-level mutable caches
+src/probe/d-for-obj.ts:2: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
 src/probe/d-for-parens.ts:2: [resilience] do not use imperative for loops; use map, filter, reduce, or for..of instead
 src/probe/d-for-parens.ts:3: [resilience] chained 'as' casts bypass type safety; use a single cast only
 src/probe/d-for-parens.ts:3: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
@@ -75,10 +77,11 @@ src/probe/d-for-parens.ts:4: [resilience] This property is mutable. Add `readonl
 src/probe/d-for-parens.ts:5: [resilience] chained 'as' casts bypass type safety; use a single cast only
 src/probe/d-for-parens.ts:5: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/d-multiline-asconst.ts:1: [resilience] use enum instead of const + as const; enum gives you both value and type in one declaration
-src/probe/d-null-arrow.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/d-null-objectkey.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/d-null-arrow.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/d-null-objectkey.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/d-null-objectkey.ts:2: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/d-throw-chain.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
 src/probe/d-throw-cond.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/d-two-as.ts:1: [resilience] chained 'as' casts bypass type safety; use a single cast only
 src/probe/duplicated-computation/first.ts:2: [resilience] This computation `remainder .slice(separatorIndex + 1)` is written in 1 other file. Extract it into a shared function both call sites import.
@@ -148,25 +151,33 @@ src/probe/no-export-without-consumer.repo.ts:14: [structural] `OrphanedOutcome` 
 src/probe/no-export-without-consumer.repo.ts:16: [structural] `orphanedKey` is exported but no other module names it. Drop the `export` keyword, or have another module name it.
 src/probe/no-import-cycles-a.repo.ts:8: [structural] This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.
 src/probe/no-import-cycles-b.repo.ts:6: [structural] This import closes a cycle: the file it names imports back into this one, so module initialisation order decides what this file sees. Lift the shared symbols into a module at or above the shallower of the two, or invert one direction with a callback.
+src/probe/no-optional-members.ts:14: [resilience] This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.
+src/probe/no-optional-members.ts:17: [resilience] This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.
+src/probe/no-optional-members.ts:9: [resilience] This method is optional. Make it required and implemented on every path, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:11: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:16: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:17: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:20: [resilience] This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts.
 src/probe/no-optional-properties.ts:25: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
 src/probe/no-optional-properties.ts:30: [resilience] This property is optional. Make it required and default it at the boundary, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:35: [resilience] This class member is optional. Initialise or implement it where the class is constructed, or model the states as a discriminated union.
+src/probe/no-optional-properties.ts:37: [resilience] This parameter is optional. Give it a default value, or model the absence as an `Outcome` from lib/outcome.ts.
 src/probe/no-repeated-inline-copy.ts:11: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant and name it at both sites.
 src/probe/no-repeated-inline-copy.ts:7: [cosmetic] This sentence is written more than once in this file. Declare it once as a module-level constant and name it at both sites.
+src/probe/no-unread-scalar-result.ts:24: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
 src/probe/no-unread-scalar-result.ts:28: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.
 src/probe/no-unread-scalar-result.ts:29: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.
 src/probe/no-unread-scalar-result.ts:31: [behavioural] This call's declared result is a bare boolean or number and nothing reads it, so the failure channel exists only in the signature. Read the result and act on it, or narrow the callee to a `void` result.
-src/probe/null-lit.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/null-nested.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/null-prop.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/null-prop.ts:2: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
-src/probe/null-type.ts:1: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/null-nested.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/null-nested.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/null-nested.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/null-prop.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/null-prop.ts:2: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
+src/probe/null-type.ts:1: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
 src/probe/null-type.ts:1: [resilience] This property is mutable. Add `readonly`, and build a new object when a layer needs a changed copy.
 src/probe/readonly-collection-signatures.ts:11: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:12: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
+src/probe/readonly-collection-signatures.ts:15: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
 src/probe/readonly-collection-signatures.ts:20: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:23: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
 src/probe/readonly-collection-signatures.ts:23: [resilience] This signature hands over a mutable array. Declare it as `readonly T[]` or `ReadonlyArray<T>`.
@@ -200,6 +211,12 @@ src/probe/switch-basic.ts:2: [resilience] do not use switch; use a dispatch tabl
 src/probe/switch-stmt.ts:2: [resilience] do not use switch; use a dispatch table (Record/Map) instead
 src/probe/throw-stmt.ts:2: [behavioural] do not use throw; all errors must flow through OperationOutcome. see lib/outcome.ts
 src/probe/unbounded-collection-read.ts:6: [resilience] This query reads a collection with no LIMIT, so it returns every matching row. Add an explicit LIMIT and paginate when the caller needs everything.
+src/probe/undefined-cmp.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/undefined-prop.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/undefined-prop.ts:2: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/undefined-return.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/undefined-return.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
+src/probe/undefined-type.ts:1: [resilience] This `undefined` names an absence the type does not model. Return an Outcome, lift the value with `fromUndefined` from lib/outcome.ts, or declare an `exemptions` entry for this file.
 src/probe/x-catch-destructure.ts:4: [behavioural] catch block must handle or log the error, not silently discard it
 src/probe/y-dead-only.ts:11: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
 src/probe/y-dead-only.ts:12: [cosmetic] do not use em-dashes; use commas, colons, or sentence breaks instead
@@ -208,7 +225,7 @@ src/probe/y-dead-only.ts:3: [resilience] do not use switch; use a dispatch table
 src/probe/y-reexport-comment.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/y-reexport-line-comment.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
 src/probe/y-reexport-newline.ts:1: [resilience] do not proxy re-export; every export must originate from the file that defines it
-src/probe/z-jsx-text.tsx:4: [resilience] do not use null; use undefined. null only at third-party boundaries (DB, RegExp)
+src/probe/z-jsx-text.tsx:4: [resilience] do not use null; use undefined, or take an Outcome. a third-party boundary needs an `exemptions` entry in architecture.config.json
 src/probe/z-jsx-text.tsx:5: [resilience] 'as any' bypasses type safety entirely; use a proper type instead
 src/services:0: [structural] surface 'services' names the directory src/services/, which does not exist; create it or drop the surface from architecture.config.json
 src/utils:0: [structural] surface 'utils' names the directory src/utils/, which does not exist; create it or drop the surface from architecture.config.json
