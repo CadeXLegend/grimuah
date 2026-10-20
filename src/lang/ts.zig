@@ -419,6 +419,22 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
                     j += 1;
                     continue;
                 }
+                // a comment inside the tag is skipped before the quote test, or an
+                // apostrophe in its prose opens a string that runs to the next one in
+                // the file and swallows every token between them
+                if (attribute_char == '/' and j + 1 < source.len and source[j + 1] == '*') {
+                    j += 2;
+                    while (j + 1 < source.len and !(source[j] == '*' and source[j + 1] == '/')) {
+                        if (source[j] == '\n') lexer.line_number += 1;
+                        j += 1;
+                    }
+                    j = @min(j + 2, source.len);
+                    continue;
+                }
+                if (attribute_char == '/' and j + 1 < source.len and source[j + 1] == '/') {
+                    while (j < source.len and source[j] != '\n') j += 1;
+                    continue;
+                }
                 if (attribute_char == '"' or attribute_char == '\'') {
                     j += 1;
                     while (j < source.len and source[j] != attribute_char) {
@@ -633,6 +649,52 @@ test "tokenize keeps operators distinct and tracks lines" {
     try testing.expectEqual(@as(u32, 5), tokens[1].end);
     try testing.expectEqual(@as(u32, 8), tokens[3].start);
     try testing.expectEqual(@as(u32, 10), tokens[3].end);
+}
+
+test "a comment inside a jsx opening tag does not swallow the tag" {
+    const a = testing.allocator;
+    // the apostrophe in the prose opened a string that ran to the next one in the
+    // file, so every token between them vanished and the element was reported as
+    // unmodelled. ebook-reader's reader route hit exactly this
+    const source =
+        \\const view = (
+        \\  <WebView
+        \\    allowFileAccess
+        \\    /* the webview's own zoom, the on screen buttons stay hidden */
+        \\    setBuiltInZoomControls
+        \\    onMessage={handle}
+        \\  />
+        \\);
+        \\
+    ;
+    var module = try parse(a, source);
+    defer module.deinit();
+
+    try testing.expectEqual(@as(usize, 0), module.unknownCount());
+    try testing.expect(!module.hasOrphanedNode());
+}
+
+test "an unmodelled construct is a child, never an orphan" {
+    const a = testing.allocator;
+    // `parseUnknown` adds a node to the module, so a caller that dropped the index
+    // left a node no walk reaches and `walkOrder` asserted over it. every site links
+    // the node it could not model now, whichever container it sat in
+    const cases = [_][]const u8{
+        \\const o = { (a): 1 };
+        \\
+        ,
+        \\switch (a) { let b = 1; }
+        \\
+        ,
+        \\class K { @ d }
+        \\
+        ,
+    };
+    for (cases) |source| {
+        var module = try parse(a, source);
+        defer module.deinit();
+        try testing.expect(!module.hasOrphanedNode());
+    }
 }
 
 test "a self-closing jsx element does not swallow the rest of the file" {
@@ -1770,7 +1832,7 @@ const Parser = struct {
                 if (!self.peek().?.isWord("constructor")) self.module.addDescendants(parent, class_member_name_node);
                 self.pos += 1;
             } else {
-                _ = try self.parseUnknown();
+                self.module.appendChild(parent, try self.parseUnknown());
                 continue;
             }
 
@@ -2051,7 +2113,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                     self.module.appendChild(node, clause);
                     continue;
                 }
-                _ = try self.parseUnknown();
+                self.module.appendChild(node, try self.parseUnknown());
             }
             if (self.atPunct("}")) self.pos += 1;
         }
@@ -2865,7 +2927,7 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
                 continue;
             }
 
-            _ = try self.parseUnknown();
+            self.module.appendChild(node, try self.parseUnknown());
         }
 
         if (self.atPunct("}")) self.pos += 1;
