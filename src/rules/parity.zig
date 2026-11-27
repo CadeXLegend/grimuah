@@ -1,96 +1,109 @@
 const std = @import("std");
 const config = @import("../config.zig");
+const corpus = @import("../corpus.zig");
 const engine = @import("../engine.zig");
 const lint = @import("../lint.zig");
 const rules = @import("../rules.zig");
+const sweep_roots = @import("build_options").sweep_roots;
 
 // the differential test for the rule migration
 //
 // `src/lint.zig` is the token-level engine grimuah shipped, verified against
 // biome 2.5.11's plugin engine while biome was the oracle. this test runs both
-// it and the engine in `src/engine.zig` plus `src/rules/` over every file the
-// parser sweep covers and fails on any difference in (line, layer, severity,
-// message). moving a rule to a different reader has to be invisible
+// it and the engine in `src/engine.zig` plus `src/rules/` over every lintable
+// file of the committed corpus and fails on any difference in (line, layer,
+// severity, message). moving a rule to a different reader has to be invisible
 //
 // the guard covers the rules the token engine has, which is the set the
 // migration moved. a rule added since has no twin in `src/lint.zig`, so its
 // findings are dropped from both sides before the comparison and
 // `tests/oracle/` is what pins it
 //
-// it is silent when it passes, because `zig build test` multiplexes the test
-// runner's progress over stderr
-test "the engine reports what the token engine reports" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
+// a root named by `-Dsweep-roots=` is swept as well, which is how the same
+// differential runs over a live tree. the corpus is what gates, so the sweep is
+// the opt-in: only files the repository carries decide whether this test passes
+//
+// a pass prints nothing, which zig 0.17's `zig build test` requires: it reads any
+// stderr from the run as a failed command
+const Totals = struct {
+    files: usize = 0,
+    with_findings: usize = 0,
+    differences: usize = 0,
+};
 
-    const roots_list = std.Io.Dir.cwd().readFileAlloc(io, ".auto/parse-sweep.txt", a, .limited(1 << 16)) catch return;
-    defer a.free(roots_list);
+test "the engine reports what the token engine reports" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     const cfg = config.Config{
         .surfaces = &.{},
         .layers = .{ .cosmetic = true, .structural = true, .resilience = true, .behavioural = true },
     };
 
-    var files: usize = 0;
-    var with_findings: usize = 0;
-    var differences: usize = 0;
-    var roots_found: usize = 0;
+    var totals: Totals = .{};
+    try sweepRoot(&totals, allocator, io, &cfg, corpus.root);
+    var extra_roots = std.mem.tokenizeScalar(u8, sweep_roots, ':');
+    while (extra_roots.next()) |root| try sweepRoot(&totals, allocator, io, &cfg, root);
 
-    var line_iterator = std.mem.splitScalar(u8, roots_list, '\n');
-    while (line_iterator.next()) |raw_line| {
-        const root = std.mem.trim(u8, raw_line, " \t\r");
-        if (root.len == 0 or root[0] == '#') continue;
-        var directory = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch continue;
-        defer directory.close(io);
-        roots_found += 1;
+    // a corpus this small, or a tree that vanished, would leave the loop with
+    // nothing to compare and report the silence of a passing run
+    if (totals.files == 0) {
+        std.debug.print("parity: {s} holds no lintable file\n", .{corpus.root});
+        return error.EmptyCorpus;
+    }
+    if (totals.differences == 0) return;
+    std.debug.print(
+        "parity: {d} files, {d} with findings, {d} differing\n",
+        .{ totals.files, totals.with_findings, totals.differences },
+    );
+    try std.testing.expectEqual(@as(usize, 0), totals.differences);
+}
 
-        var walker = try directory.walk(a);
-        defer walker.deinit();
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file) continue;
-            if (std.mem.indexOf(u8, entry.path, "node_modules") != null) continue;
-            if (!isLintableSource(entry.basename)) continue;
+/// compare both engines over every lintable file under `root`, which a missing
+/// directory fails: a root the caller named is either there or a typo
+fn sweepRoot(totals: *Totals, allocator: std.mem.Allocator, io: std.Io, cfg: *const config.Config, root: []const u8) !void {
+    var directory = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+    defer directory.close(io);
 
-            const source = directory.readFileAlloc(io, entry.path, a, .limited(1 << 20)) catch continue;
-            defer a.free(source);
-            files += 1;
+    var walker = try directory.walk(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.indexOf(u8, entry.path, "node_modules") != null) continue;
+        if (!isLintableSource(entry.basename)) continue;
 
-            var reference: std.ArrayList(lint.Finding) = .empty;
-            defer {
-                for (reference.items) |finding| a.free(finding.path);
-                reference.deinit(a);
-            }
-            try lint.lintContent(a, &cfg, &reference, entry.path, source);
+        const source = directory.readFileAlloc(io, entry.path, allocator, .limited(1 << 20)) catch continue;
+        defer allocator.free(source);
+        totals.files += 1;
 
-            var candidate: engine.Contribution = .{};
-            defer candidate.deinit(a);
-            // the hygiene layer is the built-in subset, which this parity test
-            // does not cover: `tests/oracle/hygiene-corpus.tsv` does
-            try engine.lintContent(a, a, &cfg, &candidate, entry.path, source, &.{entry.path}, false, .owned);
+        var reference: std.ArrayList(lint.Finding) = .empty;
+        defer {
+            for (reference.items) |finding| allocator.free(finding.path);
+            reference.deinit(allocator);
+        }
+        try lint.lintContent(allocator, cfg, &reference, entry.path, source);
 
-            dropUncovered(&reference);
-            dropUncoveredEngine(&candidate.findings);
+        var candidate: engine.Contribution = .{};
+        defer candidate.deinit(allocator);
+        // the hygiene layer is the built-in subset, which this parity test
+        // does not cover: `tests/oracle/hygiene-corpus.tsv` does
+        try engine.lintContent(allocator, allocator, cfg, &candidate, entry.path, source, &.{entry.path}, false, .owned);
 
-            if (reference.items.len != 0) with_findings += 1;
-            if (reference.items.len == candidate.findings.items.len and sameFindings(reference.items, candidate.findings.items)) continue;
-            differences += 1;
-            if (differences > 20) continue;
-            std.debug.print("parity: {s}: token engine {d} finding(s), engine {d}\n", .{ entry.path, reference.items.len, candidate.findings.items.len });
-            for (reference.items) |finding| {
-                std.debug.print("  token  line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
-            }
-            for (candidate.findings.items) |finding| {
-                std.debug.print("  engine line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
-            }
+        dropUncovered(&reference);
+        dropUncoveredEngine(&candidate.findings);
+
+        if (reference.items.len != 0) totals.with_findings += 1;
+        if (reference.items.len == candidate.findings.items.len and sameFindings(reference.items, candidate.findings.items)) continue;
+        totals.differences += 1;
+        if (totals.differences > 20) continue;
+        std.debug.print("parity: {s}: token engine {d} finding(s), engine {d}\n", .{ entry.path, reference.items.len, candidate.findings.items.len });
+        for (reference.items) |finding| {
+            std.debug.print("  token  line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
+        }
+        for (candidate.findings.items) |finding| {
+            std.debug.print("  engine line {d} [{s}] {s} ({s})\n", .{ finding.line, finding.layer, finding.message, @tagName(finding.severity) });
         }
     }
-
-    if (differences == 0) return;
-    std.debug.print(
-        "parity: {d} roots, {d} files, {d} with findings, {d} differing\n",
-        .{ roots_found, files, with_findings, differences },
-    );
-    try std.testing.expectEqual(@as(usize, 0), differences);
 }
 
 /// whether `message` belongs to a rule `src/lint.zig` implements, i.e. one the

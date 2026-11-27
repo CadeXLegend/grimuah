@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       # the asset name is a promise about the cpu it runs on, and `zig build`
       # takes its feature set from the machine running it: a runner with
       # avx-512 produced a linux-x86_64 binary carrying %zmm, which dies with

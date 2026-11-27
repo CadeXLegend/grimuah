@@ -75,7 +75,7 @@ cd grimuah
 zig build -p ~/.local
 ```
 
-requires zig 0.16
+requires zig 0.17
 
 each platform ships two release builds
 

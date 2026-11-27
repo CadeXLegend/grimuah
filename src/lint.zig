@@ -1,5 +1,6 @@
 const std = @import("std");
 const config = @import("config.zig");
+const rules = @import("rules.zig");
 
 /// grimuah's own rules enforced in-process. they once shipped as GritQL plugin
 /// files, and biome charged one full syntax-tree traversal per plugin file per
@@ -36,7 +37,10 @@ pub const Finding = struct {
 /// messages are the ones the GritQL `register_diagnostic` calls carried, so a
 /// project that ran the plugin engine before reads the same text today
 const msg = struct {
-    const null_literal = "do not use null; use undefined. null only at third-party boundaries (DB, RegExp)";
+    // the one message this engine does not own: the migration reworded the rule,
+    // and `src/rules/parity.zig` compares the text, so a copy here would make every
+    // `null` in a swept file read as a difference rather than a rule that moved
+    const null_literal = rules.null_literal;
     const imperative_for = "do not use imperative for loops; use map, filter, reduce, or for..of instead";
     const double_equals = "use === instead of == to avoid type coercion bugs";
     const as_any = "'as any' bypasses type safety entirely; use a proper type instead";

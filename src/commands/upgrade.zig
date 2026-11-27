@@ -43,7 +43,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io) !void {
 
 fn detectMatchingPreset(cfg: *const config.Config) presets.Preset {
     const names = [_][]const u8{ "lib", "db", "services", "middleware", "components", "commands", "tasks", "handlers", "pages", "utils" };
-    var scores = [_]u32{0} ** 5; // default, webapp, cli, backend, bot
+    var scores: [5]u32 = @splat(0); // default, webapp, cli, backend, bot
 
     for (names, 0..) |name, name_idx| {
         if (cfg.getSurface(name) != null) {

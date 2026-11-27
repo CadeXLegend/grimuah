@@ -113,8 +113,8 @@ test "parseFromSlice succeeds on bot preset" {
 test "no preset surface lists an import the DAG already implies" {
     const allocator = testing.allocator;
 
-    inline for (std.meta.fields(Preset)) |field| {
-        const preset: Preset = @enumFromInt(field.value);
+    inline for (@typeInfo(Preset).@"enum".field_values) |value| {
+        const preset: Preset = @enumFromInt(value);
         const parsed = try loadPreset(allocator, preset);
         defer parsed.deinit();
 

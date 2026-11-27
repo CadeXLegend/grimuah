@@ -27,6 +27,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // the corpus gates read only committed files, so `zig build test` answers the
+    // same on every machine. the two sweeps are instruments rather than gates,
+    // and this is how a developer points them at a live tree without a path list
+    // in the repository deciding what the suite means
+    const sweep_roots = b.option([]const u8, "sweep-roots", "extra roots the parser and rule differential sweeps walk over, colon separated") orelse "";
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "sweep_roots", sweep_roots);
+
     // the release artifact is stripped unless asked otherwise
     //
     // debug info is ~85% of an unstripped binary, and `strip_debug_info` also
@@ -39,7 +48,7 @@ pub fn build(b: *std.Build) void {
     //
     // a local build keeps both: debug is the default optimize mode, and
     // `-Dstrip=false` keeps them on any release build
-    const strip = b.option(bool, "strip", "omit debug symbols and stack tracing from the binary") orelse (optimize != .Debug);
+    const strip = b.option(bool, "strip", "omit debug symbols and stack tracing from the binary") orelse (optimize != .debug);
 
     const exe = b.addExecutable(.{
         .name = "grimuah",
@@ -52,6 +61,7 @@ pub fn build(b: *std.Build) void {
     });
 
     addEmbeddedSkills(b, exe.root_module);
+    exe.root_module.addOptions("build_options", options);
 
     b.installArtifact(exe);
 
@@ -69,6 +79,7 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
 
     addEmbeddedSkills(b, tests.root_module);
+    tests.root_module.addOptions("build_options", options);
 
     const test_step = b.step("test", "run unit tests");
     test_step.dependOn(&run_tests.step);

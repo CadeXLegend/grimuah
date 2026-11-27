@@ -1,6 +1,8 @@
 const std = @import("std");
 const ir = @import("../ir.zig");
 const typecount = @import("typecount.zig");
+const corpus = @import("../corpus.zig");
+const sweep_roots = @import("build_options").sweep_roots;
 
 /// the TypeScript / JavaScript front-end
 ///
@@ -509,7 +511,7 @@ fn skipJsx(lexer: *Lexer) LexError!bool {
 /// replaces cost about twice as much in the aggregate
 const identifier_bytes = struct {
     const start = init: {
-        var table = [_]bool{false} ** 256;
+        var table: [256]bool = @splat(false);
         for ('a'..'z' + 1) |byte| table[byte] = true;
         for ('A'..'Z' + 1) |byte| table[byte] = true;
         table['_'] = true;
@@ -4177,24 +4179,21 @@ test "parse survives every committed corpus file" {
     try testing.expect(checked > 100);
 }
 
-// parse every source file under the roots listed in `.auto/parse-sweep.txt`,
-// which is how the parser's gaps are found against real projects instead of the
-// committed corpus
+// parse every source file under the roots `-Dsweep-roots=` names, which is how
+// the parser's gaps are found against real projects instead of the committed
+// corpus
 //
-// run it while migrating a rule onto the IR and read the summary: it reports
-// rather than fails, because a root is another project's live checkout and
-// whatever that tree parses to is evidence about the parser rather than a
-// verdict this repo has to answer for
+// run it while migrating a rule onto the IR and read the summary: it reports the
+// gaps and fails on them, because a root is another project's live checkout and a
+// tree that parses to something unknown is the finding you asked for. the
+// committed corpus test above is what gates the parser
 //
-// the committed corpus test above is what gates the parser, and roots that do
-// not exist on this machine are skipped, so the test is a no-op in a checkout
-// without them
+// it walks nothing in a plain `zig build test`, so the suite answers the same on
+// every machine, and the run that does walk a foreign tree says so on its command
+// line rather than inheriting it from a path list in the working tree
 test "parse sweep over real projects" {
     const a = testing.allocator;
     const io = std.testing.io;
-
-    const roots_list = std.Io.Dir.cwd().readFileAlloc(io, ".auto/parse-sweep.txt", a, .limited(1 << 16)) catch return;
-    defer a.free(roots_list);
 
     var files: usize = 0;
     var unknown_files: usize = 0;
@@ -4203,11 +4202,13 @@ test "parse sweep over real projects" {
     var bytes: usize = 0;
     var roots_found: usize = 0;
 
-    var line_iterator = std.mem.splitScalar(u8, roots_list, '\n');
-    while (line_iterator.next()) |raw_line| {
-        const root = std.mem.trim(u8, raw_line, " \t\r");
-        if (root.len == 0 or root[0] == '#') continue;
-        var directory = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch continue;
+    var root_iterator = std.mem.tokenizeScalar(u8, sweep_roots, ':');
+    while (root_iterator.next()) |root| {
+        var directory = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| {
+            std.debug.print("sweep: cannot open {s}: {s}\n", .{ root, @errorName(err) });
+            parse_errors += 1;
+            continue;
+        };
         defer directory.close(io);
         roots_found += 1;
 
@@ -4265,18 +4266,16 @@ test "parse sweep over real projects" {
         }
     }
 
-    // the summary is only printed when something is wrong: `zig build test`
-    // multiplexes the runner's progress over stderr, so a passing sweep has to
-    // stay silent to keep that channel intact
+    // a silent pass is the only kind there is: zig 0.17's `zig build test` reads
+    // any stderr from the run as a failed command, so a sweep that printed a
+    // report and returned success would turn its own summary into a red gate.
+    // the roots are the caller's opt-in, so the verdict costs nobody else
     if (unknown_files == 0 and parse_errors == 0) return;
     std.debug.print(
         "sweep: {d} roots, {d} files, {d} bytes, {d} unknown files, {d} unknown nodes, {d} parse errors\n",
         .{ roots_found, files, bytes, unknown_files, unknown_nodes, parse_errors },
     );
-    // the assert that used to close this test is deliberately gone: it made a
-    // live foreign checkout decide whether `zig build test`, the pre-commit and
-    // a release pass, so a new syntax in another repo could hold this one's
-    // release hostage while saying nothing about grimuah
+    return error.SweepFoundGaps;
 }
 
 /// the extensions `check` parses, matching what biome lints

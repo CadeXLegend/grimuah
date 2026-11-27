@@ -11,7 +11,7 @@ Use this skill to install the binary and to run `grimuah summon` (alias: `init`)
 Do not use it for an existing TypeScript repo that must adopt grimuah, that is the migrate skill. Do not use it to decide what belongs in a surface, that is the architecture skill.
 
 ## Procedure
-1. Install the binary. Grab a prebuilt build from the releases page, or build from source with `git clone https://github.com/CadeXLegend/grimuah.git && cd grimuah && zig build -p ~/.local` (needs zig 0.16). The binary lands in `~/.local/bin/grimuah`, so that directory must be on `PATH`. Each platform ships `release-safe` (every safety check kept, about 858 kb on linux x86_64, the recommended one) and `release-small` (checks removed, about 44% smaller and about 9% slower). A local `zig build` is a debug build with symbols and full panic traces, and it is about 4x slower, so do not judge `check` speed from it.
+1. Install the binary. Grab a prebuilt build from the releases page, or build from source with `git clone https://github.com/CadeXLegend/grimuah.git && cd grimuah && zig build -p ~/.local` (needs zig 0.17). The binary lands in `~/.local/bin/grimuah`, so that directory must be on `PATH`. Each platform ships `release-safe` (every safety check kept, about 924 kb on linux x86_64, the recommended one) and `release-small` (checks removed, about 44% smaller and about 9% slower). A local `zig build` is a debug build with symbols and full panic traces, and it is about 4x slower, so do not judge `check` speed from it.
 
 2. Pick the preset before you run anything.
 
