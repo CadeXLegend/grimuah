@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.1.5](https://github.com/CadeXLegend/grimuah/compare/v0.1.4...v0.1.5) (2026-11-27)
+
+
+### Features
+
+* **rules:** the absence rules and the per-file carve-out ([fe35d78](https://github.com/CadeXLegend/grimuah/commit/fe35d782270fd52c38ee0d3bcdcbbe1c31be037a))
+
+
+### Bug Fixes
+
+* **ts:** parse parenthesized generic satisfies expressions ([a7786c9](https://github.com/CadeXLegend/grimuah/commit/a7786c9b515bb74c9e7ad6bdf607cc9d707424a6))
+* **ts:** stop a jsx tag comment eating the file, and an unmodelled node orphaning ([8dc07a1](https://github.com/CadeXLegend/grimuah/commit/8dc07a16de1e24acbc7b3443db08c491d6b0c72e))
+
 ## [0.1.4](https://github.com/CadeXLegend/grimuah/compare/v0.1.3...v0.1.4) (2026-09-23)
 
 ## [0.1.3](https://github.com/CadeXLegend/grimuah/compare/v0.1.2...v0.1.3) (2026-09-23)
