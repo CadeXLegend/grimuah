@@ -6,6 +6,9 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/CadeXLegend/grimuah/build.yml)](https://github.com/CadeXLegend/grimuah/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah?color=blue)](https://github.com/CadeXLegend/grimuah/releases)
 
+> Currently, only support for Typescript is available
+> Future languages are in consideration
+
 the grimoire for codebase architecture 🤌
 
 summon projects with linter-enforced architecture and dag-driven scaffolding
