@@ -18,11 +18,15 @@ one self-contained zig binary, zero runtime dependencies
 
 under a megabyte stripped, no subprocess, no other linter, no plugin directory to keep in step
 
+---
+
 most projects treat folders as glorified buckets with hidden social contracts
 
 nothing stops a component from reaching into the database layer, or a service from handling presentation logic
 
 grimuah gives every folder an identity, an import firewall, and enforceable obligations
+
+---
 
 the import graph is declared in `architecture.config.json`
 
