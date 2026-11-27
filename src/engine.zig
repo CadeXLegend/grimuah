@@ -2057,6 +2057,26 @@ pub fn lintContent(
 
 const testing = std.testing;
 
+test "a generic satisfies expression does not turn the following if into a call" {
+    const allocator = testing.allocator;
+    const cfg = config.Config{
+        .surfaces = &.{},
+        .layers = .{ .cosmetic = false, .structural = false, .resilience = true, .behavioural = true },
+    };
+    const source =
+        \\type C<T> = T;
+        \\const a = true ? 0 : (0 satisfies C<number>);
+        \\if (true) { throw new Error("reported"); }
+        \\
+    ;
+    var contribution = Contribution{};
+    defer contribution.deinit(allocator);
+    try lintContent(allocator, allocator, &cfg, &contribution, "satisfies.ts", source, &.{}, false, .owned);
+    try testing.expectEqual(@as(usize, 1), contribution.findings.items.len);
+    try testing.expectEqualStrings(rules.throw_stmt, contribution.findings.items[0].message);
+    try testing.expectEqual(@as(u32, 3), contribution.findings.items[0].line);
+}
+
 test "a component of one file is not a cycle, and a mutual pair is one component" {
     const allocator = std.testing.allocator;
 

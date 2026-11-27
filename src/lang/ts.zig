@@ -912,8 +912,8 @@ const non_reference_lookup = std.StaticStringMap(void).initComptime(init: {
     break :init entries;
 });
 
-/// where a type expression ends at depth 0. the stop sets differ in two places: a
-/// `{` *starts* an object type in most positions but starts the body after a
+/// where a type expression ends at depth 0. a `{` starts an object type in most
+/// positions but starts the body after a
 /// return annotation, and a `=>` ends the type wherever it does not belong to a
 /// function type. an object *type* in a body position (`(): {a: number} => x`) is
 /// read as a body instead, a known gap the corpus records
@@ -934,6 +934,8 @@ const TypeStop = enum {
     return_annotation,
     /// a type in every other position, where `{` starts an object type
     brace_starts_object,
+    /// a `satisfies` type can end before a new statement without a semicolon
+    satisfies_expression,
     /// the one place a `=>` owns the body: an arrow's own return annotation, where what
     /// follows the type is the arrow that introduces the body rather than a brace
     ///
@@ -974,7 +976,7 @@ fn isTypeStop(stop: TypeStop, text: []const u8) bool {
         // that hold a function type run past the type's own arrow
         '=' => switch (stop) {
             .annotation_before_value, .return_annotation => text.len == 1,
-            .brace_starts_object, .brace_starts_body => text.len <= 3,
+            .brace_starts_object, .brace_starts_body, .satisfies_expression => text.len <= 3,
         },
         '!' => text.len <= 3, // `!`, `!=`, `!==`
         '&' => text.len == 2, // `&&`; `&` is a type operator
@@ -983,7 +985,7 @@ fn isTypeStop(stop: TypeStop, text: []const u8) bool {
         // in the two positions where it can
         '{' => switch (stop) {
             .return_annotation, .brace_starts_body => true,
-            .annotation_before_value, .brace_starts_object => false,
+            .annotation_before_value, .brace_starts_object, .satisfies_expression => false,
         },
         else => false,
     };
@@ -991,7 +993,7 @@ fn isTypeStop(stop: TypeStop, text: []const u8) bool {
 /// punctuation a type can continue after, across a line break. `type A =`
 /// followed by `| B` on the next line is one alias, not two statements
 const type_continuation_punct = [_][]const u8{
-    "=", "|", "&", ":", "<", ",", "(", "[", "{", "=>", "+", "-", "*", "/", "%", "^", "!", "~", "?", "...",
+    "=", "|", "&", ":", "<", ",", ".", "(", "[", "{", "=>", "+", "-", "*", "/", "%", "^", "!", "~", "?", "...",
 };
 
 /// words a type can continue after, across a line break: `keyof`,
@@ -2236,33 +2238,30 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
     }
 
     fn parseBinary(self: *Parser) anyerror!ir.NodeIndex {
+        const expression_from = self.begin();
         var left = try self.parsePostfix();
 
         while (!self.atEnd()) {
             const token = self.peek().?;
-            // a recorded gap: `satisfies` is absent from `isBinaryOperator`, so
-            // `x satisfies T` splits here and the tail is read as a statement of its own.
-            // the site's subtree is then not the one typescript walks, and the count is
-            // short by the type it names. measured over the corpus: one site holds one
-            // (`src/services/xp.service.ts:120`, count 18) and it is not a reported row.
-            // taking it in means building a node typescript has and the tree does not,
-            // which is a tree change and can move a shipped rule's rows
             const is_operator = isBinaryOperator(token);
             const is_cast = token.isWord("as");
-            if (!is_operator and !is_cast) break;
+            const is_satisfies = token.isWord("satisfies");
+            if (!is_operator and !is_cast and !is_satisfies) break;
 
-            const from = if (self.pos > 0) self.pos - 1 else 0;
+            const from = if (is_satisfies) expression_from else if (self.pos > 0) self.pos - 1 else 0;
             self.pos += 1;
 
-            if (is_cast) {
-                const cast = try self.addNode(.as_expr, from);
+            // both operators take a type, not a value expression whose `>` can
+            // consume the enclosing parenthesis and the following statement
+            if (is_cast or is_satisfies) {
+                const cast = try self.addNode(if (is_satisfies) .satisfies_expr else .as_expr, from);
                 const type_from = self.begin();
-                self.module.addDescendants(cast, self.skipTypeNodes(.brace_starts_object));
+                self.module.addDescendants(cast, self.skipTypeNodes(if (is_satisfies) .satisfies_expression else .brace_starts_object));
                 if (type_from < self.pos) {
                     const slice = self.tokens[type_from..self.pos];
                     self.module.nodes.items[cast].name = self.source[slice[0].start..slice[slice.len - 1].end];
                 }
-                self.module.nodes.items[cast].operator = "as";
+                self.module.nodes.items[cast].operator = token.text;
                 self.module.appendChild(cast, left);
                 self.closeNode(cast, from);
                 left = cast;
@@ -2999,9 +2998,12 @@ const statement_handlers = std.StaticStringMap(Handler).initComptime(.{
     /// consume a type expression, stopping at a terminator at nesting depth 0.
     /// types are not modelled: their extent is all a rule needs
     fn skipType(self: *Parser, stop: TypeStop) void {
+        const type_from = self.pos;
         var depth: usize = 0;
         while (!self.atEnd()) {
             const token = self.peek().?;
+            if (stop == .satisfies_expression and depth == 0 and self.pos > type_from and
+                endsTypeAlias(self.tokens[self.pos - 1], token)) return;
             if (token.kind == .punct) {
                 const text = token.text;
                 // at depth 0 a terminator has to be tested before the brackets:
@@ -3632,6 +3634,93 @@ test "parse sees literals in conditions and as-casts with their type" {
     }
     try testing.expect(saw_literal_condition);
     try testing.expect(saw_cast);
+}
+
+test "parse keeps statements after parenthesized generic satisfies expressions" {
+    const allocator = testing.allocator;
+    const cases = [_]struct { expression: []const u8, operand: []const u8, type_text: []const u8, calls: usize }{
+        .{ .expression = "true ? 0 : (0 satisfies C<number>)", .operand = "0", .type_text = "C<number>", .calls = 0 },
+        .{ .expression = "ready ? configured() : ({ succeeded: true, result: undefined } satisfies C<string | undefined>)", .operand = "{ succeeded: true, result: undefined }", .type_text = "C<string | undefined>", .calls = 1 },
+        .{ .expression = "true ? 0 : (0 satisfies C<C<C<number>>>)", .operand = "0", .type_text = "C<C<C<number>>>", .calls = 0 },
+        .{ .expression = "consume((0 satisfies C<number>), 1)", .operand = "0", .type_text = "C<number>", .calls = 1 },
+        .{ .expression = "[(0 satisfies C<number>), 1]", .operand = "0", .type_text = "C<number>", .calls = 0 },
+        .{ .expression = "true ? 0 : ((0 satisfies C<number>) as number)", .operand = "0", .type_text = "C<number>", .calls = 0 },
+    };
+    for (cases) |case| {
+        const declaration_text = try std.fmt.allocPrint(allocator, "const a = {s};", .{case.expression});
+        defer allocator.free(declaration_text);
+        const source = try std.fmt.allocPrint(allocator, "type C<T> = T;\n{s}\nif (true) {{ 0; }}\n", .{declaration_text});
+        defer allocator.free(source);
+        var module = try parse(allocator, source);
+        defer module.deinit();
+
+        try testing.expectEqual(@as(u32, 0), module.unsupported);
+        try testing.expectEqual(@as(usize, 0), module.unknownCount());
+        try testing.expect(!module.hasOrphanedNode());
+        try testing.expectEqual(@as(usize, 3), module.childCount(module.root));
+        const alias = module.firstChildOf(module.root).?;
+        try testing.expectEqual(ir.Kind.type_decl, module.kindOf(alias));
+        const declaration = module.nextSiblingOf(alias).?;
+        try testing.expectEqual(ir.Kind.variable_decl, module.kindOf(declaration));
+        try testing.expectEqualStrings(declaration_text, module.textOf(declaration));
+        const following = module.nextSiblingOf(declaration).?;
+        try testing.expectEqual(ir.Kind.if_stmt, module.kindOf(following));
+        try testing.expectEqualStrings("if (true) { 0; }", module.textOf(following));
+        const condition = module.firstChildOf(following).?;
+        try testing.expectEqual(ir.Kind.literal, module.kindOf(condition));
+        const branch = module.nextSiblingOf(condition).?;
+        try testing.expectEqual(ir.Kind.block, module.kindOf(branch));
+        const statement = module.firstChildOf(branch).?;
+        try testing.expectEqual(ir.Kind.expression_stmt, module.kindOf(statement));
+        try testing.expectEqualStrings("0", module.textOf(module.firstChildOf(statement).?));
+
+        var wrappers: usize = 0;
+        var calls: usize = 0;
+        var walker = module.iterator();
+        while (walker.next()) |index| {
+            if (module.kindOf(index) == .call) calls += 1;
+            if (!std.mem.eql(u8, module.nodeOf(index).operator, "satisfies")) continue;
+            wrappers += 1;
+            try testing.expectEqualStrings(case.type_text, module.nodeOf(index).name);
+            try testing.expectEqual(@as(usize, 1), module.childCount(index));
+            try testing.expectEqualStrings(case.operand, module.textOf(module.firstChildOf(index).?));
+            const wrapper_text = try std.fmt.allocPrint(allocator, "{s} satisfies {s}", .{ case.operand, case.type_text });
+            defer allocator.free(wrapper_text);
+            try testing.expectEqualStrings(wrapper_text, module.textOf(index));
+        }
+        try testing.expectEqual(@as(usize, 1), wrappers);
+        try testing.expectEqual(case.calls, calls);
+        const order = try module.walkOrder(allocator);
+        defer allocator.free(order);
+        try testing.expectEqual(module.nodes.items.len, order.len);
+    }
+}
+
+test "a satisfies type stops before a new statement without a semicolon" {
+    const allocator = testing.allocator;
+    const cases = [_]struct { source: []const u8, first_kind: ir.Kind }{
+        .{ .source = "0 satisfies number\nif (ready) { 0; }\n", .first_kind = .expression_stmt },
+        .{ .source = "const a = 0 satisfies C<number>\nif (ready) { 0; }\n", .first_kind = .variable_decl },
+        .{ .source = "const a = value satisfies C<\n  number\n>\nif (ready) { 0; }\n", .first_kind = .variable_decl },
+        .{ .source = "const a = value satisfies\n  C<number>\nif (ready) { 0; }\n", .first_kind = .variable_decl },
+        .{ .source = "const a = value satisfies C<number>\n  | C<string>\nif (ready) { 0; }\n", .first_kind = .variable_decl },
+        .{ .source = "const a = value satisfies N.\n  type\nif (ready) { 0; }\n", .first_kind = .variable_decl },
+    };
+    for (cases) |case| {
+        var module = try parse(allocator, case.source);
+        defer module.deinit();
+        try testing.expectEqual(@as(u32, 0), module.unsupported);
+        try testing.expectEqual(@as(usize, 0), module.unknownCount());
+        try testing.expect(!module.hasOrphanedNode());
+        try testing.expectEqual(@as(usize, 2), module.childCount(module.root));
+        const first = module.firstChildOf(module.root).?;
+        try testing.expectEqual(case.first_kind, module.kindOf(first));
+        const following = module.nextSiblingOf(first).?;
+        try testing.expectEqual(ir.Kind.if_stmt, module.kindOf(following));
+        try testing.expectEqualStrings("if (ready) { 0; }", module.textOf(following));
+        const boundary = std.mem.indexOf(u8, case.source, "\nif").?;
+        try testing.expectEqualStrings(case.source[0..boundary], module.textOf(first));
+    }
 }
 
 test "parse keeps a declarator's initializer when its own annotation spells a function type" {
@@ -4271,6 +4360,8 @@ const subtree_rows = [_]struct { expression: []const u8, count: u32 }{
     .{ .expression = "a as T", .count = 3 },
     .{ .expression = "a as Map<string, number>", .count = 5 },
     .{ .expression = "a as const", .count = 3 },
+    .{ .expression = "0 satisfies C<number>", .count = 4 },
+    .{ .expression = "(0 satisfies C<number>)", .count = 5 },
     .{ .expression = "`a${b}c`", .count = 4 },
     .{ .expression = "`${a}${b}`", .count = 7 },
     .{ .expression = "`abc`", .count = 0 },

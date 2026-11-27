@@ -119,6 +119,8 @@ pub const Kind = enum {
     unary,
     /// `expr as type`
     as_expr,
+    /// `expr satisfies type`
+    satisfies_expr,
     paren,
     object_literal,
     array_literal,
