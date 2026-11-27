@@ -7,6 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/CadeXLegend/grimuah?color=blue)](https://github.com/CadeXLegend/grimuah/releases)
 
 > Currently, only support for Typescript is available
+> 
 > Future languages are in consideration
 
 the grimoire for codebase architecture 🤌
